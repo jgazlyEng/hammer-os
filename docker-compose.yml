@@ -1,0 +1,34 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: hammer
+      POSTGRES_PASSWORD: hammer
+      POSTGRES_DB: hammer_os
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hammer -d hammer_os"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://hammer:hammer@postgres:5432/hammer_os?schema=public
+      NEXTAUTH_URL: http://localhost:3000
+      GOOGLE_CALLBACK_URL: http://localhost:3000/api/auth/google/callback
+    ports:
+      - "3000:3000"
+    command: sh -c "npx prisma db push && npm run db:seed && npm run start"
+
+volumes:
+  postgres-data:

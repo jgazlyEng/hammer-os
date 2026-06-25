@@ -1,0 +1,909 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  EXECUTIVE
+  PRODUCER
+  DEVELOPMENT
+  WRITER
+  ARTIST
+  CONTRACTOR
+  VIEWER
+}
+
+enum ProjectStatus {
+  IDEA
+  SUBMISSION
+  TREATMENT
+  SCRIPT
+  REWRITE
+  VISUAL_DEVELOPMENT
+  LOOKBOOK
+  PACKAGING
+  GREENLIGHT_REVIEW
+  ON_HOLD
+  PASSED
+  ARCHIVED
+}
+
+enum ProjectStage {
+  DEVELOPMENT
+  SCRIPT
+  TREATMENT
+  VISDEV
+  LOOKBOOK
+  PACKAGING
+  GREENLIGHT
+}
+
+enum DocumentType {
+  SCRIPT
+  TREATMENT
+  OUTLINE
+  NOTES
+  COVERAGE
+  BUSINESS_DOCUMENT
+}
+
+enum DocumentVersionStatus {
+  DRAFT
+  OUTLINE
+  IN_PROGRESS
+  INTERNAL_REVIEW
+  NOTES_SENT
+  REVISION_REQUESTED
+  APPROVED
+  LOCKED
+  ARCHIVED
+}
+
+enum EntityType {
+  CHARACTER
+  LOCATION
+  PROP
+  VEHICLE
+  ACTION
+  VFX
+  NOTE
+}
+
+enum EntityImportance {
+  LOW
+  MEDIUM
+  HIGH
+  HERO
+}
+
+enum AssetType {
+  CHARACTER_REFERENCE
+  ENVIRONMENT_REFERENCE
+  PROP_REFERENCE
+  MOOD_IMAGE
+  KEYFRAME
+  LOOKBOOK_PAGE
+  STORYBOARD
+  ANIMATIC
+  OTHER
+}
+
+enum AssetStatus {
+  UPLOADED
+  IN_REVIEW
+  REVISION_REQUESTED
+  APPROVED
+  ARCHIVED
+}
+
+enum LinkType {
+  REFERENCE
+  DESIGN_TARGET
+  BREAKDOWN_ITEM
+  APPROVED_LOOK
+  REVIEW_CONTEXT
+}
+
+enum CommentTargetType {
+  PROJECT
+  DOCUMENT
+  DOCUMENT_VERSION
+  SCENE
+  ENTITY
+  ASSET
+  TASK
+  APPROVAL
+}
+
+enum CommentVisibility {
+  INTERNAL
+  PROJECT_TEAM
+  EXECUTIVE_ONLY
+}
+
+enum CommentStatus {
+  OPEN
+  RESOLVED
+  ARCHIVED
+}
+
+enum ApprovalStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  CHANGES_REQUESTED
+  CANCELLED
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  BLOCKED
+  REVIEW
+  DONE
+  ARCHIVED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TaskTargetType {
+  PROJECT
+  DOCUMENT
+  DOCUMENT_VERSION
+  SCENE
+  ENTITY
+  ASSET
+  APPROVAL
+}
+
+enum RiskLevel {
+  low
+  medium
+  high
+  critical
+}
+
+enum Status {
+  locked
+  stable
+  watch
+  at_risk
+  blocked
+  outdated
+}
+
+enum ApprovalState {
+  approved
+  pending
+  needs_review
+  blocked
+}
+
+enum ChangePriority {
+  low
+  medium
+  high
+  urgent
+}
+
+enum ScriptFileKind {
+  fdx
+  pdf
+  txt
+  docx
+  other
+}
+
+enum SceneDiffStatus {
+  added
+  removed
+  changed
+  stable
+}
+
+enum AppRole {
+  admin
+  executive
+  producer
+  department_lead
+}
+
+enum ProjectRole {
+  owner
+  executive
+  producer
+  department_lead
+  viewer
+}
+
+enum ExtractionStatus {
+  pending
+  extracted
+  ocr_required
+  failed
+}
+
+model Project {
+  id                      String          @id @default(cuid())
+  title                   String
+  logline                 String?         @db.Text
+  type                    String?
+  genre                   String?
+  status                  ProjectStatus   @default(IDEA)
+  hammerStage             ProjectStage    @default(DEVELOPMENT)
+  ownerId                 String?
+  deletedAt               DateTime?
+  codename                String?
+  stage                   String          @default("Development")
+  studioUnit              String          @default("Unassigned Unit")
+  currentScriptVersion    String          @default("S-01 White")
+  currentTreatmentVersion String          @default("T-01")
+  treatmentAlignment      Int             @default(0)
+  previzCompletion        Int             @default(0)
+  changeRiskLevel         RiskLevel       @default(medium)
+  pendingApprovals        Int             @default(0)
+  createdAt               DateTime        @default(now())
+  updatedAt               DateTime        @updatedAt
+
+  owner                   User?           @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  documents               Document[]
+  entities                Entity[]
+  assets                  Asset[]
+  assetLinks              AssetLink[]
+  comments                Comment[]
+  tasks                   Task[]
+  hammerApprovals         HammerApproval[]
+  treatmentVersions       TreatmentVersion[]
+  scriptVersions          ScriptVersion[]
+  sequences               Sequence[]
+  scenes                  Scene[]
+  shots                   Shot[]
+  previzShots             PrevizShot[]
+  departments             Department[]
+  approvals               Approval[]
+  risks                   Risk[]
+  changeRequests          ChangeRequest[]
+  auditLogs               AuditLog[]
+  memberships             ProjectMembership[]
+
+  @@index([status])
+  @@index([hammerStage])
+  @@index([ownerId])
+}
+
+model User {
+  id           String              @id @default(cuid())
+  email        String              @unique
+  name         String
+  avatarUrl    String?
+  googleId     String?             @unique
+  role         UserRole            @default(PRODUCER)
+  passwordHash String              @default("")
+  appRole      AppRole             @default(producer)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  ownedProjects Project[]          @relation("ProjectOwner")
+  documentsCreated Document[]      @relation("DocumentCreator")
+  documentVersionsUploaded DocumentVersion[] @relation("DocumentVersionUploader")
+  documentDiffsCreated DocumentDiff[] @relation("DocumentDiffCreator")
+  assetsUploaded Asset[]           @relation("AssetUploader")
+  commentsCreated Comment[]        @relation("CommentCreator")
+  approvalsRequested HammerApproval[] @relation("ApprovalRequester")
+  approvalsReviewing HammerApproval[] @relation("ApprovalReviewer")
+  tasksAssigned Task[]             @relation("TaskAssignee")
+  tasksCreated Task[]              @relation("TaskCreator")
+  auditEvents AuditEvent[]
+  memberships  ProjectMembership[]
+  auditLogs    AuditLog[]
+  approvalDecisions Approval[]      @relation("ApprovalDecision")
+}
+
+model ProjectMembership {
+  id        String      @id @default(cuid())
+  projectId String
+  userId    String
+  role      ProjectRole @default(viewer)
+  createdAt DateTime    @default(now())
+
+  project   Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@index([userId])
+}
+
+model Document {
+  id               String            @id @default(cuid())
+  projectId        String
+  title            String
+  type             DocumentType
+  currentVersionId String?           @unique
+  createdById      String?
+  deletedAt        DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  project          Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  currentVersion   DocumentVersion?  @relation("CurrentDocumentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+  createdBy        User?             @relation("DocumentCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  versions         DocumentVersion[] @relation("DocumentVersions")
+  diffs            DocumentDiff[]
+
+  @@index([projectId])
+  @@index([type])
+}
+
+model DocumentVersion {
+  id                 String                @id @default(cuid())
+  documentId         String
+  versionNumber      Int
+  status             DocumentVersionStatus @default(DRAFT)
+  fileName           String
+  fileType           String
+  fileSize           Int
+  storagePath        String
+  extractedText      String?               @db.Text
+  uploadedById       String?
+  createdAt          DateTime              @default(now())
+  notes              String?               @db.Text
+
+  document           Document              @relation("DocumentVersions", fields: [documentId], references: [id], onDelete: Cascade)
+  currentForDocument Document?             @relation("CurrentDocumentVersion")
+  uploadedBy         User?                 @relation("DocumentVersionUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  scenes             Scene[]               @relation("DocumentVersionScenes")
+  diffsFrom          DocumentDiff[]        @relation("DocumentDiffFrom")
+  diffsTo            DocumentDiff[]        @relation("DocumentDiffTo")
+  assetLinks         AssetLink[]
+
+  @@unique([documentId, versionNumber])
+  @@index([documentId, createdAt])
+  @@index([status])
+}
+
+model DocumentDiff {
+  id            String          @id @default(cuid())
+  documentId    String
+  fromVersionId String
+  toVersionId   String
+  summary       String          @db.Text
+  diffJson      Json
+  createdById   String?
+  createdAt     DateTime        @default(now())
+
+  document      Document        @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  fromVersion   DocumentVersion @relation("DocumentDiffFrom", fields: [fromVersionId], references: [id], onDelete: Cascade)
+  toVersion     DocumentVersion @relation("DocumentDiffTo", fields: [toVersionId], references: [id], onDelete: Cascade)
+  createdBy     User?           @relation("DocumentDiffCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([documentId])
+  @@index([fromVersionId, toVersionId])
+}
+
+model TreatmentVersion {
+  id               String   @id @default(cuid())
+  projectId        String
+  version          String
+  notes            String?  @db.Text
+  alignmentPercent Int      @default(0)
+  createdAt        DateTime @default(now())
+
+  project          Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+}
+
+model ScriptVersion {
+  id              String        @id @default(cuid())
+  projectId       String
+  versionName     String
+  fileName        String
+  uploadedBy      String?
+  uploadedAt      DateTime      @default(now())
+  rawParseJson    Json?
+  rawText         String?       @db.Text
+
+  project         Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  file            ScriptFile?
+  parsedScenes    ParsedScene[]
+  diffsFrom       ScriptDiff[]  @relation("DiffFrom")
+  diffsTo         ScriptDiff[]  @relation("DiffTo")
+
+  @@index([projectId, uploadedAt])
+}
+
+model ScriptFile {
+  id              String          @id @default(cuid())
+  scriptVersionId String          @unique
+  projectId       String
+  fileName        String
+  mimeType        String
+  kind            ScriptFileKind
+  sizeBytes       Int
+  storagePath     String
+  checksum        String
+  extractionStatus ExtractionStatus @default(extracted)
+  extractionError  String?          @db.Text
+  ocrProvider      String?
+  ocrRequestedAt   DateTime?
+  createdAt       DateTime        @default(now())
+
+  scriptVersion   ScriptVersion   @relation(fields: [scriptVersionId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+}
+
+model ParsedScene {
+  id               String        @id @default(cuid())
+  scriptVersionId  String
+  projectId        String
+  sceneNumber      Int
+  slugline         String
+  interiorExterior String
+  location         String
+  timeOfDay        String
+  text             String        @db.Text
+  actionText       String        @db.Text
+  pageEstimate     Float         @default(0)
+  riskLevel        RiskLevel     @default(low)
+  rawSceneJson     Json?
+
+  scriptVersion    ScriptVersion @relation(fields: [scriptVersionId], references: [id], onDelete: Cascade)
+  characters       SceneCharacter[]
+  environments     SceneEnvironment[]
+  props            SceneProp[]
+
+  @@index([scriptVersionId])
+  @@index([projectId, sceneNumber])
+}
+
+model Character {
+  id        String           @id @default(cuid())
+  projectId String
+  name      String
+  createdAt DateTime         @default(now())
+
+  scenes    SceneCharacter[]
+
+  @@unique([projectId, name])
+}
+
+model Environment {
+  id        String             @id @default(cuid())
+  projectId String
+  name      String
+  createdAt DateTime           @default(now())
+
+  scenes    SceneEnvironment[]
+
+  @@unique([projectId, name])
+}
+
+model Prop {
+  id        String      @id @default(cuid())
+  projectId String
+  name      String
+  createdAt DateTime    @default(now())
+
+  scenes    SceneProp[]
+
+  @@unique([projectId, name])
+}
+
+model SceneCharacter {
+  parsedSceneId String
+  characterId   String
+
+  parsedScene   ParsedScene @relation(fields: [parsedSceneId], references: [id], onDelete: Cascade)
+  character     Character   @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@id([parsedSceneId, characterId])
+}
+
+model SceneEnvironment {
+  parsedSceneId String
+  environmentId String
+
+  parsedScene   ParsedScene @relation(fields: [parsedSceneId], references: [id], onDelete: Cascade)
+  environment   Environment @relation(fields: [environmentId], references: [id], onDelete: Cascade)
+
+  @@id([parsedSceneId, environmentId])
+}
+
+model SceneProp {
+  parsedSceneId String
+  propId        String
+
+  parsedScene   ParsedScene @relation(fields: [parsedSceneId], references: [id], onDelete: Cascade)
+  prop          Prop        @relation(fields: [propId], references: [id], onDelete: Cascade)
+
+  @@id([parsedSceneId, propId])
+}
+
+model ScriptDiff {
+  id                  String          @id @default(cuid())
+  projectId           String
+  fromScriptVersionId String
+  toScriptVersionId   String
+  summaryJson         Json
+  createdAt           DateTime        @default(now())
+
+  fromScriptVersion   ScriptVersion   @relation("DiffFrom", fields: [fromScriptVersionId], references: [id], onDelete: Cascade)
+  toScriptVersion     ScriptVersion   @relation("DiffTo", fields: [toScriptVersionId], references: [id], onDelete: Cascade)
+  sceneDiffs          SceneDiff[]
+
+  @@index([projectId])
+  @@index([fromScriptVersionId, toScriptVersionId])
+}
+
+model SceneDiff {
+  id              String          @id @default(cuid())
+  scriptDiffId    String
+  sceneNumber     Int
+  status          SceneDiffStatus
+  beforeSlugline  String?
+  afterSlugline   String?
+  locationChanged Boolean         @default(false)
+  riskLevel       RiskLevel       @default(low)
+  rawDiffJson     Json
+
+  scriptDiff      ScriptDiff      @relation(fields: [scriptDiffId], references: [id], onDelete: Cascade)
+
+  @@index([scriptDiffId])
+}
+
+model Sequence {
+  id               String        @id @default(cuid())
+  projectId        String
+  act              String
+  code             String
+  title            String
+  logline          String        @db.Text
+  treatmentStatus  Status        @default(watch)
+  scriptStatus     Status        @default(watch)
+  storyboardStatus Status        @default(watch)
+  previzStatus     Status        @default(watch)
+  vfxStatus        Status        @default(watch)
+  stuntsStatus     Status        @default(watch)
+  stability        RiskLevel     @default(medium)
+  completion       Int           @default(0)
+  approvalState    ApprovalState @default(pending)
+
+  project          Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scenes           Scene[]
+  approvals        Approval[]
+  risks            Risk[]
+  changeRequests   ChangeRequest[]
+
+  @@index([projectId])
+}
+
+model Scene {
+  id                String      @id @default(cuid())
+  projectId         String
+  documentVersionId String?
+  sceneNumber       String?
+  heading           String?
+  location          String?
+  timeOfDay         String?
+  synopsis          String?     @db.Text
+  orderIndex        Int         @default(0)
+  sequenceId        String?
+  number            String
+  slugline          String
+  summary           String      @db.Text
+  scriptVersionName String?
+  status            Status      @default(watch)
+  changedFrom       String?
+  creativeDriftNote String?     @db.Text
+
+  project           Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  documentVersion   DocumentVersion? @relation("DocumentVersionScenes", fields: [documentVersionId], references: [id], onDelete: SetNull)
+  sequence          Sequence?   @relation(fields: [sequenceId], references: [id], onDelete: SetNull)
+  shots             Shot[]
+  changeRequests    ChangeRequest[]
+  sceneEntities     SceneEntity[]
+  assetLinks        AssetLink[]
+
+  @@index([projectId])
+  @@index([documentVersionId])
+  @@index([sequenceId])
+}
+
+model Entity {
+  id           String        @id @default(cuid())
+  projectId    String
+  type         EntityType
+  name         String
+  description  String?       @db.Text
+  metadataJson Json?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scenes       SceneEntity[]
+  assetLinks   AssetLink[]
+
+  @@unique([projectId, type, name])
+  @@index([projectId, type])
+}
+
+model SceneEntity {
+  id         String           @id @default(cuid())
+  sceneId    String
+  entityId   String
+  importance EntityImportance @default(MEDIUM)
+  notes      String?          @db.Text
+
+  scene      Scene            @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+  entity     Entity           @relation(fields: [entityId], references: [id], onDelete: Cascade)
+
+  @@unique([sceneId, entityId])
+  @@index([entityId])
+}
+
+model Asset {
+  id            String      @id @default(cuid())
+  projectId     String
+  title         String
+  description   String?     @db.Text
+  assetType     AssetType
+  fileName      String
+  fileType      String
+  fileSize      Int
+  storagePath   String
+  thumbnailPath String?
+  status        AssetStatus @default(UPLOADED)
+  uploadedById  String?
+  deletedAt     DateTime?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  project       Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  uploadedBy    User?       @relation("AssetUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  links         AssetLink[]
+
+  @@index([projectId])
+  @@index([assetType])
+  @@index([status])
+}
+
+model AssetLink {
+  id                String           @id @default(cuid())
+  assetId           String
+  projectId         String
+  sceneId           String?
+  entityId          String?
+  documentVersionId String?
+  linkType          LinkType         @default(REFERENCE)
+  createdAt         DateTime         @default(now())
+
+  asset             Asset            @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  project           Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scene             Scene?           @relation(fields: [sceneId], references: [id], onDelete: SetNull)
+  entity            Entity?          @relation(fields: [entityId], references: [id], onDelete: SetNull)
+  documentVersion   DocumentVersion? @relation(fields: [documentVersionId], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+  @@index([sceneId])
+  @@index([entityId])
+}
+
+model Comment {
+  id              String            @id @default(cuid())
+  projectId       String?
+  targetType      CommentTargetType
+  targetId        String
+  parentCommentId String?
+  body            String            @db.Text
+  visibility      CommentVisibility @default(PROJECT_TEAM)
+  status          CommentStatus     @default(OPEN)
+  createdById     String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  project         Project?          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parentComment   Comment?          @relation("CommentReplies", fields: [parentCommentId], references: [id], onDelete: Cascade)
+  replies         Comment[]         @relation("CommentReplies")
+  createdBy       User?             @relation("CommentCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([targetType, targetId])
+  @@index([createdById])
+}
+
+model HammerApproval {
+  id            String         @id @default(cuid())
+  projectId     String?
+  targetType    CommentTargetType
+  targetId      String
+  requestedById String?
+  reviewerId    String?
+  status        ApprovalStatus @default(REQUESTED)
+  decisionNotes String?        @db.Text
+  createdAt     DateTime       @default(now())
+  decidedAt     DateTime?
+
+  project       Project?       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  requestedBy   User?          @relation("ApprovalRequester", fields: [requestedById], references: [id], onDelete: SetNull)
+  reviewer      User?          @relation("ApprovalReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+  @@index([reviewerId])
+  @@index([status])
+  @@index([targetType, targetId])
+}
+
+model Task {
+  id           String          @id @default(cuid())
+  projectId    String
+  title        String
+  description  String?         @db.Text
+  assignedToId String?
+  createdById  String?
+  dueDate      DateTime?
+  priority     TaskPriority    @default(MEDIUM)
+  status       TaskStatus      @default(TODO)
+  targetType   TaskTargetType?
+  targetId     String?
+  deletedAt    DateTime?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  project      Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assignedTo   User?           @relation("TaskAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  createdBy    User?           @relation("TaskCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+  @@index([assignedToId])
+  @@index([status])
+  @@index([dueDate])
+}
+
+model AuditEvent {
+  id           String   @id @default(cuid())
+  actorUserId  String?
+  action       String
+  targetType   String
+  targetId     String?
+  metadataJson Json?
+  createdAt    DateTime @default(now())
+
+  actorUser    User?    @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([actorUserId])
+  @@index([targetType, targetId])
+  @@index([createdAt])
+}
+
+model Shot {
+  id              String       @id @default(cuid())
+  projectId       String
+  sceneId         String
+  code            String
+  description     String       @db.Text
+  storyboardPanel String
+  status          Status       @default(watch)
+
+  project         Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scene           Scene        @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+  previzShots     PrevizShot[]
+
+  @@index([projectId])
+  @@index([sceneId])
+}
+
+model PrevizShot {
+  id             String  @id @default(cuid())
+  projectId      String
+  shotId         String
+  code           String
+  version        String
+  status         Status  @default(watch)
+  outdatedReason String? @db.Text
+  owner          String?
+
+  project        Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  shot           Shot    @relation(fields: [shotId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([shotId])
+}
+
+model Department {
+  id        String    @id @default(cuid())
+  projectId String
+  name      String
+  lead      String?
+  status    Status    @default(stable)
+
+  project   Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  approvals Approval[]
+
+  @@unique([projectId, name])
+}
+
+model Approval {
+  id           String        @id @default(cuid())
+  projectId    String
+  sequenceId   String?
+  departmentId String?
+  state        ApprovalState @default(pending)
+  owner        String?
+  due          DateTime?
+  assignedRole ProjectRole?
+  decisionNote String?       @db.Text
+  decidedAt    DateTime?
+  decidedByUserId String?
+
+  project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sequence     Sequence?     @relation(fields: [sequenceId], references: [id], onDelete: SetNull)
+  department   Department?   @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  decidedBy    User?         @relation("ApprovalDecision", fields: [decidedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+  @@index([decidedByUserId])
+}
+
+model Risk {
+  id         String    @id @default(cuid())
+  projectId  String
+  sequenceId String?
+  title      String
+  detail     String    @db.Text
+  level      RiskLevel @default(medium)
+  owner      String?
+
+  project    Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sequence   Sequence? @relation(fields: [sequenceId], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+}
+
+model ChangeRequest {
+  id          String         @id @default(cuid())
+  projectId   String
+  sequenceId  String?
+  sceneId     String?
+  submittedBy String
+  description String         @db.Text
+  reason      String         @db.Text
+  priority    ChangePriority @default(medium)
+  submittedAt DateTime       @default(now())
+  riskLevel   RiskLevel      @default(medium)
+  impactJson  Json?
+
+  project     Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sequence    Sequence?      @relation(fields: [sequenceId], references: [id], onDelete: SetNull)
+  scene       Scene?         @relation(fields: [sceneId], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  projectId  String?
+  actorUserId String?
+  actor      String?
+  action     String
+  entityType String
+  entityId   String?
+  detailJson Json?
+  createdAt  DateTime @default(now())
+
+  project    Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  actorUser  User?    @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+  @@index([actorUserId])
+  @@index([entityType, entityId])
+}
