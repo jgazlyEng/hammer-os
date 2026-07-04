@@ -500,7 +500,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     if (view === "reviews") return <LegacyRedirect title="Reviews are folded into Scripts" detail="Review work now starts from scripts awaiting review, so the queue is easier to follow." href="/scripts?section=inbox" label="Open Scripts" />;
     if (view === "executive") {
       if (currentUser.role !== "EXECUTIVE") return <AccessDenied title="Executive access required" detail="The executive dashboard is limited to users with the Executive role." />;
-      return <Executive projects={projects} />;
+      return <Executive projects={projects} documents={documents} versions={versions} tasks={tasks} />;
     }
     if (currentUser.role !== "ADMIN") return <AccessDenied title="Admin access required" detail="Only admins can manage projects, users, roles, and project access." />;
     return <AdminUsers projects={projects} currentUser={currentUser} onCreateProject={addProject} onStatusChange={updateProjectStatus} />;
@@ -2268,29 +2268,296 @@ function Reviews({ projectId }: { projectId?: string }) {
   );
 }
 
-function Executive({ projects }: { projects: HammerProject[] }) {
-  const byStatus = countBy(projects.map((project) => project.status));
-  const scriptReviewApprovals = hammerApprovals.filter((approval) => approval.targetType === "DOCUMENT_VERSION" && approval.status === "REQUESTED");
-  const firstScriptReview = scriptReviewApprovals[0];
-  const firstReviewDocument = firstScriptReview ? hammerDocuments.find((document) => document.currentVersionId === firstScriptReview.targetId || hammerVersions.some((version) => version.id === firstScriptReview.targetId && version.documentId === document.id)) : undefined;
+function Executive({
+  projects,
+  documents,
+  versions,
+  tasks
+}: {
+  projects: HammerProject[];
+  documents: HammerDocument[];
+  versions: HammerDocumentVersion[];
+  tasks: HammerTask[];
+}) {
+  const briefs = projects.map((project) => buildExecutiveProjectBrief(project, documents, versions, tasks));
+  const decisionReady = briefs.filter((brief) => brief.health === "decision").length;
+  const needsAttention = briefs.filter((brief) => brief.health === "attention").length;
+  const atRisk = briefs.filter((brief) => brief.health === "risk").length;
+  const activeCount = briefs.filter((brief) => !["ARCHIVED", "PASSED"].includes(brief.project.status)).length;
+  const pendingApprovals = hammerApprovals.filter((approval) => approval.status === "REQUESTED" || approval.status === "CHANGES_REQUESTED");
+  const urgentTasks = tasks.filter((task) => task.priority === "URGENT" || task.status === "BLOCKED" || task.status === "ON_HOLD");
   const assetsAwaitingApproval = hammerAssets.filter((asset) => asset.status === "IN_REVIEW");
-  const overdueTasks = hammerTasks.filter((task) => task.priority === "URGENT");
-  const greenlightCandidates = projects.filter((project) => project.status === "GREENLIGHT_REVIEW");
+  const decisionItems = [
+    ...pendingApprovals.map((approval) => {
+      const document = documentForApproval(approval, documents, versions);
+      const asset = hammerAssets.find((item) => item.id === approval.targetId);
+      return {
+        id: approval.id,
+        label: approval.targetType === "DOCUMENT_VERSION" ? "Script Review" : "Approval",
+        title: document?.title ?? asset?.title ?? approval.targetId,
+        detail: `${projectTitle(approval.projectId)} / requested by ${userName(approval.requestedById)}`,
+        href: document ? `/scripts/${document.id}` : asset ? `/assets/${asset.id}` : `/projects/${approval.projectId}`,
+        status: approval.status
+      };
+    }),
+    ...urgentTasks.map((task) => ({
+      id: task.id,
+      label: "Blocked or Urgent Task",
+      title: task.title,
+      detail: `${projectTitle(task.projectId)} / ${userName(task.assignedToId)} / due ${task.dueDate}`,
+      href: `/tasks?task=${encodeURIComponent(task.id)}`,
+      status: task.priority
+    })),
+    ...assetsAwaitingApproval.map((asset) => ({
+      id: asset.id,
+      label: "Asset Review",
+      title: asset.title,
+      detail: `${projectTitle(asset.projectId)} / ${statusLabel(asset.assetType)}`,
+      href: `/assets/${asset.id}`,
+      status: asset.status
+    }))
+  ].slice(0, 6);
+
   return (
     <div className="space-y-4">
-      <Panel className="bg-white/[0.025] shadow-none">
-        <p className="text-[13px] text-studio-300">Portfolio view across the full development slate. Use the active project selector for project-scoped work pages.</p>
+      <Panel className="border-amberline/20 bg-amberline/[0.06] shadow-none">
+        <div className="grid gap-4 xl:grid-cols-[1fr_auto] xl:items-end">
+          <div>
+            <p className="font-display text-[10px] uppercase tracking-[0.16em] text-amberline">Executive Slate Brief</p>
+            <h2 className="mt-1 text-lg font-semibold text-studio-100">Overall status: {executiveSlateSummary(decisionReady, needsAttention, atRisk)}</h2>
+            <p className="mt-1 max-w-3xl text-[13px] leading-5 text-studio-300">A project-level view of what is ready for a decision, what needs attention, and where the studio team is blocked.</p>
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-center md:grid-cols-4 xl:w-[520px]">
+            <ExecutiveStat label="Active" value={activeCount} tone="blue" />
+            <ExecutiveStat label="Decision Ready" value={decisionReady} tone="green" />
+            <ExecutiveStat label="Needs Attention" value={needsAttention} tone="yellow" />
+            <ExecutiveStat label="At Risk" value={atRisk} tone="red" />
+          </div>
+        </div>
       </Panel>
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Scripts Awaiting Review" value={`${scriptReviewApprovals.length}`} sub={firstReviewDocument?.title} href={firstReviewDocument ? `/scripts/${firstReviewDocument.id}` : undefined} />
-        <MetricCard label="Assets Awaiting Approval" value={`${assetsAwaitingApproval.length}`} sub={assetsAwaitingApproval[0]?.title} href={assetsAwaitingApproval[0] ? `/assets/${assetsAwaitingApproval[0].id}` : undefined} />
-        <MetricCard label="Overdue Tasks" value={`${overdueTasks.length}`} sub={overdueTasks[0]?.title} href={overdueTasks[0] ? `/tasks?task=${overdueTasks[0].id}` : undefined} />
-        <MetricCard label="Greenlight Candidates" value={`${greenlightCandidates.length}`} sub={greenlightCandidates[0]?.title} href={greenlightCandidates[0] ? `/projects/${greenlightCandidates[0].id}` : undefined} />
+
+      <div className="grid gap-4 xl:grid-cols-[1fr_0.7fr]">
+        <Panel>
+          <SectionHeader eyebrow="Slate" title="Project Status Updates" />
+          <div className="grid gap-3">
+            {briefs.map((brief) => <ExecutiveProjectCard key={brief.project.id} brief={brief} />)}
+          </div>
+        </Panel>
+
+        <Panel>
+          <SectionHeader eyebrow="Decisions" title="Needs Executive Attention" />
+          <div className="space-y-2">
+            {decisionItems.length ? decisionItems.map((item) => (
+              <Link key={item.id} href={item.href} className="block rounded-md border border-white/10 bg-white/[0.03] p-3 transition hover:border-amberline/35 hover:bg-white/[0.055]">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="font-display text-[10px] uppercase tracking-[0.12em] text-studio-400">{item.label}</p>
+                    <p className="mt-1 text-[13px] font-semibold text-studio-100">{item.title}</p>
+                    <p className="mt-1 text-xs text-studio-400">{item.detail}</p>
+                  </div>
+                  <Badge value={item.status} />
+                </div>
+              </Link>
+            )) : <EmptyState label="No executive decisions are waiting right now." />}
+          </div>
+        </Panel>
       </div>
-      <div className="grid gap-4">
-        <Panel><SectionHeader eyebrow="Status" title="Projects by Status" />{Object.entries(byStatus).map(([label, count]) => <Bar key={label} label={statusLabel(label)} value={count} max={projects.length} />)}</Panel>
+
+      <Panel>
+        <SectionHeader eyebrow="Quick Read" title="Slate Table" />
+        <ExecutiveSlateTable briefs={briefs} />
+      </Panel>
+    </div>
+  );
+}
+
+type ExecutiveHealth = "decision" | "attention" | "risk" | "steady";
+
+interface ExecutiveProjectBrief {
+  project: HammerProject;
+  health: ExecutiveHealth;
+  healthLabel: string;
+  summary: string;
+  nextAction: string;
+  currentDocument?: HammerDocument;
+  currentVersion?: HammerDocumentVersion;
+  documentCount: number;
+  openTasks: HammerTask[];
+  urgentTasks: HammerTask[];
+  pendingApprovals: typeof hammerApprovals;
+  reviewAssets: HammerAsset[];
+  approvedAssets: HammerAsset[];
+}
+
+function buildExecutiveProjectBrief(project: HammerProject, documents: HammerDocument[], versions: HammerDocumentVersion[], tasks: HammerTask[]): ExecutiveProjectBrief {
+  const projectDocuments = documents.filter((document) => document.projectId === project.id);
+  const currentDocument = [...projectDocuments]
+    .filter((document) => document.type === "SCRIPT" || document.type === "TREATMENT")
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+  const currentVersion = currentDocument ? currentVersionFor(currentDocument.id, documents, versions) : undefined;
+  const projectTasks = tasks.filter((task) => task.projectId === project.id);
+  const openTasks = projectTasks.filter((task) => task.status !== "DONE" && task.status !== "ARCHIVED");
+  const urgentTasks = openTasks.filter((task) => task.priority === "URGENT" || task.status === "BLOCKED" || task.status === "ON_HOLD");
+  const pendingApprovals = hammerApprovals.filter((approval) => approval.projectId === project.id && (approval.status === "REQUESTED" || approval.status === "CHANGES_REQUESTED"));
+  const reviewAssets = hammerAssets.filter((asset) => asset.projectId === project.id && asset.status === "IN_REVIEW");
+  const approvedAssets = hammerAssets.filter((asset) => asset.projectId === project.id && asset.status === "APPROVED");
+  const reviewTasks = openTasks.filter((task) => task.status === "REVIEW");
+  const health = executiveHealthForProject(project, { urgentTasks, pendingApprovals, reviewAssets, reviewTasks });
+  const healthLabel = executiveHealthLabel(health);
+  const summary = executiveProjectSummary(project, currentVersion, { pendingApprovals, reviewAssets, urgentTasks, openTasks });
+  const nextAction = executiveNextAction(project, { currentDocument, pendingApprovals, reviewAssets, urgentTasks, reviewTasks });
+
+  return {
+    project,
+    health,
+    healthLabel,
+    summary,
+    nextAction,
+    currentDocument,
+    currentVersion,
+    documentCount: projectDocuments.length,
+    openTasks,
+    urgentTasks,
+    pendingApprovals,
+    reviewAssets,
+    approvedAssets
+  };
+}
+
+function executiveHealthForProject(
+  project: HammerProject,
+  context: { urgentTasks: HammerTask[]; pendingApprovals: typeof hammerApprovals; reviewAssets: HammerAsset[]; reviewTasks: HammerTask[] }
+): ExecutiveHealth {
+  if (["ON_HOLD", "PASSED", "ARCHIVED"].includes(project.status) || context.urgentTasks.length) return "risk";
+  if (project.status === "GREENLIGHT_REVIEW" || context.pendingApprovals.some((approval) => approval.targetType === "DOCUMENT_VERSION")) return "decision";
+  if (context.pendingApprovals.length || context.reviewAssets.length || context.reviewTasks.length) return "attention";
+  return "steady";
+}
+
+function executiveHealthLabel(health: ExecutiveHealth) {
+  if (health === "decision") return "Decision Ready";
+  if (health === "attention") return "Needs Attention";
+  if (health === "risk") return "At Risk";
+  return "On Track";
+}
+
+function executiveSlateSummary(decisionReady: number, needsAttention: number, atRisk: number) {
+  if (atRisk) return `${atRisk} project${atRisk === 1 ? "" : "s"} at risk`;
+  if (decisionReady) return `${decisionReady} project${decisionReady === 1 ? "" : "s"} ready for decision`;
+  if (needsAttention) return `${needsAttention} project${needsAttention === 1 ? "" : "s"} need attention`;
+  return "slate is on track";
+}
+
+function executiveProjectSummary(
+  project: HammerProject,
+  currentVersion: HammerDocumentVersion | undefined,
+  context: { pendingApprovals: typeof hammerApprovals; reviewAssets: HammerAsset[]; urgentTasks: HammerTask[]; openTasks: HammerTask[] }
+) {
+  if (context.urgentTasks.length) return `${context.urgentTasks.length} urgent or blocked item${context.urgentTasks.length === 1 ? "" : "s"} need producer follow-up.`;
+  if (project.status === "GREENLIGHT_REVIEW") return "Greenlight packet is assembled enough for executive review.";
+  if (context.pendingApprovals.length) return `${context.pendingApprovals.length} approval request${context.pendingApprovals.length === 1 ? "" : "s"} waiting on decision.`;
+  if (context.reviewAssets.length) return `${context.reviewAssets.length} visual reference item${context.reviewAssets.length === 1 ? "" : "s"} awaiting approval.`;
+  if (currentVersion) return `Current material is ${statusLabel(currentVersion.status).toLowerCase()} with ${context.openTasks.length} open task${context.openTasks.length === 1 ? "" : "s"}.`;
+  return "No current script or treatment has been attached yet.";
+}
+
+function executiveNextAction(
+  project: HammerProject,
+  context: { currentDocument?: HammerDocument; pendingApprovals: typeof hammerApprovals; reviewAssets: HammerAsset[]; urgentTasks: HammerTask[]; reviewTasks: HammerTask[] }
+) {
+  if (context.urgentTasks[0]) return `Resolve: ${context.urgentTasks[0].title}`;
+  if (context.pendingApprovals[0]) return context.pendingApprovals[0].targetType === "DOCUMENT_VERSION" ? "Review latest script decision." : "Complete pending approval.";
+  if (project.status === "GREENLIGHT_REVIEW") return "Review greenlight readiness.";
+  if (context.reviewAssets[0]) return `Review visual reference: ${context.reviewAssets[0].title}`;
+  if (context.reviewTasks[0]) return `Clear review task: ${context.reviewTasks[0].title}`;
+  if (context.currentDocument) return "Monitor next draft milestone.";
+  return "Assign source material.";
+}
+
+function documentForApproval(approval: typeof hammerApprovals[number], documents: HammerDocument[], versions: HammerDocumentVersion[]) {
+  if (approval.targetType !== "DOCUMENT_VERSION") return undefined;
+  const version = versions.find((item) => item.id === approval.targetId);
+  return version ? documents.find((document) => document.id === version.documentId) : undefined;
+}
+
+function ExecutiveStat({ label, value, tone }: { label: string; value: number; tone: BadgeTone }) {
+  const styles = badgeStyles[tone];
+  return (
+    <div className={cn("rounded-md border p-2.5", styles.subtle)}>
+      <p className="font-display text-[10px] uppercase tracking-[0.12em]">{label}</p>
+      <p className="mt-1 text-xl font-semibold">{value}</p>
+    </div>
+  );
+}
+
+function ExecutiveProjectCard({ brief }: { brief: ExecutiveProjectBrief }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
+      <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-start">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <Link href={`/projects/${brief.project.id}`} className="text-base font-semibold text-studio-100 hover:text-amberline">{brief.project.title}</Link>
+            <ExecutiveHealthBadge health={brief.health} />
+            <Badge value={brief.project.status} subtle />
+          </div>
+          <p className="mt-2 max-w-3xl text-[13px] leading-5 text-studio-300">{brief.summary}</p>
+          <p className="mt-1 text-xs text-studio-400">{brief.project.logline}</p>
+        </div>
+        <div className="flex flex-wrap gap-1.5 lg:justify-end">
+          <TableLink href={`/projects/${brief.project.id}`}>Open Project</TableLink>
+          {brief.currentDocument ? <TableLink href={`/scripts/${brief.currentDocument.id}`}>Open Script</TableLink> : null}
+        </div>
       </div>
-      <Projects projects={projects} />
+
+      <div className="mt-3 grid gap-2 md:grid-cols-4">
+        <ExecutiveBriefMetric label="Current Material" value={brief.currentDocument?.title ?? "Not attached"} detail={brief.currentVersion ? `v${brief.currentVersion.versionNumber} / ${statusLabel(brief.currentVersion.status)}` : "Needs source"} />
+        <ExecutiveBriefMetric label="Open Tasks" value={`${brief.openTasks.length}`} detail={brief.urgentTasks.length ? `${brief.urgentTasks.length} urgent/blocked` : "No blockers flagged"} />
+        <ExecutiveBriefMetric label="Approvals" value={`${brief.pendingApprovals.length}`} detail={brief.pendingApprovals.length ? "Waiting on decision" : "Clear"} />
+        <ExecutiveBriefMetric label="Visual Reference" value={`${brief.approvedAssets.length} approved`} detail={brief.reviewAssets.length ? `${brief.reviewAssets.length} in review` : "No visual holds"} />
+      </div>
+
+      <div className="mt-3 rounded-md border border-white/10 bg-white/[0.025] px-3 py-2">
+        <p className="font-display text-[10px] uppercase tracking-[0.12em] text-studio-400">Recommended Next Step</p>
+        <p className="mt-1 text-[13px] font-semibold text-studio-100">{brief.nextAction}</p>
+      </div>
+    </div>
+  );
+}
+
+function ExecutiveHealthBadge({ health }: { health: ExecutiveHealth }) {
+  const tone: BadgeTone = health === "decision" ? "green" : health === "attention" ? "yellow" : health === "risk" ? "red" : "blue";
+  return <span className={cn("status-badge inline-flex rounded border px-2 py-1 font-display text-[11px] uppercase", badgeStyles[tone].solid)}>{executiveHealthLabel(health)}</span>;
+}
+
+function ExecutiveBriefMetric({ label, value, detail }: { label: string; value: string; detail: string }) {
+  return (
+    <div className="rounded-md border border-white/10 bg-white/[0.025] p-2.5">
+      <p className="font-display text-[10px] uppercase tracking-[0.12em] text-studio-400">{label}</p>
+      <p className="mt-1 truncate text-[13px] font-semibold text-studio-100">{value}</p>
+      <p className="mt-0.5 truncate text-[11px] text-studio-400">{detail}</p>
+    </div>
+  );
+}
+
+function ExecutiveSlateTable({ briefs }: { briefs: ExecutiveProjectBrief[] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[860px] text-left text-[13px]">
+        <thead className="text-[11px] uppercase tracking-[0.12em] text-studio-400">
+          <tr><th className="py-2">Project</th><th>Overall Status</th><th>Current Material</th><th>Open Items</th><th>Next Step</th></tr>
+        </thead>
+        <tbody className="divide-y divide-white/10">
+          {briefs.map((brief) => (
+            <tr key={brief.project.id} className="transition hover:bg-white/[0.035]">
+              <td className="py-2.5"><Link href={`/projects/${brief.project.id}`} className="font-semibold text-studio-100 hover:text-amberline">{brief.project.title}</Link><p className="mt-0.5 text-xs text-studio-400">{brief.project.genre}</p></td>
+              <td><ExecutiveHealthBadge health={brief.health} /></td>
+              <td className="text-studio-300">{brief.currentDocument ? `${brief.currentDocument.title} / ${statusLabel(brief.currentVersion?.status ?? "RECEIVED")}` : "No current material"}</td>
+              <td className="text-studio-300">{brief.openTasks.length} tasks / {brief.pendingApprovals.length} approvals / {brief.reviewAssets.length} assets</td>
+              <td className="text-studio-300">{brief.nextAction}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
