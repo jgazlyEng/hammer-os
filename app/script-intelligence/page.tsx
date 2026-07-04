@@ -1,10 +1,5 @@
-import { AppShell } from "@/components/app-shell";
-import { ScriptIntelligenceWorkspace } from "@/app/script-intelligence/script-intelligence-workspace";
+import { redirect } from "next/navigation";
 
 export default function ScriptIntelligencePage() {
-  return (
-    <AppShell>
-      <ScriptIntelligenceWorkspace />
-    </AppShell>
-  );
+  redirect("/scripts");
 }

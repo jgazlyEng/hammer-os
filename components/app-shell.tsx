@@ -1,37 +1,46 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { BriefcaseBusiness, ContactRound, FileClock, Images, LayoutDashboard, ListTodo, LogOut, Settings2, ShieldCheck, UserRound } from "lucide-react";
+import { BarChart3, ClipboardList, ContactRound, FileClock, FolderKanban, LayoutDashboard, LogOut, Moon, Settings2, Sun, UserRound } from "lucide-react";
 import {
   assignedProjectsForUser,
+  HAMMER_DOCUMENT_PROJECT_OVERRIDES_STORAGE_KEY,
   HAMMER_ACTIVE_PROJECT_EVENT,
   HAMMER_ACTIVE_PROJECT_STORAGE_KEY,
   HAMMER_DEMO_USER_EVENT,
   HAMMER_DEMO_USER_STORAGE_KEY,
   HAMMER_LOCAL_PROJECTS_EVENT,
+  HAMMER_LOCAL_DOCUMENTS_EVENT,
+  HAMMER_LOCAL_DOCUMENTS_STORAGE_KEY,
   HAMMER_LOCAL_PROJECTS_STORAGE_KEY,
+  HAMMER_LOCAL_USER_STATES_EVENT,
+  HAMMER_LOCAL_USER_STATES_STORAGE_KEY,
+  hammerDocuments,
   hammerProjects,
   hammerUsers,
   hammerUserByEmail,
   statusLabel,
   type HammerUser,
-  type HammerProject
+  type HammerProject,
+  type HammerDocument
 } from "@/lib/hammer-data";
 import { cn } from "@/lib/utils";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/projects", label: "Projects", icon: FolderKanban },
   { href: "/scripts", label: "Scripts", icon: FileClock },
-  { href: "/assets", label: "Assets", icon: Images },
-  { href: "/tasks", label: "Tasks", icon: ListTodo },
-  { href: "/reviews", label: "Reviews", icon: ShieldCheck }
+  { href: "/tasks", label: "Tasks", icon: ClipboardList }
 ];
 
 const contactsNavItem = { href: "/contacts", label: "Contacts", icon: ContactRound };
-const executiveNavItem = { href: "/executive", label: "Executive", icon: BriefcaseBusiness };
+const executiveNavItem = { href: "/executive", label: "Executive", icon: BarChart3 };
 const adminNavItem = { href: "/admin/users", label: "Admin", icon: Settings2 };
+const HAMMER_THEME_STORAGE_KEY = "hammer-os-theme";
+type ThemeMode = "dark" | "light";
+type LocalUserState = Record<string, { inactive?: boolean; deleted?: boolean }>;
 
 interface ShellUser {
   name: string;
@@ -49,12 +58,17 @@ function toShellUser(user: HammerUser): ShellUser {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const router = useRouter();
   const [projectId, setProjectId] = useState(hammerProjects[0]?.id ?? "");
   const [projectPreferenceLoaded, setProjectPreferenceLoaded] = useState(false);
   const [localProjects, setLocalProjects] = useState<HammerProject[]>([]);
+  const [localDocuments, setLocalDocuments] = useState<HammerDocument[]>([]);
+  const [documentProjectOverrides, setDocumentProjectOverrides] = useState<Record<string, string | null>>({});
+  const [localUserStates, setLocalUserStates] = useState<LocalUserState>({});
   const [user, setUser] = useState<ShellUser | null>(null);
   const [authMode, setAuthMode] = useState<"database" | "demo">("demo");
+  const [theme, setTheme] = useState<ThemeMode>("dark");
   const currentUser = hammerUserByEmail(user?.email);
   const allProjects = useMemo(() => [...localProjects, ...hammerProjects.filter((project) => !localProjects.some((item) => item.id === project.id))], [localProjects]);
   const assignedProjects = assignedProjectsForUser(currentUser.id);
@@ -62,6 +76,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     ? allProjects
     : uniqueProjects([...assignedProjects, ...localProjects.filter((project) => project.ownerId === currentUser.id)]);
   const activeProject = useMemo(() => availableProjects.find((project) => project.id === projectId) ?? availableProjects[0], [availableProjects, projectId]);
+  const allDocuments = useMemo(() => [...hammerDocuments, ...localDocuments].map((document) => (
+    Object.prototype.hasOwnProperty.call(documentProjectOverrides, document.id)
+      ? { ...document, projectId: documentProjectOverrides[document.id] ?? undefined }
+      : document
+  )), [documentProjectOverrides, localDocuments]);
+  const incomingScriptCount = allDocuments.filter((document) => isScriptLibraryDocument(document) && !document.projectId).length;
+  const currentScriptSection = searchParams.get("section") ?? "inbox";
+  const availableDemoUsers = hammerUsers.filter((demoUser) => !localUserStates[demoUser.id]?.inactive && !localUserStates[demoUser.id]?.deleted);
+  const showProjectContext = pathname.startsWith("/projects/") && !pathname.startsWith("/projects/new");
 
   useEffect(() => {
     async function loadSession() {
@@ -80,6 +103,61 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
     loadSession();
   }, []);
+
+  useEffect(() => {
+    function loadLocalUserStates() {
+      try {
+        const storedUserStates = window.localStorage.getItem(HAMMER_LOCAL_USER_STATES_STORAGE_KEY);
+        setLocalUserStates(storedUserStates ? JSON.parse(storedUserStates) as LocalUserState : {});
+      } catch {
+        setLocalUserStates({});
+      }
+    }
+
+    loadLocalUserStates();
+    window.addEventListener(HAMMER_LOCAL_USER_STATES_EVENT, loadLocalUserStates);
+    window.addEventListener("storage", loadLocalUserStates);
+    return () => {
+      window.removeEventListener(HAMMER_LOCAL_USER_STATES_EVENT, loadLocalUserStates);
+      window.removeEventListener("storage", loadLocalUserStates);
+    };
+  }, []);
+
+  useEffect(() => {
+    function loadLocalDocuments() {
+      try {
+        const storedDocuments = window.localStorage.getItem(HAMMER_LOCAL_DOCUMENTS_STORAGE_KEY);
+        const storedProjectOverrides = window.localStorage.getItem(HAMMER_DOCUMENT_PROJECT_OVERRIDES_STORAGE_KEY);
+        setLocalDocuments(storedDocuments ? JSON.parse(storedDocuments) as HammerDocument[] : []);
+        setDocumentProjectOverrides(storedProjectOverrides ? JSON.parse(storedProjectOverrides) as Record<string, string | null> : {});
+      } catch {
+        setLocalDocuments([]);
+        setDocumentProjectOverrides({});
+      }
+    }
+
+    loadLocalDocuments();
+    window.addEventListener(HAMMER_LOCAL_DOCUMENTS_EVENT, loadLocalDocuments);
+    window.addEventListener("storage", loadLocalDocuments);
+    return () => {
+      window.removeEventListener(HAMMER_LOCAL_DOCUMENTS_EVENT, loadLocalDocuments);
+      window.removeEventListener("storage", loadLocalDocuments);
+    };
+  }, []);
+
+  useEffect(() => {
+    const storedTheme = window.localStorage.getItem(HAMMER_THEME_STORAGE_KEY);
+    if (storedTheme === "light" || storedTheme === "dark") {
+      setTheme(storedTheme);
+      document.documentElement.dataset.theme = storedTheme;
+    }
+  }, []);
+
+  function changeTheme(nextTheme: ThemeMode) {
+    setTheme(nextTheme);
+    document.documentElement.dataset.theme = nextTheme;
+    window.localStorage.setItem(HAMMER_THEME_STORAGE_KEY, nextTheme);
+  }
 
   useEffect(() => {
     function loadLocalProjects() {
@@ -154,34 +232,60 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <div className="min-h-screen">
       <aside className="fixed inset-y-0 left-0 z-30 w-[60px] border-r border-white/10 bg-studio-950/95 backdrop-blur md:w-56">
         <div className="flex h-full flex-col px-2 py-3 md:px-3">
-          <Link href="/dashboard" className="flex h-10 items-center justify-center rounded-md border border-white/10 bg-white/[0.03] md:justify-start md:px-3">
-            <span className="font-display text-[10px] uppercase tracking-[0.16em] text-amberline md:hidden">H</span>
-            <span className="hidden truncate text-sm font-semibold text-studio-100 md:inline">Hammer OS</span>
-          </Link>
+          <div className="flex items-center gap-1.5">
+            <Link href="/dashboard" className="flex h-10 min-w-0 flex-1 items-center justify-center rounded-md border border-white/10 bg-white/[0.03] md:justify-start md:px-3">
+              <span className="font-display text-[10px] uppercase tracking-[0.16em] text-amberline md:hidden">H</span>
+              <span className="hidden truncate text-sm font-semibold text-studio-100 md:inline">Hammer OS</span>
+            </Link>
+            <ThemeToggle theme={theme} onChange={changeTheme} />
+          </div>
 
           <nav className="mt-4 space-y-0.5">
             {[
-              ...navItems.slice(0, 4),
+              ...navItems,
+              ...(currentUser.role === "EXECUTIVE" ? [executiveNavItem] : []),
               ...(canViewContacts(currentUser.role) ? [contactsNavItem] : []),
-              ...navItems.slice(4),
-              ...(currentUser.role === "EXECUTIVE" ? [executiveNavItem] : [])
             ].map((item) => {
               const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
               const Icon = item.icon;
               return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  title={item.label}
-                  className={cn(
-                    "group relative flex h-9 items-center justify-center gap-2 rounded-md px-2 text-[13px] text-studio-300 transition hover:bg-white/[0.04] hover:text-studio-100 md:justify-start md:px-2.5",
-                    active && "bg-white/[0.06] text-amberline"
-                  )}
-                >
-                  <Icon className="h-4 w-4 shrink-0" />
-                  <span className="hidden md:inline">{item.label}</span>
-                  {active ? <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-amberline" /> : null}
-                </Link>
+                <div key={item.href}>
+                  <Link
+                    href={item.href}
+                    title={item.label}
+                    className={cn(
+                      "group relative flex h-9 items-center justify-center gap-2 rounded-md px-2 text-[13px] text-studio-300 transition hover:bg-white/[0.04] hover:text-studio-100 md:justify-start md:px-2.5",
+                      active && "bg-white/[0.06] text-amberline"
+                    )}
+                  >
+                    <Icon className="h-4 w-4 shrink-0" />
+                    <span className="hidden md:inline">{item.label}</span>
+                    {item.href === "/scripts" && incomingScriptCount ? (
+                      <span className="ml-auto hidden rounded-full bg-sky-400 px-1.5 py-0.5 text-[10px] font-bold text-white md:inline-flex">{incomingScriptCount}</span>
+                    ) : null}
+                    {active ? <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-amberline" /> : null}
+                  </Link>
+                  {item.href === "/scripts" && active ? (
+                    <div className="hidden py-1 pl-6 md:block">
+                      {[
+                        { href: "/scripts?section=inbox", label: "Inbox", key: "inbox", count: incomingScriptCount },
+                        { href: "/scripts?section=projects", label: "Active Projects", key: "projects" }
+                      ].map((subItem) => (
+                        <Link
+                          key={subItem.key}
+                          href={subItem.href}
+                          className={cn(
+                            "mt-0.5 flex h-7 items-center gap-2 rounded px-2 text-[12px] text-studio-400 transition hover:bg-white/[0.035] hover:text-studio-100",
+                            currentScriptSection === subItem.key && "bg-white/[0.05] text-amberline"
+                          )}
+                        >
+                          <span>{subItem.label}</span>
+                          {subItem.count ? <span className="ml-auto rounded-full bg-sky-400 px-1.5 py-0.5 text-[10px] font-bold text-white">{subItem.count}</span> : null}
+                        </Link>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
               );
             })}
           </nav>
@@ -210,7 +314,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </nav>
             ) : null}
           <div className="hidden md:block">
-            <SessionPanel user={user} mode={authMode} onDemoUserChange={setUser} />
+            <SessionPanel user={user} mode={authMode} demoUsers={availableDemoUsers} onDemoUserChange={setUser} />
           </div>
           </div>
         </div>
@@ -218,10 +322,30 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
       <main className="ml-[60px] px-3 py-3 md:ml-56 md:px-4 md:py-4 xl:px-5">
         <div className="mx-auto max-w-[1320px]">
-          <ProjectTopBar activeProject={activeProject} projects={availableProjects} onChange={changeProject} user={user} mode={authMode} />
+          {showProjectContext ? (
+            <ProjectTopBar activeProject={activeProject} projects={availableProjects} onChange={changeProject} user={user} mode={authMode} />
+          ) : (
+            <WorkspaceTopBar user={user} mode={authMode} />
+          )}
           {children}
         </div>
       </main>
+    </div>
+  );
+}
+
+function WorkspaceTopBar({ user, mode }: { user: ShellUser | null; mode: "database" | "demo" }) {
+  return (
+    <div className="mb-4 flex items-center justify-end border-b border-white/10 pb-3">
+      <div className="hidden items-center gap-2 text-right md:flex">
+        <div>
+          <p className="text-[13px] font-semibold text-studio-100">{user?.name ?? "Demo Admin"}</p>
+          <p className="font-display text-[10px] uppercase tracking-[0.12em] text-studio-400">{mode === "demo" ? "Demo" : user?.appRole ?? "Signed out"}</p>
+        </div>
+        <div className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300">
+          <UserRound className="h-4 w-4" />
+        </div>
+      </div>
     </div>
   );
 }
@@ -276,7 +400,7 @@ function ProjectTopBar({
 function ShellBadge({ value, subtle = false }: { value: string; subtle?: boolean }) {
   const tone = shellToneForStatus(value);
   const styles = shellBadgeStyles[tone];
-  return <span className={cn("rounded border px-2 py-1 font-display text-[11px] uppercase", subtle ? styles.subtle : styles.solid)}>{statusLabel(value)}</span>;
+  return <span className={cn("status-badge rounded border px-2 py-1 font-display text-[11px] uppercase", subtle ? styles.subtle : styles.solid)}>{statusLabel(value)}</span>;
 }
 
 type ShellBadgeTone = "green" | "yellow" | "red" | "blue" | "purple" | "neutral";
@@ -331,18 +455,38 @@ function canViewContacts(role: string) {
   return role === "ADMIN" || role === "PRODUCER" || role === "EXECUTIVE";
 }
 
+function isScriptLibraryDocument(document: HammerDocument) {
+  return ["SCRIPT", "TREATMENT", "OUTLINE", "NOTES", "COVERAGE", "BUSINESS_DOCUMENT"].includes(document.type);
+}
+
 function canViewAllProjects(role: string) {
   return role === "ADMIN" || role === "EXECUTIVE";
 }
 
-function SessionPanel({ user, mode, onDemoUserChange }: { user: ShellUser | null; mode: "database" | "demo"; onDemoUserChange: (user: ShellUser) => void }) {
+function ThemeToggle({ theme, onChange }: { theme: ThemeMode; onChange: (theme: ThemeMode) => void }) {
+  const nextTheme = theme === "dark" ? "light" : "dark";
+  const Icon = theme === "dark" ? Moon : Sun;
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(nextTheme)}
+      className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-white/10 bg-white/[0.03] text-studio-300 transition hover:border-amberline/40 hover:text-amberline"
+      title={`Switch to ${nextTheme} mode`}
+      aria-label={`Switch to ${nextTheme} mode`}
+    >
+      <Icon className="h-4 w-4" />
+    </button>
+  );
+}
+
+function SessionPanel({ user, mode, demoUsers, onDemoUserChange }: { user: ShellUser | null; mode: "database" | "demo"; demoUsers: HammerUser[]; onDemoUserChange: (user: ShellUser) => void }) {
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => null);
     window.location.href = "/login";
   }
 
   function changeDemoUser(email: string) {
-    const demoUser = hammerUsers.find((item) => item.email === email);
+    const demoUser = demoUsers.find((item) => item.email === email);
     if (!demoUser) return;
     const shellUser = toShellUser(demoUser);
     window.localStorage.setItem(HAMMER_DEMO_USER_STORAGE_KEY, email);
@@ -359,10 +503,10 @@ function SessionPanel({ user, mode, onDemoUserChange }: { user: ShellUser | null
           aria-label="Demo user"
           className="mt-2 w-full rounded border border-white/10 bg-studio-950 px-2 py-1.5 text-[11px] font-semibold text-studio-200 outline-none focus:border-amberline/60"
           data-testid="demo-user-select"
-          value={user?.email ?? hammerUsers[0].email}
+          value={demoUsers.some((demoUser) => demoUser.email === user?.email) ? user?.email : demoUsers[0]?.email ?? ""}
           onChange={(event) => changeDemoUser(event.target.value)}
         >
-          {hammerUsers.map((demoUser) => (
+          {demoUsers.map((demoUser) => (
             <option key={demoUser.id} value={demoUser.email}>
               {demoUser.name} / {statusLabel(demoUser.role)}
             </option>

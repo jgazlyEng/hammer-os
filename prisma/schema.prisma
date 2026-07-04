@@ -143,6 +143,7 @@ enum ApprovalStatus {
 enum TaskStatus {
   TODO
   IN_PROGRESS
+  ON_HOLD
   BLOCKED
   REVIEW
   DONE

@@ -3,20 +3,27 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, CheckCircle2, FileDiff, Gauge, MessageSquare, PackageCheck, Plus, Search, ShieldCheck, Trash2, UploadCloud, UsersRound } from "lucide-react";
+import { ArrowLeft, CheckCircle2, FileDiff, Gauge, ImagePlus, MessageSquare, PackageCheck, Plus, Search, ShieldCheck, Trash2, UploadCloud, UsersRound } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { EmptyState, MetricCard, Panel, SectionHeader } from "@/components/ui";
 import {
   currentVersion,
   assignedProjectsForUser,
+  HAMMER_DOCUMENT_PROJECT_OVERRIDES_STORAGE_KEY,
   HAMMER_ACTIVE_PROJECT_EVENT,
   HAMMER_ACTIVE_PROJECT_STORAGE_KEY,
   HAMMER_DEMO_USER_EVENT,
   HAMMER_DEMO_USER_STORAGE_KEY,
   HAMMER_LOCAL_CONTACTS_STORAGE_KEY,
+  HAMMER_LOCAL_DOCUMENTS_EVENT,
   HAMMER_LOCAL_DOCUMENTS_STORAGE_KEY,
   HAMMER_LOCAL_PROJECTS_EVENT,
   HAMMER_LOCAL_PROJECTS_STORAGE_KEY,
+  HAMMER_LOCAL_TASKS_EVENT,
+  HAMMER_LOCAL_TASKS_STORAGE_KEY,
+  HAMMER_LOCAL_TASK_UPDATES_STORAGE_KEY,
+  HAMMER_LOCAL_USER_STATES_EVENT,
+  HAMMER_LOCAL_USER_STATES_STORAGE_KEY,
   HAMMER_LOCAL_VERSION_STATUS_STORAGE_KEY,
   HAMMER_LOCAL_VERSIONS_STORAGE_KEY,
   hammerApprovals,
@@ -39,11 +46,16 @@ import {
   statusLabel,
   userName,
   type HammerTask,
+  type TaskPriority,
+  type TaskStatus,
   type HammerProjectStatus,
   type HammerProject,
   type HammerUser,
+  type HammerAsset,
   type HammerDocument,
   type HammerDocumentVersion,
+  type AssetType,
+  type AssetStatus,
   type DocumentType,
   type ScriptStatus,
   type ContactType,
@@ -55,9 +67,11 @@ import { parseScriptText } from "@/lib/script-parser";
 import { cn } from "@/lib/utils";
 
 const HAMMER_DISMISSED_BREAKDOWN_ENTITIES_STORAGE_KEY = "hammer:dismissed-breakdown-entities";
-const HAMMER_DOCUMENT_PROJECT_OVERRIDES_STORAGE_KEY = "hammer:document-project-overrides";
+const HAMMER_SUPPORTING_DOCUMENTS_STORAGE_KEY = "hammer:supporting-documents";
+const HAMMER_REFERENCE_IMAGES_STORAGE_KEY = "hammer:reference-images";
 
 type HammerView = "dashboard" | "projects" | "project-new" | "project-detail" | "project-documents" | "project-assets" | "scripts" | "script-detail" | "script-versions" | "script-diff" | "script-breakdown" | "assets" | "asset-detail" | "tasks" | "contacts" | "reviews" | "executive" | "admin-users";
+type ScriptLibrarySection = "inbox" | "projects" | "all";
 
 interface SessionUser {
   email: string;
@@ -75,6 +89,36 @@ interface ProjectDraft {
   ownerId: string;
 }
 
+type SupportingDocumentType = "CONTEXT" | "COVERAGE" | "NOTES" | "EMAIL" | "WRITER_MATERIAL" | "OTHER";
+
+interface SupportingDocument {
+  id: string;
+  scriptDocumentId: string;
+  title: string;
+  type: SupportingDocumentType;
+  fileName: string;
+  fileType: string;
+  fileSize: number;
+  storagePath: string;
+  uploadedAt: string;
+  uploadedById: string;
+  notes?: string;
+  extractedText?: string;
+}
+
+interface ProjectReferenceImage {
+  id: string;
+  projectId: string;
+  title: string;
+  description: string;
+  category: AssetType;
+  status: AssetStatus;
+  fileName: string;
+  imageUrl?: string;
+  demoTone?: "steel" | "neon" | "forest" | "gold" | "ice";
+  uploadedAt: string;
+}
+
 function toSessionUser(user: HammerUser): SessionUser {
   return {
     email: user.email,
@@ -83,7 +127,7 @@ function toSessionUser(user: HammerUser): SessionUser {
   };
 }
 
-export function HammerOS({ view, id, selectedTaskId }: { view: HammerView; id?: string; selectedTaskId?: string }) {
+export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: HammerView; id?: string; selectedTaskId?: string; scriptSection?: string }) {
   const router = useRouter();
   const [projects, setProjects] = useState(hammerProjects);
   const [localProjects, setLocalProjects] = useState<HammerProject[]>([]);
@@ -95,12 +139,17 @@ export function HammerOS({ view, id, selectedTaskId }: { view: HammerView; id?: 
   const [localVersions, setLocalVersions] = useState<HammerDocumentVersion[]>([]);
   const [versionStatuses, setVersionStatuses] = useState<Record<string, ScriptStatus>>({});
   const [documentProjectOverrides, setDocumentProjectOverrides] = useState<Record<string, string | null>>({});
+  const [supportingDocuments, setSupportingDocuments] = useState<SupportingDocument[]>([]);
+  const [localReferenceImages, setLocalReferenceImages] = useState<ProjectReferenceImage[]>([]);
+  const [localTasks, setLocalTasks] = useState<HammerTask[]>([]);
+  const [taskUpdates, setTaskUpdates] = useState<Record<string, Partial<Pick<HammerTask, "priority" | "status">>>>({});
   const documents = useMemo(() => [...hammerDocuments, ...localDocuments].map((document) => (
     Object.prototype.hasOwnProperty.call(documentProjectOverrides, document.id)
       ? { ...document, projectId: documentProjectOverrides[document.id] ?? undefined }
       : document
   )), [documentProjectOverrides, localDocuments]);
   const versions = useMemo(() => [...hammerVersions, ...localVersions].map((version) => versionStatuses[version.id] ? { ...version, status: versionStatuses[version.id] } : version), [localVersions, versionStatuses]);
+  const tasks = useMemo(() => [...localTasks, ...hammerTasks].map((task) => ({ ...task, ...taskUpdates[task.id] })), [localTasks, taskUpdates]);
   const project = projects.find((item) => item.id === id) ?? projects[0];
   const document = documents.find((item) => item.id === id) ?? documents[0];
   const asset = hammerAssets.find((item) => item.id === id) ?? hammerAssets[0];
@@ -144,14 +193,26 @@ export function HammerOS({ view, id, selectedTaskId }: { view: HammerView; id?: 
       const storedVersions = window.localStorage.getItem(HAMMER_LOCAL_VERSIONS_STORAGE_KEY);
       const storedStatuses = window.localStorage.getItem(HAMMER_LOCAL_VERSION_STATUS_STORAGE_KEY);
       const storedProjectOverrides = window.localStorage.getItem(HAMMER_DOCUMENT_PROJECT_OVERRIDES_STORAGE_KEY);
+      const storedSupportingDocuments = window.localStorage.getItem(HAMMER_SUPPORTING_DOCUMENTS_STORAGE_KEY);
+      const storedReferenceImages = window.localStorage.getItem(HAMMER_REFERENCE_IMAGES_STORAGE_KEY);
+      const storedTasks = window.localStorage.getItem(HAMMER_LOCAL_TASKS_STORAGE_KEY);
+      const storedTaskUpdates = window.localStorage.getItem(HAMMER_LOCAL_TASK_UPDATES_STORAGE_KEY);
       if (storedDocuments) setLocalDocuments(JSON.parse(storedDocuments) as HammerDocument[]);
       if (storedVersions) setLocalVersions(JSON.parse(storedVersions) as HammerDocumentVersion[]);
       if (storedStatuses) setVersionStatuses(JSON.parse(storedStatuses) as Record<string, ScriptStatus>);
       if (storedProjectOverrides) setDocumentProjectOverrides(JSON.parse(storedProjectOverrides) as Record<string, string | null>);
+      if (storedSupportingDocuments) setSupportingDocuments(JSON.parse(storedSupportingDocuments) as SupportingDocument[]);
+      if (storedReferenceImages) setLocalReferenceImages(JSON.parse(storedReferenceImages) as ProjectReferenceImage[]);
+      if (storedTasks) setLocalTasks(JSON.parse(storedTasks) as HammerTask[]);
+      if (storedTaskUpdates) setTaskUpdates(JSON.parse(storedTaskUpdates) as Record<string, Partial<Pick<HammerTask, "priority" | "status">>>);
     } catch {
       setLocalDocuments([]);
       setLocalVersions([]);
       setDocumentProjectOverrides({});
+      setSupportingDocuments([]);
+      setLocalReferenceImages([]);
+      setLocalTasks([]);
+      setTaskUpdates({});
     }
   }, []);
 
@@ -267,6 +328,7 @@ export function HammerOS({ view, id, selectedTaskId }: { view: HammerView; id?: 
     setLocalVersions(nextVersions);
     window.localStorage.setItem(HAMMER_LOCAL_DOCUMENTS_STORAGE_KEY, JSON.stringify(nextDocuments));
     window.localStorage.setItem(HAMMER_LOCAL_VERSIONS_STORAGE_KEY, JSON.stringify(nextVersions));
+    window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_DOCUMENTS_EVENT));
   }
 
   function updateDocumentStatus(versionId: string, status: ScriptStatus) {
@@ -277,10 +339,111 @@ export function HammerOS({ view, id, selectedTaskId }: { view: HammerView; id?: 
     });
   }
 
+  async function uploadSupportingDocument(input: {
+    scriptDocumentId: string;
+    title: string;
+    type: SupportingDocumentType;
+    notes: string;
+    file: File;
+  }) {
+    const extractedText = await extractTextFromUpload(input.file);
+    const now = new Date().toISOString().slice(0, 10);
+    const id = `supporting-local-${Date.now()}`;
+    const nextDocument: SupportingDocument = {
+      id,
+      scriptDocumentId: input.scriptDocumentId,
+      title: input.title.trim() || input.file.name.replace(/\.[^.]+$/, ""),
+      type: input.type,
+      fileName: input.file.name,
+      fileType: input.file.type || inferFileType(input.file.name),
+      fileSize: input.file.size,
+      storagePath: `local://supporting/${input.scriptDocumentId}/${id}/${input.file.name}`,
+      uploadedAt: now,
+      uploadedById: currentUser.id,
+      notes: input.notes.trim() || undefined,
+      extractedText
+    };
+    const nextSupportingDocuments = [nextDocument, ...supportingDocuments];
+    setSupportingDocuments(nextSupportingDocuments);
+    window.localStorage.setItem(HAMMER_SUPPORTING_DOCUMENTS_STORAGE_KEY, JSON.stringify(nextSupportingDocuments));
+  }
+
+  function deleteSupportingDocument(documentId: string) {
+    const nextSupportingDocuments = supportingDocuments.filter((document) => document.id !== documentId);
+    setSupportingDocuments(nextSupportingDocuments);
+    window.localStorage.setItem(HAMMER_SUPPORTING_DOCUMENTS_STORAGE_KEY, JSON.stringify(nextSupportingDocuments));
+  }
+
+  async function uploadReferenceImage(input: {
+    projectId: string;
+    title: string;
+    description: string;
+    category: AssetType;
+    file: File;
+  }) {
+    if (!input.file.type.startsWith("image/")) throw new Error("Upload an image file for project reference.");
+    const imageUrl = await fileToDataUrl(input.file);
+    const now = new Date().toISOString().slice(0, 10);
+    const nextImage: ProjectReferenceImage = {
+      id: `reference-local-${Date.now()}`,
+      projectId: input.projectId,
+      title: input.title.trim() || input.file.name.replace(/\.[^.]+$/, ""),
+      description: input.description.trim() || "Uploaded project reference.",
+      category: input.category,
+      status: "UPLOADED",
+      fileName: input.file.name,
+      imageUrl,
+      uploadedAt: now
+    };
+    const nextImages = [nextImage, ...localReferenceImages];
+    setLocalReferenceImages(nextImages);
+    window.localStorage.setItem(HAMMER_REFERENCE_IMAGES_STORAGE_KEY, JSON.stringify(nextImages));
+  }
+
+  function createTask(input: {
+    projectId: string;
+    title: string;
+    description: string;
+    assignedToId: string;
+    dueDate: string;
+    priority: TaskPriority;
+    status?: TaskStatus;
+    targetType: string;
+    targetId: string;
+  }) {
+    const nextTask: HammerTask = {
+      id: `task-local-${Date.now()}`,
+      projectId: input.projectId,
+      title: input.title.trim() || "Untitled assignment",
+      description: input.description.trim() || "Project assignment.",
+      assignedToId: input.assignedToId,
+      createdById: currentUser.id,
+      dueDate: input.dueDate || new Date().toISOString().slice(0, 10),
+      priority: input.priority,
+      status: input.status ?? "TODO",
+      targetType: input.targetType,
+      targetId: input.targetId
+    };
+    const nextTasks = [nextTask, ...localTasks];
+    setLocalTasks(nextTasks);
+    window.localStorage.setItem(HAMMER_LOCAL_TASKS_STORAGE_KEY, JSON.stringify(nextTasks));
+    window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_TASKS_EVENT));
+  }
+
+  function updateTask(taskId: string, patch: Partial<Pick<HammerTask, "priority" | "status">>) {
+    setTaskUpdates((current) => {
+      const next = { ...current, [taskId]: { ...current[taskId], ...patch } };
+      window.localStorage.setItem(HAMMER_LOCAL_TASK_UPDATES_STORAGE_KEY, JSON.stringify(next));
+      window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_TASKS_EVENT));
+      return next;
+    });
+  }
+
   function assignDocumentToProject(documentId: string, projectId: string) {
     setDocumentProjectOverrides((current) => {
       const next = { ...current, [documentId]: projectId };
       window.localStorage.setItem(HAMMER_DOCUMENT_PROJECT_OVERRIDES_STORAGE_KEY, JSON.stringify(next));
+      window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_DOCUMENTS_EVENT));
       return next;
     });
   }
@@ -300,13 +463,14 @@ export function HammerOS({ view, id, selectedTaskId }: { view: HammerView; id?: 
     window.localStorage.setItem(HAMMER_LOCAL_VERSIONS_STORAGE_KEY, JSON.stringify(nextVersions));
     window.localStorage.setItem(HAMMER_LOCAL_VERSION_STATUS_STORAGE_KEY, JSON.stringify(nextStatuses));
     window.localStorage.setItem(HAMMER_DOCUMENT_PROJECT_OVERRIDES_STORAGE_KEY, JSON.stringify(nextProjectOverrides));
+    window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_DOCUMENTS_EVENT));
     if (documentId === id) router.push("/scripts");
   }
 
   const scriptDetailViews: HammerView[] = ["script-detail", "script-versions", "script-diff", "script-breakdown"];
   const isScriptDetailView = scriptDetailViews.includes(view);
   const scriptAccessLoading = isScriptDetailView && !sessionLoaded;
-  const scriptAccessDenied = isScriptDetailView && sessionLoaded && !canAccessScriptDocument(currentUser.role, document, activeProject.id);
+  const scriptAccessDenied = isScriptDetailView && sessionLoaded && !canAccessScriptDocument(currentUser, document);
 
   const content = (() => {
     if (scriptAccessLoading) {
@@ -315,26 +479,29 @@ export function HammerOS({ view, id, selectedTaskId }: { view: HammerView; id?: 
     if (scriptAccessDenied) {
       return <AccessDenied title="Script access required" detail="You can only open scripts attached to your active project. Producers, executives, and admins can access the full script library." />;
     }
-    if (view === "dashboard") return <Dashboard currentUser={currentUser} activeProjectId={activeProject.id} />;
+    if (view === "dashboard") return <Dashboard currentUser={currentUser} projects={projects} documents={documents} versions={versions} />;
     if (view === "projects") return <Projects projects={filteredProjects} />;
     if (view === "project-new") return <ProjectCreationMoved />;
-    if (view === "project-detail") return <ProjectWorkspace project={project} activeTab="overview" documents={documents} versions={versions} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} />;
-    if (view === "project-documents") return <ProjectWorkspace project={project} activeTab="documents" documents={documents} versions={versions} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} />;
-    if (view === "project-assets") return <ProjectWorkspace project={project} activeTab="assets" />;
-    if (view === "scripts") return <Scripts activeProjectId={activeProject.id} currentUser={currentUser} projects={projects} documents={documents} versions={versions} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} repositoryMode />;
-    if (view === "script-detail") return <ScriptDetail documentId={document.id} documents={documents} versions={versions} onUpload={uploadDocumentVersion} onStatusChange={updateDocumentStatus} onDelete={deleteUploadedDocument} />;
+    if (view === "project-detail") return <ProjectWorkspace project={project} activeTab="overview" currentUser={currentUser} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
+    if (view === "project-documents") return <ProjectWorkspace project={project} activeTab="documents" currentUser={currentUser} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
+    if (view === "project-assets") return <ProjectWorkspace project={project} activeTab="assets" currentUser={currentUser} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
+    if (view === "scripts") return <Scripts activeProjectId={activeProject.id} currentUser={currentUser} projects={projects} documents={documents} versions={versions} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} repositoryMode selectedSection={normalizeScriptSection(scriptSection)} />;
+    if (view === "script-detail") return <ScriptDetail documentId={document.id} documents={documents} versions={versions} supportingDocuments={supportingDocuments} onUpload={uploadDocumentVersion} onSupportingUpload={uploadSupportingDocument} onSupportingDelete={deleteSupportingDocument} onStatusChange={updateDocumentStatus} onDelete={deleteUploadedDocument} />;
     if (view === "script-versions") return <ScriptVersions documentId={document.id} versions={versions} document={document} onUpload={uploadDocumentVersion} />;
     if (view === "script-diff") return <ScriptDiff documentId={document.id} versions={versions} />;
     if (view === "script-breakdown") return <ScriptBreakdown documentId={document.id} documents={documents} versions={versions} />;
     if (view === "assets") return <Assets projectId={activeProject.id} />;
     if (view === "asset-detail") return <AssetDetail assetId={asset.id} />;
-    if (view === "tasks") return <Tasks projectId={activeProject.id} selectedTaskId={selectedTaskId} currentUser={currentUser} />;
+    if (view === "tasks") return <Tasks selectedTaskId={selectedTaskId} currentUser={currentUser} tasks={tasks} projects={projects} onCreateTask={createTask} onUpdateTask={updateTask} />;
     if (view === "contacts") {
       if (!canViewContacts(currentUser.role)) return <AccessDenied title="Contacts access required" detail="Only admins, producers, and executives can view the studio contact directory." />;
       return <Contacts />;
     }
-    if (view === "reviews") return <Reviews projectId={activeProject.id} />;
-    if (view === "executive") return <Executive projects={projects} />;
+    if (view === "reviews") return <LegacyRedirect title="Reviews are folded into Scripts" detail="Review work now starts from scripts awaiting review, so the queue is easier to follow." href="/scripts?section=inbox" label="Open Scripts" />;
+    if (view === "executive") {
+      if (currentUser.role !== "EXECUTIVE") return <AccessDenied title="Executive access required" detail="The executive dashboard is limited to users with the Executive role." />;
+      return <Executive projects={projects} />;
+    }
     if (currentUser.role !== "ADMIN") return <AccessDenied title="Admin access required" detail="Only admins can manage projects, users, roles, and project access." />;
     return <AdminUsers projects={projects} currentUser={currentUser} onCreateProject={addProject} onStatusChange={updateProjectStatus} />;
   })();
@@ -367,49 +534,105 @@ export function HammerOS({ view, id, selectedTaskId }: { view: HammerView; id?: 
   );
 }
 
-function Dashboard({ currentUser, activeProjectId }: { currentUser: ReturnType<typeof hammerUserByEmail>; activeProjectId: string }) {
-  const projects = canViewAllProjects(currentUser.role) ? hammerProjects : assignedProjectsForUser(currentUser.id);
-  const activeProject = projects.find((project) => project.id === activeProjectId) ?? projects[0];
-  const projectIds = new Set(projects.map((project) => project.id));
-  const scopedProjectIds = new Set(activeProject ? [activeProject.id] : Array.from(projectIds));
-  const documents = hammerDocuments.filter((document) => document.projectId && scopedProjectIds.has(document.projectId));
-  const documentIds = new Set(documents.map((document) => document.id));
-  const scriptsInProgress = hammerVersions.filter((version) => documentIds.has(version.documentId) && ["DRAFT", "IN_PROGRESS", "INTERNAL_REVIEW"].includes(version.status)).length;
-  const awaiting = hammerApprovals.filter((approval) => scopedProjectIds.has(approval.projectId) && approval.reviewerId === currentUser.id && approval.status === "REQUESTED").length;
-  const projectTasks = hammerTasks.filter((task) => scopedProjectIds.has(task.projectId) && task.status !== "DONE" && task.status !== "ARCHIVED");
-  const canViewAllTasks = canViewAllProjectTasks(currentUser.role);
-  const visibleTasks = canViewAllTasks ? projectTasks : projectTasks.filter((task) => task.assignedToId === currentUser.id);
-  const assignedToMe = projectTasks.filter((task) => task.assignedToId === currentUser.id).length;
-  const dueSoon = visibleTasks.length;
+function Dashboard({
+  currentUser,
+  projects,
+  documents,
+  versions
+}: {
+  currentUser: ReturnType<typeof hammerUserByEmail>;
+  projects: HammerProject[];
+  documents: HammerDocument[];
+  versions: HammerDocumentVersion[];
+}) {
+  const canSeeLibrary = canManageScriptLibrary(currentUser.role);
+  const assignedProjectIds = new Set(assignedProjectsForUser(currentUser.id).map((project) => project.id));
+  const visibleDocuments = documents.filter((document) => canSeeLibrary || !document.projectId || assignedProjectIds.has(document.projectId));
+  const reviewApprovals = hammerApprovals.filter((approval) => approval.targetType === "DOCUMENT_VERSION" && approval.status === "REQUESTED");
+  const reviewItems = reviewApprovals
+    .map((approval) => {
+      const version = versions.find((item) => item.id === approval.targetId);
+      const document = version ? visibleDocuments.find((item) => item.id === version.documentId) : undefined;
+      return document && version ? { approval, document, version } : null;
+    })
+    .filter(Boolean) as Array<{ approval: typeof hammerApprovals[number]; document: HammerDocument; version: HammerDocumentVersion }>;
+  const incomingScripts = visibleDocuments
+    .filter((document) => !document.projectId)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const recentScripts = visibleDocuments
+    .filter((document) => ["SCRIPT", "TREATMENT", "OUTLINE", "COVERAGE"].includes(document.type))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, 5);
+  const focusReview = reviewItems[0];
+  const focusDocument = focusReview?.document ?? incomingScripts[0] ?? recentScripts[0];
+  const focusVersion = focusReview?.version ?? (focusDocument ? currentVersionFor(focusDocument.id, documents, versions) : undefined);
+
   return (
     <div className="space-y-4">
       <Panel>
-        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-          <div>
-            <p className="font-display text-[10px] uppercase tracking-[0.16em] text-amberline">My Dashboard</p>
-            <h2 className="mt-1 text-lg font-semibold text-studio-100">{currentUser.name}</h2>
+        <SectionHeader eyebrow="Review Focus" title={focusDocument ? focusDocument.title : "No script needs attention"} action={focusDocument ? <TableLink href={`/scripts/${focusDocument.id}`}>Open Review</TableLink> : <TableLink href="/scripts">Open Library</TableLink>} />
+        {focusDocument ? (
+          <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
+            <div>
+              <p className="text-[13px] leading-6 text-studio-300">
+                {focusReview ? "Next script waiting on review." : focusDocument.projectId ? "Most recent script in your accessible project library." : "Newest incoming script ready for intake."}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2 text-xs text-studio-400">
+                <span>{focusDocument.writerName ?? "Unassigned writer"}</span>
+                <span>/</span>
+                <span>{focusDocument.projectId ? projectTitleFromList(focusDocument.projectId, projects) : "Incoming"}</span>
+                <span>/</span>
+                <span>v{focusVersion?.versionNumber ?? 1}</span>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Badge value={focusVersion?.status ?? "RECEIVED"} />
+              <TableLink href="/scripts">Script Library</TableLink>
+            </div>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <Badge value={currentUser.role} />
-            {activeProject ? <span className="rounded border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] text-studio-300">{activeProject.title}</span> : null}
-          <span className="rounded border border-sky-400/30 bg-sky-400/10 px-2 py-1 text-[11px] text-sky-200">{projects.length} assigned projects</span>
+        ) : (
+          <p className="text-[13px] text-studio-300">The review queue is clear. New scripts will appear here as they arrive.</p>
+        )}
+      </Panel>
+
+      <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+        <Panel>
+          <SectionHeader eyebrow="Queue" title="Scripts Awaiting Review" />
+          <div className="space-y-2">
+            {reviewItems.length ? reviewItems.slice(0, 4).map((item) => (
+              <Link key={item.approval.id} href={`/scripts/${item.document.id}`} className="block rounded-md border border-white/10 bg-white/[0.03] p-3 transition hover:border-amberline/35">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[13px] font-semibold text-studio-100">{item.document.title}</p>
+                    <p className="mt-1 text-xs text-studio-400">{item.document.writerName ?? "Unassigned writer"} / v{item.version.versionNumber} / requested by {userName(item.approval.requestedById)}</p>
+                  </div>
+                  <Badge value={item.version.status} />
+                </div>
+              </Link>
+            )) : <EmptyState label="No scripts are waiting on review." />}
           </div>
-        </div>
-      </Panel>
-      <Panel>
-        <SectionHeader eyebrow="Access" title="My Projects" />
-        <ProjectTable projects={projects.slice(0, 5)} />
-      </Panel>
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="My Projects" value={`${projects.filter((project) => !["ARCHIVED", "PASSED"].includes(project.status)).length}`} sub="Assigned access" />
-        <MetricCard label="Scripts In Progress" value={`${scriptsInProgress}`} sub="Selected project" />
-        <MetricCard label="My Reviews" value={`${awaiting}`} sub="Waiting on me" />
-        <MetricCard label={canViewAllTasks ? "Open Tasks" : "My Open Tasks"} value={`${dueSoon}`} sub={canViewAllTasks ? `${assignedToMe} assigned to me` : "Assigned to me"} />
+        </Panel>
+
+        <Panel>
+          <SectionHeader eyebrow="Intake" title="Recently Received" action={<TableLink href="/scripts">Open Library</TableLink>} />
+          <div className="space-y-2">
+            {recentScripts.length ? recentScripts.map((document) => {
+              const version = currentVersionFor(document.id, documents, versions);
+              return (
+                <Link key={document.id} href={`/scripts/${document.id}`} className="block rounded-md border border-white/10 bg-white/[0.03] p-3 transition hover:border-amberline/35">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-[13px] font-semibold text-studio-100">{document.title}</p>
+                      <p className="mt-1 text-xs text-studio-400">{document.projectId ? projectTitleFromList(document.projectId, projects) : "Incoming"} / {document.updatedAt}</p>
+                    </div>
+                    <Badge value={version?.status ?? "RECEIVED"} />
+                  </div>
+                </Link>
+              );
+            }) : <EmptyState label="No scripts available yet." />}
+          </div>
+        </Panel>
       </div>
-      <Panel>
-        <SectionHeader eyebrow="Work" title={canViewAllTasks ? "Project Tasks" : "My Tasks"} />
-        {visibleTasks.length ? <TaskRows tasks={visibleTasks} showAssignee={canViewAllTasks} /> : <EmptyState label={activeProject ? (canViewAllTasks ? `No open tasks for ${activeProject.title}. Create one when there is a next step.` : `No open tasks assigned to you for ${activeProject.title}.`) : "No open tasks for this project."} />}
-      </Panel>
     </div>
   );
 }
@@ -470,6 +693,18 @@ function AccessDenied({ title, detail }: { title: string; detail: string }) {
   );
 }
 
+function LegacyRedirect({ title, detail, href, label }: { title: string; detail: string; href: string; label: string }) {
+  return (
+    <Panel>
+      <SectionHeader eyebrow="Moved" title={title} />
+      <p className="max-w-2xl text-[13px] leading-5 text-studio-300">{detail}</p>
+      <Link href={href} className="mt-4 inline-flex rounded-md bg-amberline px-3 py-2 text-[13px] font-semibold text-studio-950 hover:bg-amber-300">
+        {label}
+      </Link>
+    </Panel>
+  );
+}
+
 type ProjectWorkspaceTab = "overview" | "documents" | "assets";
 
 type DocumentUploadInput = {
@@ -485,43 +720,66 @@ type DocumentUploadInput = {
 function ProjectWorkspace({
   project,
   activeTab,
+  currentUser,
+  projects = hammerProjects,
+  tasks = hammerTasks,
   documents = hammerDocuments,
   versions = hammerVersions,
+  supportingDocuments = [],
+  referenceImages = [],
   onUpload,
-  onDelete
+  onDelete,
+  onAssignToProject,
+  onReferenceUpload,
+  onCreateTask
 }: {
   project: HammerProject;
   activeTab: ProjectWorkspaceTab;
+  currentUser: ReturnType<typeof hammerUserByEmail>;
+  projects?: HammerProject[];
+  tasks?: HammerTask[];
   documents?: HammerDocument[];
   versions?: HammerDocumentVersion[];
+  supportingDocuments?: SupportingDocument[];
+  referenceImages?: ProjectReferenceImage[];
   onUpload?: (input: DocumentUploadInput) => Promise<void>;
   onDelete?: (documentId: string) => void;
+  onAssignToProject?: (documentId: string, projectId: string) => void;
+  onReferenceUpload?: (input: { projectId: string; title: string; description: string; category: AssetType; file: File }) => Promise<void>;
+  onCreateTask?: (input: { projectId: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
 }) {
   const docs = documents.filter((doc) => doc.projectId === project.id);
-  const tasks = hammerTasks.filter((task) => task.projectId === project.id);
+  const scriptDocs = docs.filter((doc) => ["SCRIPT", "TREATMENT", "OUTLINE"].includes(doc.type));
+  const projectSupportingDocs = supportingDocuments.filter((supportingDocument) => docs.some((doc) => doc.id === supportingDocument.scriptDocumentId));
+  const projectTasks = tasks.filter((task) => task.projectId === project.id);
   const assets = hammerAssets.filter((asset) => asset.projectId === project.id);
+  const projectReferenceImages = [
+    ...referenceImages.filter((image) => image.projectId === project.id),
+    ...demoReferenceImages.filter((image) => image.projectId === project.id)
+  ];
   const approvals = hammerApprovals.filter((approval) => approval.projectId === project.id);
   const firstScript = docs.find((doc) => doc.type === "SCRIPT") ?? docs[0];
-  const openTasks = tasks.filter((task) => task.status !== "DONE" && task.status !== "ARCHIVED");
+  const latestVersion = firstScript ? currentVersionFor(firstScript.id, documents, versions) : undefined;
+  const openTasks = projectTasks.filter((task) => task.status !== "DONE" && task.status !== "ARCHIVED");
+  const canViewAllProjectAssignments = canViewAllProjectTasks(currentUser.role);
+  const visibleOpenTasks = canViewAllProjectAssignments ? openTasks : openTasks.filter((task) => task.assignedToId === currentUser.id);
   const pendingReviews = approvals.filter((approval) => approval.status === "REQUESTED" || approval.status === "CHANGES_REQUESTED");
   const projectIds = new Set([project.id]);
   const tabs = [
     { id: "overview", label: "Overview", href: `/projects/${project.id}` },
-    { id: "documents", label: "Documents", href: `/projects/${project.id}/documents` },
+    { id: "documents", label: "Scripts & Docs", href: `/projects/${project.id}/documents` },
     { id: "breakdown", label: "Breakdown", href: firstScript ? `/scripts/${firstScript.id}/breakdown` : `/projects/${project.id}/documents` },
-    { id: "assets", label: "Assets", href: `/projects/${project.id}/assets` },
+    { id: "assets", label: "Reference", href: `/projects/${project.id}/assets` },
     { id: "tasks", label: "Tasks", href: "/tasks" },
-    { id: "reviews", label: "Reviews", href: "/reviews" }
   ];
 
   return (
     <div className="space-y-4">
-      <section className="rounded-lg border border-white/10 bg-studio-850/60 p-4">
+      <section className="project-hero rounded-lg border border-white/10 bg-studio-850/60 p-4">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="max-w-3xl">
             <div className="flex flex-wrap items-center gap-2">
               <Badge value={project.status} />
-              <Badge value={project.stage} subtle />
               <span className="rounded border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] text-studio-300">Updated {project.updatedAt}</span>
             </div>
             <h2 className="mt-3 text-2xl font-semibold text-studio-100">{project.title}</h2>
@@ -531,7 +789,7 @@ function ProjectWorkspace({
             <ProjectMeta label="Type" value={project.type} />
             <ProjectMeta label="Genre" value={project.genre} />
             <ProjectMeta label="Owner" value={userName(project.ownerId)} />
-            <ProjectMeta label="Stage" value={statusLabel(project.stage)} />
+            <ProjectMeta label="Status" value={statusLabel(project.status)} />
           </div>
         </div>
         <nav className="mt-4 flex gap-1 overflow-x-auto border-t border-white/10 pt-3" aria-label="Project sections">
@@ -553,19 +811,39 @@ function ProjectWorkspace({
       {activeTab === "overview" ? (
         <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
           <div className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <MetricCard label="Documents" value={`${docs.length}`} sub="Scripts, treatments, business docs" />
-              <MetricCard label="Open Tasks" value={`${openTasks.length}`} sub="Active project work" />
-              <MetricCard label="Assets" value={`${assets.length}`} sub="Linked or uploaded" />
-              <MetricCard label="Reviews" value={`${pendingReviews.length}`} sub="Awaiting decision" />
-            </div>
             <Panel>
-              <SectionHeader eyebrow="Next Actions" title="Project Work" />
-              {openTasks.length ? <TaskRows tasks={openTasks.slice(0, 4)} /> : <EmptyState label={`No open tasks for ${project.title}. Create one when there is a next step.`} />}
+              <SectionHeader eyebrow="Artist Start Here" title="Assignments and Working Brief" action={<div className="flex flex-wrap gap-1.5">{onCreateTask ? <NewAssignmentButton project={project} firstScript={firstScript} onCreateTask={onCreateTask} /> : null}<TableLink href="/tasks">Open tasks</TableLink></div>} />
+              <div className="grid gap-3 xl:grid-cols-[0.9fr_1.1fr]">
+                <div className="rounded-md border border-white/10 bg-white/[0.03] p-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-[13px] font-semibold text-studio-100">Creative source</p>
+                    {latestVersion ? <Badge value={latestVersion.status} /> : null}
+                  </div>
+                  <p className="mt-1 text-xs leading-5 text-studio-300">{firstScript ? `${firstScript.title} / v${latestVersion?.versionNumber ?? 1}` : "No script has been attached yet."}</p>
+                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-studio-400">{project.logline}</p>
+                  {firstScript ? <div className="mt-2 flex flex-wrap gap-1.5"><TableLink href={`/scripts/${firstScript.id}`}>Open script</TableLink><TableLink href={`/scripts/${firstScript.id}/breakdown`}>Breakdown</TableLink></div> : null}
+                </div>
+                <div>
+                  {visibleOpenTasks.length ? <CompactTaskRows tasks={visibleOpenTasks.slice(0, 4)} /> : <EmptyState label={canViewAllProjectAssignments ? `No open tasks for ${project.title}.` : `No tasks assigned to you for ${project.title}.`} />}
+                </div>
+              </div>
             </Panel>
             <Panel>
-              <SectionHeader eyebrow="Latest Files" title="Documents" action={<TableLink href={`/projects/${project.id}/documents`}>View all</TableLink>} />
-              <DocumentRows docs={docs.slice(0, 3)} versions={versions} omitProject />
+              <SectionHeader eyebrow="Creative Packet" title="Scripts and Supporting Docs" action={<TableLink href={`/projects/${project.id}/documents`}>Manage files</TableLink>} />
+              <div className="grid gap-3 xl:grid-cols-2">
+                <div>
+                  <h3 className="mb-2 text-sm font-semibold text-studio-100">Associated Scripts</h3>
+                  <DocumentRows docs={scriptDocs.slice(0, 4)} versions={versions} omitProject emptyLabel="No scripts, treatments, or outlines attached yet." />
+                </div>
+                <div>
+                  <h3 className="mb-2 text-sm font-semibold text-studio-100">Supporting Documentation</h3>
+                  <ProjectSupportingDocs docs={docs} supportingDocuments={projectSupportingDocs} />
+                </div>
+              </div>
+            </Panel>
+            <Panel>
+              <SectionHeader eyebrow="Visual Reference" title="Reference Images" action={<TableLink href={`/projects/${project.id}/assets`}>Open reference</TableLink>} />
+              <ReferenceImageGrid images={projectReferenceImages.slice(0, 6)} />
             </Panel>
           </div>
           <div className="space-y-4">
@@ -575,8 +853,274 @@ function ProjectWorkspace({
         </div>
       ) : null}
 
-      {activeTab === "documents" ? <Scripts projectId={project.id} documents={documents} versions={versions} onUpload={onUpload} onDelete={onDelete} /> : null}
-      {activeTab === "assets" ? <Assets projectId={project.id} /> : null}
+      {activeTab === "documents" ? <Scripts projectId={project.id} documents={documents} versions={versions} projects={projects} currentUser={currentUser} onUpload={onUpload} onDelete={onDelete} onAssignToProject={canManageScriptLibrary(currentUser.role) ? onAssignToProject : undefined} /> : null}
+      {activeTab === "assets" ? <ProjectReferenceWorkspace project={project} assets={assets} referenceImages={projectReferenceImages} onReferenceUpload={onReferenceUpload} /> : null}
+    </div>
+  );
+}
+
+function ProjectSupportingDocs({ docs, supportingDocuments }: { docs: HammerDocument[]; supportingDocuments: SupportingDocument[] }) {
+  const directDocs = docs.filter((doc) => ["NOTES", "COVERAGE", "BUSINESS_DOCUMENT"].includes(doc.type));
+  const items = [
+    ...directDocs.map((doc) => ({
+      id: doc.id,
+      title: doc.title,
+      label: statusLabel(doc.type),
+      detail: doc.writerName ? `By ${doc.writerName}` : `Updated ${doc.updatedAt}`,
+      href: `/scripts/${doc.id}`
+    })),
+    ...supportingDocuments.map((doc) => ({
+      id: doc.id,
+      title: doc.title,
+      label: statusLabel(doc.type),
+      detail: `${doc.fileName} / ${doc.uploadedAt}`,
+      href: undefined
+    }))
+  ];
+  if (!items.length) return <EmptyState label="No context docs yet. Add coverage, notes, deck pages, or correspondence from a script's Files tab." />;
+  return (
+    <div className="grid gap-2">
+      {items.slice(0, 5).map((item) => {
+        const content = (
+          <div className="rounded-md border border-white/10 bg-white/[0.03] p-2.5">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <p className="text-[13px] font-semibold text-studio-100">{item.title}</p>
+                <p className="mt-1 text-xs text-studio-400">{item.detail}</p>
+              </div>
+              <Badge value={item.label} subtle />
+            </div>
+          </div>
+        );
+        return item.href ? <Link key={item.id} href={item.href}>{content}</Link> : <div key={item.id}>{content}</div>;
+      })}
+    </div>
+  );
+}
+
+function NewAssignmentButton({
+  project,
+  firstScript,
+  onCreateTask
+}: {
+  project: HammerProject;
+  firstScript?: HammerDocument;
+  onCreateTask: (input: { projectId: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
+}) {
+  const presets = [
+    { label: "Environment Previz", title: "Create environment previz pass", assignee: "user-artist", priority: "HIGH" as TaskPriority, description: "Use the current script, project references, and breakdown notes to create an environment previz pass." },
+    { label: "Character Reference", title: "Create character reference sheet", assignee: "user-artist", priority: "MEDIUM" as TaskPriority, description: "Build visual reference for the assigned character or role based on the current creative packet." },
+    { label: "Coverage Read", title: "Read and summarize project materials", assignee: "user-dev", priority: "MEDIUM" as TaskPriority, description: "Review the script and supporting documents, then add notes for the team." },
+    { label: "Review Breakdown", title: "Review script breakdown", assignee: "user-dev", priority: "HIGH" as TaskPriority, description: "Check scenes, characters, locations, props, and action moments for accuracy." }
+  ];
+  const [open, setOpen] = useState(false);
+  const [presetIndex, setPresetIndex] = useState(0);
+  const selectedPreset = presets[presetIndex];
+  const [title, setTitle] = useState(selectedPreset.title);
+  const [assignedToId, setAssignedToId] = useState(selectedPreset.assignee);
+  const [priority, setPriority] = useState<TaskPriority>(selectedPreset.priority);
+  const [dueDate, setDueDate] = useState(defaultDueDate());
+  const [description, setDescription] = useState(selectedPreset.description);
+  const [message, setMessage] = useState("");
+
+  function applyPreset(index: number) {
+    const preset = presets[index];
+    setPresetIndex(index);
+    setTitle(preset.title);
+    setAssignedToId(preset.assignee);
+    setPriority(preset.priority);
+    setDescription(preset.description);
+  }
+
+  function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    onCreateTask({
+      projectId: project.id,
+      title,
+      description,
+      assignedToId,
+      dueDate,
+      priority,
+      status: "TODO",
+      targetType: firstScript ? "DOCUMENT" : "PROJECT",
+      targetId: firstScript?.id ?? project.id
+    });
+    setMessage("Assignment created.");
+    setOpen(false);
+  }
+
+  return (
+    <div className="relative">
+      <button type="button" onClick={() => setOpen((current) => !current)} className="inline-flex items-center gap-1.5 rounded-md bg-amberline px-2.5 py-1.5 text-xs font-semibold text-studio-950 transition hover:bg-amber-300">
+        <Plus className="h-3.5 w-3.5" />
+        New Assignment
+      </button>
+      {message ? <span className="ml-2 text-[11px] text-studio-400">{message}</span> : null}
+      {open ? (
+        <form onSubmit={submit} className="absolute right-0 top-9 z-20 w-[min(420px,calc(100vw-96px))] space-y-2 rounded-lg border border-white/10 bg-studio-950 p-3 shadow-glow">
+          <div className="grid gap-2 md:grid-cols-2">
+            <select className="field" value={presetIndex} onChange={(event) => applyPreset(Number(event.target.value))}>
+              {presets.map((preset, index) => <option key={preset.label} value={index}>{preset.label}</option>)}
+            </select>
+            <select className="field" value={assignedToId} onChange={(event) => setAssignedToId(event.target.value)}>
+              {hammerUsers.map((user) => <option key={user.id} value={user.id}>{user.name} / {statusLabel(user.role)}</option>)}
+            </select>
+          </div>
+          <input className="field" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Task title" />
+          <div className="grid gap-2 md:grid-cols-2">
+            <input className="field" type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} />
+            <select className="field" value={priority} onChange={(event) => setPriority(event.target.value as TaskPriority)}>
+              {(["LOW", "MEDIUM", "HIGH", "URGENT"] as TaskPriority[]).map((item) => <option key={item} value={item}>{statusLabel(item)}</option>)}
+            </select>
+          </div>
+          <textarea className="field min-h-20" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Assignment details" />
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[11px] text-studio-400">Linked to {firstScript?.title ?? project.title}</p>
+            <div className="flex gap-1.5">
+              <button type="button" onClick={() => setOpen(false)} className="rounded border border-white/10 px-2.5 py-1.5 text-xs font-semibold text-studio-300 hover:text-amberline">Cancel</button>
+              <button type="submit" className="rounded bg-amberline px-2.5 py-1.5 text-xs font-semibold text-studio-950 hover:bg-amber-300">Create</button>
+            </div>
+          </div>
+        </form>
+      ) : null}
+    </div>
+  );
+}
+
+function ProjectReferenceWorkspace({
+  project,
+  assets,
+  referenceImages,
+  onReferenceUpload
+}: {
+  project: HammerProject;
+  assets: HammerAsset[];
+  referenceImages: ProjectReferenceImage[];
+  onReferenceUpload?: (input: { projectId: string; title: string; description: string; category: AssetType; file: File }) => Promise<void>;
+}) {
+  return (
+    <div className="space-y-4">
+      <Panel>
+        <SectionHeader eyebrow={project.title} title="Reference Images" action={onReferenceUpload ? undefined : <PrimaryButton icon={UploadCloud} label="Upload Reference" />} />
+        <div className="grid gap-4 xl:grid-cols-[320px_1fr]">
+          {onReferenceUpload ? <ReferenceUpload projectId={project.id} onUpload={onReferenceUpload} /> : null}
+          <ReferenceImageGrid images={referenceImages} assets={assets} />
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function ReferenceUpload({
+  projectId,
+  onUpload
+}: {
+  projectId: string;
+  onUpload: (input: { projectId: string; title: string; description: string; category: AssetType; file: File }) => Promise<void>;
+}) {
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [category, setCategory] = useState<AssetType>("MOOD_IMAGE");
+  const [file, setFile] = useState<File | null>(null);
+  const [status, setStatus] = useState("");
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!file) {
+      setStatus("Choose an image file first.");
+      return;
+    }
+    setStatus("Adding reference...");
+    try {
+      await onUpload({ projectId, title, description, category, file });
+      setTitle("");
+      setDescription("");
+      setCategory("MOOD_IMAGE");
+      setFile(null);
+      setStatus("Added.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Upload failed.");
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="space-y-2 rounded-lg border border-amberline/20 bg-amberline/5 p-3">
+      <div className="flex items-center gap-2">
+        <ImagePlus className="h-4 w-4 text-amberline" />
+        <div>
+          <p className="text-[13px] font-semibold text-studio-100">Upload Reference</p>
+          <p className="text-xs text-studio-400">Mood, environment, character, prop, storyboard, or keyframe.</p>
+        </div>
+      </div>
+      <input className="field" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Reference title" />
+      <select className="field" value={category} onChange={(event) => setCategory(event.target.value as AssetType)}>
+        {(["MOOD_IMAGE", "ENVIRONMENT_REFERENCE", "CHARACTER_REFERENCE", "PROP_REFERENCE", "KEYFRAME", "STORYBOARD", "LOOKBOOK_PAGE", "OTHER"] as AssetType[]).map((type) => (
+          <option key={type} value={type}>{statusLabel(type)}</option>
+        ))}
+      </select>
+      <textarea className="field min-h-16" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Why this reference matters" />
+      <input
+        key={status === "Added." ? "cleared" : "ready"}
+        className="block w-full text-xs text-studio-300 file:mr-3 file:rounded file:border-0 file:bg-studio-100 file:px-2.5 file:py-1.5 file:text-xs file:font-semibold file:text-studio-950"
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/gif"
+        onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+      />
+      {status ? <p className="text-xs text-studio-300">{status}</p> : null}
+      <PrimaryButton icon={UploadCloud} label="Add Reference" />
+    </form>
+  );
+}
+
+function ReferenceImageGrid({ images, assets = [] }: { images: ProjectReferenceImage[]; assets?: HammerAsset[] }) {
+  const assetImages: ProjectReferenceImage[] = assets.map((asset) => ({
+    id: asset.id,
+    projectId: asset.projectId,
+    title: asset.title,
+    description: asset.description,
+    category: asset.assetType,
+    status: asset.status,
+    fileName: asset.fileName,
+    demoTone: asset.assetType === "PROP_REFERENCE" ? "steel" : "neon",
+    uploadedAt: "GCS metadata"
+  }));
+  const allImages = [...images, ...assetImages];
+  if (!allImages.length) return <EmptyState label="No reference images yet. Upload environment, character, prop, mood, keyframe, or storyboard references." />;
+  return (
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      {allImages.map((image) => (
+        <div key={image.id} className="overflow-hidden rounded-lg border border-white/10 bg-white/[0.03]">
+          <ReferenceImagePreview image={image} />
+          <div className="p-3">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <p className="text-[13px] font-semibold text-studio-100">{image.title}</p>
+                <p className="mt-1 line-clamp-2 text-xs leading-5 text-studio-300">{image.description}</p>
+              </div>
+              <Badge value={image.status} />
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              <Badge value={image.category} subtle />
+              <span className="rounded border border-white/10 bg-white/[0.025] px-1.5 py-1 text-[11px] text-studio-400">{image.fileName}</span>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ReferenceImagePreview({ image }: { image: ProjectReferenceImage }) {
+  if (image.imageUrl) {
+    return <img src={image.imageUrl} alt="" className="aspect-video w-full object-cover" />;
+  }
+  return (
+    <div className={cn("relative flex aspect-video items-end overflow-hidden p-3", referenceToneClass(image.demoTone))}>
+      <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.18),transparent_40%),radial-gradient(circle_at_72%_20%,rgba(255,255,255,0.24),transparent_20%)]" />
+      <div className="relative">
+        <p className="font-display text-[10px] uppercase tracking-[0.16em] text-white/75">{statusLabel(image.category)}</p>
+        <p className="mt-1 text-sm font-semibold text-white">{image.title}</p>
+      </div>
     </div>
   );
 }
@@ -592,6 +1136,7 @@ function Scripts({
   onUpload,
   onDelete,
   onAssignToProject,
+  selectedSection,
   repositoryMode = false
 }: {
   projectId?: string;
@@ -604,6 +1149,7 @@ function Scripts({
   onUpload?: (input: DocumentUploadInput) => Promise<void>;
   onDelete?: (documentId: string) => void;
   onAssignToProject?: (documentId: string, projectId: string) => void;
+  selectedSection?: ScriptLibrarySection;
   repositoryMode?: boolean;
 }) {
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -613,8 +1159,14 @@ function Scripts({
   const [typeFilter, setTypeFilter] = useState<DocumentType | "ALL">("ALL");
   const scopedProjectId = projectId ?? activeProjectId;
   const projectNameForId = (lookupProjectId?: string) => lookupProjectId ? projectTitleFromList(lookupProjectId, projects) : "Inbox";
+  const canManageLibrary = canManageScriptLibrary(currentUser?.role);
+  const assignedProjectIds = new Set(currentUser ? assignedProjectsForUser(currentUser.id).map((assignedProject) => assignedProject.id) : []);
+  const requestedSection = selectedSection ?? (canManageLibrary ? "inbox" : "projects");
+  const effectiveSection = !canManageLibrary && requestedSection !== "projects" ? "projects" : requestedSection;
   const scriptDocuments = documents.filter((doc) => ["SCRIPT", "TREATMENT", "OUTLINE", "NOTES", "COVERAGE", "BUSINESS_DOCUMENT"].includes(doc.type));
+  const visibleScriptDocuments = scriptDocuments.filter((doc) => canManageLibrary || Boolean(doc.projectId && assignedProjectIds.has(doc.projectId)));
   const filteredDocuments = scriptDocuments.filter((doc) => {
+    if (!visibleScriptDocuments.some((visibleDocument) => visibleDocument.id === doc.id)) return false;
     if (!["SCRIPT", "TREATMENT", "OUTLINE", "NOTES", "COVERAGE", "BUSINESS_DOCUMENT"].includes(doc.type)) return false;
     const version = currentVersionFor(doc.id, documents, versions);
     if (statusFilter !== "ALL" && version?.status !== statusFilter) return false;
@@ -624,10 +1176,17 @@ function Scripts({
   });
   const docs = filteredDocuments.filter((doc) => !scopedProjectId || doc.projectId === scopedProjectId);
   const incomingDocs = filteredDocuments.filter((doc) => !doc.projectId);
-  const activeProjectDocs = filteredDocuments.filter((doc) => doc.projectId === scopedProjectId);
-  const allProjectDocs = filteredDocuments.filter((doc) => doc.projectId);
+  const projectDocs = filteredDocuments.filter((doc) => doc.projectId);
+  const allDocs = filteredDocuments;
+  const groupedProjectDocs = projects
+    .filter((project) => canManageLibrary || assignedProjectIds.has(project.id))
+    .map((project) => ({
+      project,
+      docs: projectDocs.filter((doc) => doc.projectId === project.id)
+    }))
+    .filter((group) => group.docs.length);
+  const activeProjectDocs = projectDocs.filter((doc) => doc.projectId === scopedProjectId);
   const projectName = scopedProjectId ? projectNameForId(scopedProjectId) : undefined;
-  const canManageLibrary = canManageScriptLibrary(currentUser?.role);
 
   useEffect(() => {
     if (!canManageLibrary && uploadTarget === "INBOX") {
@@ -644,7 +1203,7 @@ function Scripts({
           action={onUpload ? <PrimaryButton icon={UploadCloud} label="Upload PDF/DOCX" onClick={() => setUploadOpen((open) => !open)} /> : undefined}
         />
         {uploadOpen && onUpload ? <DocumentUploadPanel projectId={scopedProjectId} documents={docs} onUpload={onUpload} onDone={() => setUploadOpen(false)} /> : null}
-        <DocumentRows docs={docs} versions={versions} projects={projects} omitProject={Boolean(projectId)} onDelete={onDelete} emptyLabel={projectName ? `No documents for ${projectName} yet. Upload a script, treatment, outline, or coverage document.` : "No documents match this view."} />
+        <DocumentRows docs={docs} versions={versions} projects={projects} omitProject={Boolean(projectId)} onDelete={onDelete} onAssignToProject={canManageLibrary ? onAssignToProject : undefined} assignableProjects={projects} defaultProjectId={scopedProjectId} emptyLabel={projectName ? `No documents for ${projectName} yet. Upload a script, treatment, outline, or coverage document.` : "No documents match this view."} />
       </Panel>
     );
   }
@@ -653,8 +1212,8 @@ function Scripts({
     <div className="space-y-4">
       <Panel>
         <SectionHeader
-          eyebrow="Repository"
-          title={canManageLibrary ? "Script Library" : `${projectName ?? "Project"} Scripts`}
+          eyebrow="Central Hub"
+          title="Scripts"
           action={onUpload ? (
             <div className="flex flex-wrap gap-1.5">
               {canManageLibrary ? <button type="button" onClick={() => { setUploadTarget("INBOX"); setUploadOpen((open) => uploadTarget === "INBOX" ? !open : true); }} className="inline-flex items-center gap-1.5 rounded-md bg-amberline px-2.5 py-1.5 text-xs font-semibold text-studio-950 transition hover:bg-amber-300"><UploadCloud className="h-3.5 w-3.5" />Incoming</button> : null}
@@ -662,6 +1221,11 @@ function Scripts({
             </div>
           ) : undefined}
         />
+        <div className="mb-3 flex flex-wrap items-center gap-1.5">
+          <ScriptSectionLink href="/scripts?section=inbox" label="Inbox" active={effectiveSection === "inbox"} count={incomingDocs.length} disabled={!canManageLibrary} />
+          <ScriptSectionLink href="/scripts?section=projects" label="Active Projects" active={effectiveSection === "projects"} count={projectDocs.length} />
+          {canManageLibrary ? <ScriptSectionLink href="/scripts?section=all" label="Library" active={effectiveSection === "all"} count={allDocs.length} subtle /> : null}
+        </div>
         <div className="grid gap-2 md:grid-cols-[1fr_180px_220px]">
           <div className="relative">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-studio-400" />
@@ -690,21 +1254,82 @@ function Scripts({
         ) : null}
       </Panel>
 
-      {canManageLibrary ? (
+      {effectiveSection === "inbox" && canManageLibrary ? (
         <ScriptLibraryPanel title="Incoming Scripts" eyebrow="Triage" count={incomingDocs.length} description="Unassigned submissions and specs that have not been attached to a project yet.">
           <DocumentRows docs={incomingDocs} versions={versions} projects={projects} showInboxMeta onDelete={onDelete} onAssignToProject={onAssignToProject} assignableProjects={projects} defaultProjectId={scopedProjectId} emptyLabel="No incoming scripts match these filters." />
         </ScriptLibraryPanel>
       ) : null}
 
-      <ScriptLibraryPanel title="Active Project Scripts" eyebrow={projectName ?? "Selected Project"} count={activeProjectDocs.length} description={`Scripts, treatments, outlines, notes, and coverage attached to ${projectName ?? "the selected project"}.`}>
-        <DocumentRows docs={activeProjectDocs} versions={versions} projects={projects} omitProject showInboxMeta={canManageLibrary} onDelete={onDelete} emptyLabel={projectName ? `No scripts for ${projectName} match these filters.` : "No scripts match the selected project."} />
-      </ScriptLibraryPanel>
-
-      {canManageLibrary ? (
-        <ScriptLibraryPanel title="All Project Scripts" eyebrow="Library" count={allProjectDocs.length} description="Cross-project library for searching the full slate. Incoming scripts stay in the triage panel above.">
-          <DocumentRows docs={allProjectDocs} versions={versions} projects={projects} showInboxMeta onDelete={onDelete} emptyLabel="No project scripts match these filters." />
+      {effectiveSection === "inbox" && !canManageLibrary ? (
+        <ScriptLibraryPanel title="Active Project Scripts" eyebrow="Assigned Access" count={projectDocs.length} description="Incoming submissions are limited to producers, executives, and admins. Your scripts are grouped by the projects you can access.">
+          <GroupedProjectDocuments groups={groupedProjectDocs} versions={versions} projects={projects} canManageLibrary={canManageLibrary} onDelete={onDelete} />
         </ScriptLibraryPanel>
       ) : null}
+
+      {effectiveSection === "projects" ? (
+        <ScriptLibraryPanel title="Active Project Scripts" eyebrow="By Project" count={projectDocs.length} description="Scripts, treatments, outlines, notes, decks, and coverage grouped by project so the library is not dependent on the top project switcher.">
+          <GroupedProjectDocuments groups={groupedProjectDocs} versions={versions} projects={projects} canManageLibrary={canManageLibrary} onDelete={onDelete} onAssignToProject={canManageLibrary ? onAssignToProject : undefined} />
+        </ScriptLibraryPanel>
+      ) : null}
+
+      {effectiveSection === "all" ? (
+        <ScriptLibraryPanel title="Library" eyebrow="Manager View" count={allDocs.length} description={canManageLibrary ? "A complete manager view across incoming submissions and active project documents." : "Everything you can access across your assigned projects."}>
+          <DocumentRows docs={allDocs} versions={versions} projects={projects} showInboxMeta={canManageLibrary} onDelete={onDelete} onAssignToProject={canManageLibrary ? onAssignToProject : undefined} assignableProjects={projects} defaultProjectId={scopedProjectId} emptyLabel="No scripts match these filters." />
+        </ScriptLibraryPanel>
+      ) : null}
+
+    </div>
+  );
+}
+
+function ScriptSectionLink({ href, label, active, count, disabled = false, subtle = false }: { href: string; label: string; active: boolean; count: number; disabled?: boolean; subtle?: boolean }) {
+  if (disabled) {
+    return <span className="inline-flex cursor-not-allowed items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-500">{label}</span>;
+  }
+  return (
+    <Link
+      href={href}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-semibold transition",
+        active ? "border-amberline/45 bg-amberline/10 text-amberline" : subtle ? "border-white/10 bg-transparent text-studio-400 hover:border-white/20 hover:text-studio-200" : "border-white/10 bg-white/[0.025] text-studio-300 hover:border-amberline/35 hover:text-amberline"
+      )}
+    >
+      {label}
+      <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", active ? "bg-amberline text-studio-950" : "bg-white/[0.06] text-studio-300")}>{count}</span>
+    </Link>
+  );
+}
+
+function GroupedProjectDocuments({
+  groups,
+  versions,
+  projects,
+  canManageLibrary,
+  onDelete,
+  onAssignToProject
+}: {
+  groups: Array<{ project: HammerProject; docs: HammerDocument[] }>;
+  versions: HammerDocumentVersion[];
+  projects: HammerProject[];
+  canManageLibrary: boolean;
+  onDelete?: (documentId: string) => void;
+  onAssignToProject?: (documentId: string, projectId: string) => void;
+}) {
+  if (!groups.length) return <EmptyState label="No project scripts match these filters." />;
+  return (
+    <div className="space-y-3">
+      {groups.map((group) => (
+        <div key={group.project.id} className="rounded-lg border border-white/10 bg-white/[0.025] p-3">
+          <div className="mb-2 flex flex-col gap-1 md:flex-row md:items-end md:justify-between">
+            <div>
+              <h3 className="text-sm font-semibold text-studio-100">{group.project.title}</h3>
+              <p className="text-xs text-studio-400">{statusLabel(group.project.status)}</p>
+            </div>
+            <span className="rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-[11px] text-studio-300">{group.docs.length}</span>
+          </div>
+          <DocumentRows docs={group.docs} versions={versions} projects={projects} omitProject showInboxMeta={canManageLibrary} onDelete={onDelete} onAssignToProject={onAssignToProject} assignableProjects={projects} defaultProjectId={group.project.id} emptyLabel={`No scripts for ${group.project.title} match these filters.`} />
+        </div>
+      ))}
     </div>
   );
 }
@@ -806,6 +1431,69 @@ function DocumentUploadPanel({
   );
 }
 
+function SupportingDocumentUpload({
+  documentId,
+  onUpload
+}: {
+  documentId: string;
+  onUpload: (input: { scriptDocumentId: string; title: string; type: SupportingDocumentType; notes: string; file: File }) => Promise<void>;
+}) {
+  const [title, setTitle] = useState("");
+  const [type, setType] = useState<SupportingDocumentType>("CONTEXT");
+  const [notes, setNotes] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [status, setStatus] = useState("");
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!file) {
+      setStatus("Choose a PDF, DOCX, FDX, or TXT file first.");
+      return;
+    }
+    setStatus("Adding supporting document...");
+    try {
+      await onUpload({
+        scriptDocumentId: documentId,
+        title: title.trim() || file.name.replace(/\.[^.]+$/, ""),
+        type,
+        notes,
+        file
+      });
+      setTitle("");
+      setNotes("");
+      setFile(null);
+      setStatus("Added.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Upload failed.");
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="space-y-2 rounded-lg border border-amberline/20 bg-amberline/5 p-3">
+      <div>
+        <p className="text-[11px] uppercase tracking-[0.12em] text-amberline">Attach Context</p>
+        <p className="mt-1 text-xs leading-5 text-studio-300">Coverage, context notes, correspondence, research, and writer materials.</p>
+      </div>
+      <input className="field" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Document title" />
+      <select className="field" value={type} onChange={(event) => setType(event.target.value as SupportingDocumentType)}>
+        {(["CONTEXT", "COVERAGE", "NOTES", "EMAIL", "WRITER_MATERIAL", "OTHER"] as SupportingDocumentType[]).map((documentType) => (
+          <option key={documentType} value={documentType}>{statusLabel(documentType)}</option>
+        ))}
+      </select>
+      <textarea className="field min-h-16" value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Notes for the team" />
+      <input
+        key={status === "Added." ? "cleared" : "ready"}
+        className="block w-full text-xs text-studio-300 file:mr-3 file:rounded file:border-0 file:bg-studio-100 file:px-2.5 file:py-1.5 file:text-xs file:font-semibold file:text-studio-950"
+        type="file"
+        accept=".pdf,.docx,.fdx,.txt,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+      />
+      {status ? <p className="text-xs text-studio-300">{status}</p> : null}
+      <PrimaryButton icon={UploadCloud} label="Add Document" />
+    </form>
+  );
+}
+
 function DocumentRows({
   docs,
   versions = hammerVersions,
@@ -849,7 +1537,9 @@ function DocumentRows({
         <tbody className="divide-y divide-white/10">
           {docs.map((doc) => {
             const version = currentVersionFor(doc.id, docs, versions);
-            const selectedProjectId = assignmentDrafts[doc.id] ?? (defaultProjectId && assignableProjects.some((project) => project.id === defaultProjectId) ? defaultProjectId : assignableProjects[0]?.id ?? "");
+            const selectedProjectId = assignmentDrafts[doc.id] ?? (doc.projectId && assignableProjects.some((project) => project.id === doc.projectId) ? doc.projectId : defaultProjectId && assignableProjects.some((project) => project.id === defaultProjectId) ? defaultProjectId : assignableProjects[0]?.id ?? "");
+            const canMoveDocument = Boolean(onAssignToProject && assignableProjects.length);
+            const moveLabel = doc.projectId ? "Move" : "Assign";
             return (
               <tr key={doc.id} className="text-studio-200">
                 <td className="py-2.5 font-semibold"><Link href={`/scripts/${doc.id}`}>{doc.title}</Link></td>
@@ -864,7 +1554,7 @@ function DocumentRows({
                   <TableLink href={`/scripts/${doc.id}/versions`}>Versions</TableLink>
                   <TableLink href={`/scripts/${doc.id}/diff`}>Compare</TableLink>
                   <TableLink href={`/scripts/${doc.id}/breakdown`}>Breakdown</TableLink>
-                  {onAssignToProject && !doc.projectId && assignableProjects.length ? (
+                  {canMoveDocument ? (
                     <span className="inline-flex items-center gap-1 align-middle">
                       <select
                         aria-label={`Project for ${doc.title}`}
@@ -874,7 +1564,7 @@ function DocumentRows({
                       >
                         {assignableProjects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
                       </select>
-                      <button type="button" onClick={() => onAssignToProject(doc.id, selectedProjectId)} className="rounded border border-emerald-400/25 bg-emerald-400/5 px-1.5 py-1 text-[11px] font-semibold text-emerald-300 hover:border-emerald-300/50 hover:text-emerald-200">Assign</button>
+                      <button type="button" disabled={!selectedProjectId || selectedProjectId === doc.projectId} onClick={() => selectedProjectId && onAssignToProject?.(doc.id, selectedProjectId)} className="rounded border border-emerald-400/25 bg-emerald-400/5 px-1.5 py-1 text-[11px] font-semibold text-emerald-300 hover:border-emerald-300/50 hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-40">{moveLabel}</button>
                     </span>
                   ) : null}
                   {onDelete && doc.id.startsWith("doc-local-") ? <DangerButton label="Delete" onClick={() => onDelete(doc.id)} /> : null}
@@ -892,47 +1582,150 @@ function ScriptDetail({
   documentId,
   documents = hammerDocuments,
   versions = hammerVersions,
+  supportingDocuments = [],
   onUpload,
+  onSupportingUpload,
+  onSupportingDelete,
   onStatusChange,
   onDelete
 }: {
   documentId: string;
   documents?: HammerDocument[];
   versions?: HammerDocumentVersion[];
+  supportingDocuments?: SupportingDocument[];
   onUpload?: (input: DocumentUploadInput) => Promise<void>;
+  onSupportingUpload?: (input: { scriptDocumentId: string; title: string; type: SupportingDocumentType; notes: string; file: File }) => Promise<void>;
+  onSupportingDelete?: (documentId: string) => void;
   onStatusChange?: (versionId: string, status: ScriptStatus) => void;
   onDelete?: (documentId: string) => void;
 }) {
   const doc = documents.find((item) => item.id === documentId) ?? documents[0];
   const version = currentVersionFor(doc.id, documents, versions);
+  const [tab, setTab] = useState<"overview" | "notes" | "files" | "versions" | "breakdown">("overview");
+  const documentVersions = versions.filter((item) => item.documentId === doc.id).sort((a, b) => b.versionNumber - a.versionNumber);
+  const attachedSupportingDocuments = supportingDocuments.filter((item) => item.scriptDocumentId === doc.id);
+  const relatedComments = hammerComments.filter((comment) => comment.targetId === (version?.id ?? doc.id) || comment.targetId === doc.id);
   return (
-    <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
+    <div className="space-y-4">
       <Panel>
         <SectionHeader
           eyebrow={doc.type}
           title={doc.title}
-          action={<div className="flex flex-wrap gap-1.5"><TableLink href={`/scripts/${doc.id}/breakdown`}>Open Breakdown</TableLink>{onUpload ? <TableLink href={`/scripts/${doc.id}/versions`}>Manage versions</TableLink> : null}{onDelete && doc.id.startsWith("doc-local-") ? <DangerButton label="Delete" onClick={() => onDelete(doc.id)} /> : null}</div>}
+          action={<div className="flex flex-wrap gap-1.5">{onDelete && doc.id.startsWith("doc-local-") ? <DangerButton label="Delete" onClick={() => onDelete(doc.id)} /> : null}</div>}
         />
-        <pre className="max-h-[520px] overflow-auto rounded-lg border border-white/10 bg-black/25 p-3 text-[13px] leading-5 text-studio-200">{version?.extractedText}</pre>
+        <div className="grid gap-3 md:grid-cols-4">
+          <SmallStat label="Status" value={statusLabel(version?.status ?? "DRAFT")} />
+          <SmallStat label="Writer" value={doc.writerName ?? userName(doc.createdById)} />
+          <SmallStat label="Project" value={doc.projectId ? projectTitle(doc.projectId) : "Inbox / Unassigned"} />
+          <SmallStat label="Current Version" value={`v${version?.versionNumber ?? 1}`} />
+        </div>
+        <div className="mt-3 flex flex-wrap gap-1.5 border-t border-white/10 pt-3">
+          {[
+            ["overview", "Overview"],
+            ["notes", `Notes${relatedComments.length ? ` (${relatedComments.length})` : ""}`],
+            ["files", "Files"],
+            ["versions", `Versions (${documentVersions.length})`],
+            ["breakdown", "Breakdown"]
+          ].map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setTab(id as typeof tab)}
+              className={cn("rounded-md border px-2.5 py-1.5 text-xs font-semibold transition", tab === id ? "border-amberline/45 bg-amberline/10 text-amberline" : "border-white/10 bg-white/[0.025] text-studio-300 hover:border-white/25")}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </Panel>
-      <div className="space-y-4">
+
+      {tab === "overview" ? (
+        <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
+          <Panel>
+            <SectionHeader eyebrow="Document" title="Readable Text" />
+            <pre className="max-h-[620px] overflow-auto rounded-lg border border-white/10 bg-black/25 p-3 text-[13px] leading-5 text-studio-200">{version?.extractedText}</pre>
+          </Panel>
+          <Panel>
+            <SectionHeader eyebrow="Review" title="Current Decision" />
+            <div className="space-y-3">
+              <Badge value={version?.status ?? "DRAFT"} />
+              {version && onStatusChange ? (
+                <select className="field" value={version.status} onChange={(event) => onStatusChange(version.id, event.target.value as ScriptStatus)}>
+                  {hammerScriptStatuses.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}
+                </select>
+              ) : null}
+              {doc.source ? <SmallStat label="Source" value={doc.source} /> : null}
+              <p className="text-[13px] text-studio-300">{version?.notes}</p>
+            </div>
+          </Panel>
+        </div>
+      ) : null}
+
+      {tab === "notes" ? <CommentsPanel targetId={version?.id ?? doc.id} /> : null}
+
+      {tab === "files" ? (
         <Panel>
-          <SectionHeader eyebrow="Current" title={`Version ${version?.versionNumber}`} />
-          <div className="space-y-3">
-            <Badge value={version?.status ?? "DRAFT"} />
-            {version && onStatusChange ? (
-              <select className="field" value={version.status} onChange={(event) => onStatusChange(version.id, event.target.value as ScriptStatus)}>
-                {hammerScriptStatuses.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}
-              </select>
-            ) : null}
-            <SmallStat label="Project" value={doc.projectId ? projectTitle(doc.projectId) : "Inbox / Unassigned"} />
-            <SmallStat label="Writer" value={doc.writerName ?? userName(doc.createdById)} />
-            {doc.source ? <SmallStat label="Source" value={doc.source} /> : null}
-            <p className="text-[13px] text-studio-300">{version?.notes}</p>
+          <SectionHeader eyebrow="Files" title="Script Packet" action={onUpload ? <PrimaryButton icon={UploadCloud} label="Upload New Script Version" onClick={() => setTab("versions")} /> : undefined} />
+          <div className="grid gap-4 xl:grid-cols-[320px_1fr]">
+            <div className="space-y-3">
+              <div className="rounded-md border border-white/10 bg-white/[0.03] p-3">
+                <p className="text-[11px] uppercase tracking-[0.12em] text-studio-400">Primary Script</p>
+                <p className="mt-1 text-[13px] font-semibold text-studio-100">{version?.fileName ?? doc.title}</p>
+                <p className="mt-1 text-xs text-studio-400">{version?.fileType ?? doc.type} / {version ? formatBytes(version.fileSize) : "Unknown size"}</p>
+                <p className="mt-2 break-all text-xs text-studio-300">{version?.storagePath}</p>
+              </div>
+              {onSupportingUpload ? <SupportingDocumentUpload documentId={doc.id} onUpload={onSupportingUpload} /> : null}
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-studio-100">Supporting Documents</h3>
+                <span className="rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-[11px] text-studio-300">{attachedSupportingDocuments.length}</span>
+              </div>
+              {attachedSupportingDocuments.length ? (
+                <div className="grid gap-2">
+                  {attachedSupportingDocuments.map((item) => (
+                    <div key={item.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
+                      <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="text-[13px] font-semibold text-studio-100">{item.title}</p>
+                            <Badge value={item.type} />
+                          </div>
+                          <p className="mt-1 text-xs text-studio-400">{item.fileName} / {item.fileType} / {formatBytes(item.fileSize)}</p>
+                          {item.notes ? <p className="mt-2 text-[13px] leading-5 text-studio-300">{item.notes}</p> : null}
+                          {item.extractedText ? <p className="mt-2 line-clamp-2 text-xs leading-5 text-studio-400">{item.extractedText}</p> : null}
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          <span className="text-[11px] text-studio-500">{item.uploadedAt}</span>
+                          {onSupportingDelete ? <DangerButton label="Delete" onClick={() => onSupportingDelete(item.id)} /> : null}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <EmptyState label="Add context documents, coverage, emails, writer notes, or other reference material connected to this script." />
+              )}
+            </div>
           </div>
         </Panel>
-        <CommentsPanel targetId={version?.id ?? doc.id} />
-      </div>
+      ) : null}
+
+      {tab === "versions" ? (
+        <Panel>
+          <SectionHeader eyebrow="History" title="Versions" action={onUpload ? <TableLink href={`/scripts/${doc.id}/versions`}>Manage versions</TableLink> : undefined} />
+          <div className="grid gap-3">
+            {documentVersions.map((item) => <div key={item.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-3"><div className="flex items-center justify-between"><p className="text-[13px] font-semibold text-studio-100">Version {item.versionNumber}: {item.fileName}</p><Badge value={item.status} /></div><p className="mt-1.5 text-xs text-studio-300">{item.notes}</p><p className="mt-1 text-[11px] text-studio-500">{item.fileType} / {formatBytes(item.fileSize)} / {item.createdAt}</p></div>)}
+          </div>
+        </Panel>
+      ) : null}
+
+      {tab === "breakdown" ? (
+        <Panel>
+          <SectionHeader eyebrow="Optional" title="Script Breakdown" action={<TableLink href={`/scripts/${doc.id}/breakdown`}>Open Breakdown</TableLink>} />
+          <p className="text-[13px] leading-6 text-studio-300">Breakdown is available when the team is ready to pull scenes, characters, locations, props, and action moments from the script. It stays out of the primary review flow until needed.</p>
+        </Panel>
+      ) : null}
     </div>
   );
 }
@@ -1265,18 +2058,106 @@ function AssetDetail({ assetId }: { assetId: string }) {
   );
 }
 
-function Tasks({ projectId, compact = false, selectedTaskId, currentUser }: { projectId?: string; compact?: boolean; selectedTaskId?: string; currentUser?: ReturnType<typeof hammerUserByEmail> }) {
+function Tasks({
+  projectId,
+  compact = false,
+  selectedTaskId,
+  currentUser,
+  tasks: allTasks = hammerTasks,
+  projects = hammerProjects,
+  onCreateTask,
+  onUpdateTask
+}: {
+  projectId?: string;
+  compact?: boolean;
+  selectedTaskId?: string;
+  currentUser?: ReturnType<typeof hammerUserByEmail>;
+  tasks?: HammerTask[];
+  projects?: HammerProject[];
+  onCreateTask?: (input: { projectId: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
+  onUpdateTask?: (taskId: string, patch: Partial<Pick<HammerTask, "priority" | "status">>) => void;
+}) {
   const canViewAllTasks = canViewAllProjectTasks(currentUser?.role);
-  const tasks = hammerTasks.filter((task) => (!projectId || task.projectId === projectId) && (canViewAllTasks || task.assignedToId === currentUser?.id));
-  const selectedTask = tasks.find((task) => task.id === selectedTaskId);
+  const tasks = allTasks.filter((task) => (!projectId || task.projectId === projectId) && (canViewAllTasks || task.assignedToId === currentUser?.id));
   const projectName = projectId ? projectTitle(projectId) : undefined;
   return (
-    <div className={cn("grid gap-4", selectedTask && "xl:grid-cols-[1fr_320px]")}>
+    <div className="grid gap-4">
       <Panel>
-        <SectionHeader eyebrow={projectName ? `Showing ${projectName}` : "Tracking"} title={compact ? "Tasks" : canViewAllTasks ? "Project Tasks" : "My Tasks"} action={<PrimaryButton icon={Plus} label="New Task" />} />
-        {tasks.length ? <TaskRows tasks={tasks} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} /> : <EmptyState label={projectName ? (canViewAllTasks ? `No tasks for ${projectName}. Create one when there is a next step.` : `No tasks assigned to you for ${projectName}.`) : "No tasks match this view."} />}
+        <SectionHeader eyebrow={projectName ? `Showing ${projectName}` : "Tracking"} title={compact ? "Tasks" : canViewAllTasks ? "All Tasks" : "My Tasks"} action={onCreateTask ? <NewTaskDialog projects={projects} onCreateTask={onCreateTask} /> : undefined} />
+        {tasks.length ? <TaskRows tasks={tasks} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} onUpdateTask={onUpdateTask} /> : <EmptyState label={projectName ? (canViewAllTasks ? `No tasks for ${projectName}. Create one when there is a next step.` : `No tasks assigned to you for ${projectName}.`) : "No tasks match this view."} />}
       </Panel>
-      {selectedTask ? <TaskDetail task={selectedTask} /> : null}
+    </div>
+  );
+}
+
+function NewTaskDialog({
+  projects,
+  onCreateTask
+}: {
+  projects: HammerProject[];
+  onCreateTask: (input: { projectId: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [projectId, setProjectId] = useState(projects[0]?.id ?? "");
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [assignedToId, setAssignedToId] = useState(hammerUsers[0]?.id ?? "");
+  const [priority, setPriority] = useState<TaskPriority>("MEDIUM");
+  const [status, setStatus] = useState<TaskStatus>("TODO");
+
+  function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!projectId || !title.trim()) return;
+    onCreateTask({
+      projectId,
+      title,
+      description,
+      assignedToId,
+      dueDate: defaultDueDate(),
+      priority,
+      status,
+      targetType: "PROJECT",
+      targetId: projectId
+    });
+    setTitle("");
+    setDescription("");
+    setPriority("MEDIUM");
+    setStatus("TODO");
+    setOpen(false);
+  }
+
+  return (
+    <div className="relative">
+      <PrimaryButton icon={Plus} label="New Task" onClick={() => setOpen((current) => !current)} />
+      {open ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/45 p-4">
+          <form onSubmit={submit} className="w-full max-w-xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-glow">
+            <SectionHeader eyebrow="Task" title="New Task" />
+            <div className="grid gap-3">
+              <select className="field" value={projectId} onChange={(event) => setProjectId(event.target.value)}>
+                {projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
+              </select>
+              <input className="field" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Name of task" />
+              <textarea className="field min-h-24" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Description of task" />
+              <div className="grid gap-3 md:grid-cols-3">
+                <select className="field" value={assignedToId} onChange={(event) => setAssignedToId(event.target.value)}>
+                  {hammerUsers.map((user) => <option key={user.id} value={user.id}>{user.name} / {statusLabel(user.role)}</option>)}
+                </select>
+                <select className="field" value={priority} onChange={(event) => setPriority(event.target.value as TaskPriority)}>
+                  {(["LOW", "MEDIUM", "HIGH", "URGENT"] as TaskPriority[]).map((item) => <option key={item} value={item}>{statusLabel(item)}</option>)}
+                </select>
+                <select className="field" value={status} onChange={(event) => setStatus(event.target.value as TaskStatus)}>
+                  {(["TODO", "IN_PROGRESS", "DONE", "ON_HOLD", "REVIEW"] as TaskStatus[]).map((item) => <option key={item} value={item}>{taskStatusLabel(item)}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" onClick={() => setOpen(false)} className="rounded border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:text-amberline">Cancel</button>
+              <button type="submit" className="rounded bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-amber-300">Create Task</button>
+            </div>
+          </form>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1294,8 +2175,6 @@ function Contacts() {
     const haystack = `${contact.name} ${contact.company} ${contact.title} ${contact.email} ${contact.location} ${contact.notes}`.toLowerCase();
     return matchesType && haystack.includes(search.toLowerCase());
   });
-  const byType = countBy(contacts.map((contact) => contact.type));
-
   useEffect(() => {
     try {
       const storedContacts = window.localStorage.getItem(HAMMER_LOCAL_CONTACTS_STORAGE_KEY);
@@ -1335,14 +2214,8 @@ function Contacts() {
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Contacts" value={`${contacts.length}`} sub="Studio directory" />
-        <MetricCard label="Writers" value={`${byType.WRITER ?? 0}`} sub="Creative contacts" />
-        <MetricCard label="Artists/Vendors" value={`${(byType.ARTIST ?? 0) + (byType.VENDOR ?? 0)}`} sub="Visual development" />
-        <MetricCard label="Agencies/Reps" value={`${(byType.AGENCY ?? 0) + (byType.MANAGEMENT ?? 0)}`} sub="External partners" />
-      </div>
       <Panel>
-        <SectionHeader eyebrow="Directory" title="Contacts" action={<div className="flex flex-wrap gap-2"><GhostButton icon={UploadCloud} label="Import CSV" /><PrimaryButton icon={Plus} label="New Contact" /></div>} />
+        <SectionHeader eyebrow="Directory" title="Contacts" action={<div className="flex flex-wrap gap-2"><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline"><UploadCloud className="h-3.5 w-3.5" />Import CSV<input className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => importContacts(event.target.files?.[0])} /></label><PrimaryButton icon={Plus} label="New Contact" /></div>} />
         <div className="mb-3 grid gap-2 md:grid-cols-[1fr_220px_220px]">
           <input className="field" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search contacts, companies, notes" />
           <select className="field" value={type} onChange={(event) => setType(event.target.value as ContactType | "ALL")}>
@@ -1351,16 +2224,7 @@ function Contacts() {
           </select>
           <button type="button" className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 hover:border-amberline/40 hover:text-amberline" onClick={exportContacts}>Export CSV</button>
         </div>
-        <div className="mb-3 rounded-lg border border-white/10 bg-white/[0.025] p-3">
-          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-            <div>
-              <p className="text-[13px] font-semibold text-studio-100">CSV import</p>
-              <p className="mt-0.5 text-xs text-studio-400">Columns: name, company, type, title, email, phone, location, projects, notes</p>
-            </div>
-            <input className="block text-xs text-studio-300 file:mr-3 file:rounded file:border-0 file:bg-studio-100 file:px-2.5 file:py-1.5 file:text-xs file:font-semibold file:text-studio-950" type="file" accept=".csv,text/csv" onChange={(event) => importContacts(event.target.files?.[0])} />
-          </div>
-          {importMessage ? <p className="mt-2 text-xs text-studio-300">{importMessage}</p> : null}
-        </div>
+        {importMessage ? <p className="mb-3 text-xs text-studio-300">{importMessage}</p> : null}
         {filteredContacts.length ? (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[940px] text-left text-[13px]">
@@ -1406,7 +2270,6 @@ function Reviews({ projectId }: { projectId?: string }) {
 
 function Executive({ projects }: { projects: HammerProject[] }) {
   const byStatus = countBy(projects.map((project) => project.status));
-  const byStage = countBy(projects.map((project) => project.stage));
   const scriptReviewApprovals = hammerApprovals.filter((approval) => approval.targetType === "DOCUMENT_VERSION" && approval.status === "REQUESTED");
   const firstScriptReview = scriptReviewApprovals[0];
   const firstReviewDocument = firstScriptReview ? hammerDocuments.find((document) => document.currentVersionId === firstScriptReview.targetId || hammerVersions.some((version) => version.id === firstScriptReview.targetId && version.documentId === document.id)) : undefined;
@@ -1424,9 +2287,8 @@ function Executive({ projects }: { projects: HammerProject[] }) {
         <MetricCard label="Overdue Tasks" value={`${overdueTasks.length}`} sub={overdueTasks[0]?.title} href={overdueTasks[0] ? `/tasks?task=${overdueTasks[0].id}` : undefined} />
         <MetricCard label="Greenlight Candidates" value={`${greenlightCandidates.length}`} sub={greenlightCandidates[0]?.title} href={greenlightCandidates[0] ? `/projects/${greenlightCandidates[0].id}` : undefined} />
       </div>
-      <div className="grid gap-4 xl:grid-cols-2">
+      <div className="grid gap-4">
         <Panel><SectionHeader eyebrow="Status" title="Projects by Status" />{Object.entries(byStatus).map(([label, count]) => <Bar key={label} label={statusLabel(label)} value={count} max={projects.length} />)}</Panel>
-        <Panel><SectionHeader eyebrow="Stage" title="Projects by Stage" />{Object.entries(byStage).map(([label, count]) => <Bar key={label} label={statusLabel(label)} value={count} max={projects.length} />)}</Panel>
       </div>
       <Projects projects={projects} />
     </div>
@@ -1445,6 +2307,7 @@ function AdminUsers({
   onStatusChange: (projectId: string, status: HammerProjectStatus) => void;
 }) {
   const canCreateProject = currentUser.role === "ADMIN";
+  const [localUserStates, setLocalUserStates] = useState<Record<string, { inactive?: boolean; deleted?: boolean }>>({});
   const [projectDraft, setProjectDraft] = useState<ProjectDraft>({
     title: "",
     logline: "",
@@ -1458,6 +2321,38 @@ function AdminUsers({
   useEffect(() => {
     setProjectDraft((draft) => ({ ...draft, ownerId: currentUser.id }));
   }, [currentUser.id]);
+
+  useEffect(() => {
+    try {
+      const storedUserStates = window.localStorage.getItem(HAMMER_LOCAL_USER_STATES_STORAGE_KEY);
+      setLocalUserStates(storedUserStates ? JSON.parse(storedUserStates) as Record<string, { inactive?: boolean; deleted?: boolean }> : {});
+    } catch {
+      setLocalUserStates({});
+    }
+  }, []);
+
+  const visibleUsers = hammerUsers.filter((user) => !localUserStates[user.id]?.deleted);
+
+  function updateLocalUserState(userId: string, nextState: { inactive?: boolean; deleted?: boolean }) {
+    setLocalUserStates((current) => {
+      const next = { ...current, [userId]: { ...current[userId], ...nextState } };
+      window.localStorage.setItem(HAMMER_LOCAL_USER_STATES_STORAGE_KEY, JSON.stringify(next));
+      window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_USER_STATES_EVENT));
+      return next;
+    });
+  }
+
+  function toggleUserActive(user: HammerUser) {
+    if (user.id === currentUser.id) return;
+    const inactive = Boolean(localUserStates[user.id]?.inactive);
+    updateLocalUserState(user.id, { inactive: !inactive });
+  }
+
+  function deleteUser(user: HammerUser) {
+    if (user.id === currentUser.id) return;
+    if (!window.confirm(`Delete ${user.name}? This removes the user from the demo admin list.`)) return;
+    updateLocalUserState(user.id, { deleted: true, inactive: true });
+  }
 
   function submitProject(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1495,7 +2390,7 @@ function AdminUsers({
               {(["DEVELOPMENT", "SCRIPT", "TREATMENT", "VISDEV", "LOOKBOOK", "PACKAGING", "GREENLIGHT"] as HammerProject["stage"][]).map((stage) => <option key={stage} value={stage}>{statusLabel(stage)}</option>)}
             </select>
             <select className="field" disabled={!canCreateProject} value={projectDraft.ownerId} onChange={(event) => setProjectDraft({ ...projectDraft, ownerId: event.target.value })}>
-              {hammerUsers.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+              {visibleUsers.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
             </select>
             <PrimaryButton icon={Plus} label="Create Project" />
             {!canCreateProject ? <p className="text-xs text-studio-400">Project creation is available to Admins.</p> : null}
@@ -1535,9 +2430,45 @@ function AdminUsers({
       <Panel>
         <SectionHeader eyebrow="RBAC" title="Users and Roles" action={<GhostButton icon={UsersRound} label="Invite User" />} />
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[720px] text-left text-[13px]">
-            <thead className="text-xs uppercase tracking-[0.16em] text-studio-400"><tr><th className="py-2">Name</th><th>Email</th><th>Global Role</th><th>Project Access</th><th>Actions</th></tr></thead>
-            <tbody className="divide-y divide-white/10">{hammerUsers.map((user) => <tr key={user.id}><td className="py-2.5 font-semibold text-studio-100">{user.name}</td><td className="text-studio-300">{user.email}</td><td><Badge value={user.role} /></td><td className="text-studio-300">Membership role + resource visibility</td><td><GhostButton icon={ShieldCheck} label="Assign Role" /></td></tr>)}</tbody>
+          <table className="w-full min-w-[900px] text-left text-[13px]">
+            <thead className="text-xs uppercase tracking-[0.16em] text-studio-400"><tr><th className="py-2">Name</th><th>Email</th><th>Global Role</th><th>Status</th><th>Project Access</th><th>Actions</th></tr></thead>
+            <tbody className="divide-y divide-white/10">
+              {visibleUsers.map((user) => {
+                const inactive = Boolean(localUserStates[user.id]?.inactive);
+                const isCurrentUser = user.id === currentUser.id;
+                return (
+                  <tr key={user.id} className={cn(inactive && "opacity-60")}>
+                    <td className="py-2.5 font-semibold text-studio-100">{user.name}{isCurrentUser ? <span className="ml-2 text-[11px] font-normal text-studio-400">You</span> : null}</td>
+                    <td className="text-studio-300">{user.email}</td>
+                    <td><Badge value={user.role} /></td>
+                    <td><Badge value={inactive ? "INACTIVE" : "ACTIVE"} subtle /></td>
+                    <td className="text-studio-300">Membership role + resource visibility</td>
+                    <td>
+                      <div className="flex flex-wrap gap-1.5">
+                        <GhostButton icon={ShieldCheck} label="Assign Role" />
+                        <button
+                          type="button"
+                          disabled={isCurrentUser}
+                          onClick={() => toggleUserActive(user)}
+                          className="rounded border border-white/10 bg-white/[0.025] px-1.5 py-1 text-[11px] font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          {inactive ? "Reactivate" : "Deactivate"}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isCurrentUser}
+                          onClick={() => deleteUser(user)}
+                          className="inline-flex items-center gap-1 rounded border border-rose-400/25 bg-rose-500/5 px-1.5 py-1 text-[11px] font-semibold text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
           </table>
         </div>
       </Panel>
@@ -1547,19 +2478,26 @@ function AdminUsers({
 
 function ProjectTable({ projects }: { projects: HammerProject[] }) {
   if (!projects.length) return <EmptyState label="No projects match this view." />;
-  return <div className="overflow-x-auto"><table className="w-full min-w-[760px] text-left text-[13px]"><thead className="text-[11px] uppercase tracking-[0.12em] text-studio-400"><tr><th className="py-2">Project</th><th>Status</th><th>Stage</th><th>Owner</th><th>Updated</th><th>Actions</th></tr></thead><tbody className="divide-y divide-white/10">{projects.map((project) => <tr key={project.id}><td className="py-2.5"><Link className="font-semibold text-studio-100" href={`/projects/${project.id}`}>{project.title}</Link><p className="mt-0.5 text-xs text-studio-400">{project.genre}</p></td><td><Badge value={project.status} /></td><td><Badge value={project.stage} subtle /></td><td className="text-studio-300">{userName(project.ownerId)}</td><td className="text-studio-300">{project.updatedAt}</td><td className="space-x-1.5"><TableLink href={`/projects/${project.id}/documents`}>Docs</TableLink><TableLink href={`/projects/${project.id}/assets`}>Assets</TableLink></td></tr>)}</tbody></table></div>;
+  return <div className="overflow-x-auto"><table className="w-full min-w-[620px] text-left text-[13px]"><thead className="text-[11px] uppercase tracking-[0.12em] text-studio-400"><tr><th className="py-2">Project</th><th>Status</th><th>Owner</th><th>Updated</th></tr></thead><tbody className="divide-y divide-white/10">{projects.map((project) => <tr key={project.id} className="transition hover:bg-white/[0.035]"><td className="py-2.5"><Link className="block font-semibold text-studio-100" href={`/projects/${project.id}`}>{project.title}<p className="mt-0.5 text-xs font-normal text-studio-400">{project.genre}</p></Link></td><td><Link className="block" href={`/projects/${project.id}`}><Badge value={project.status} /></Link></td><td><Link className="block text-studio-300" href={`/projects/${project.id}`}>{userName(project.ownerId)}</Link></td><td><Link className="block text-studio-300" href={`/projects/${project.id}`}>{project.updatedAt}</Link></td></tr>)}</tbody></table></div>;
 }
 
-function TaskRows({ tasks, selectedTaskId, showAssignee = false }: { tasks: HammerTask[]; selectedTaskId?: string; showAssignee?: boolean }) {
+function TaskRows({ tasks, selectedTaskId, showAssignee = false, onUpdateTask }: { tasks: HammerTask[]; selectedTaskId?: string; showAssignee?: boolean; onUpdateTask?: (taskId: string, patch: Partial<Pick<HammerTask, "priority" | "status">>) => void }) {
+  const gridClass = showAssignee ? "md:grid-cols-[1fr_130px_120px_110px_100px]" : "md:grid-cols-[1fr_120px_110px_100px]";
   return (
     <div className="grid gap-2">
+      <div className={cn("hidden px-2.5 text-[11px] uppercase tracking-[0.12em] text-studio-400 md:grid", gridClass)}>
+        <span>Task</span>
+        {showAssignee ? <span>Assignee</span> : null}
+        <span>Priority</span>
+        <span>Progress</span>
+        <span>Due</span>
+      </div>
       {tasks.map((task) => (
-        <Link
+        <div
           key={task.id}
-          href={`/tasks?task=${encodeURIComponent(task.id)}`}
           className={cn(
             "grid gap-2 rounded-lg border border-white/10 bg-white/[0.03] p-2.5 transition hover:border-amberline/35 hover:bg-white/[0.055]",
-            showAssignee ? "md:grid-cols-[1fr_130px_120px_110px_100px]" : "md:grid-cols-[1fr_120px_110px_100px]",
+            gridClass,
             selectedTaskId === task.id && "border-amberline/45 bg-amberline/10"
           )}
         >
@@ -1568,31 +2506,54 @@ function TaskRows({ tasks, selectedTaskId, showAssignee = false }: { tasks: Hamm
             <p className="mt-0.5 text-xs text-studio-300">{task.description}</p>
           </div>
           {showAssignee ? <p className="text-xs font-semibold text-studio-300">{userName(task.assignedToId)}</p> : null}
-          <Badge value={task.priority} />
-          <Badge value={task.status} />
+          {onUpdateTask ? (
+            <TaskInlineSelect label="Priority" value={task.priority} options={["LOW", "MEDIUM", "HIGH", "URGENT"]} onChange={(value) => onUpdateTask(task.id, { priority: value as TaskPriority })} />
+          ) : <Badge value={task.priority} />}
+          {onUpdateTask ? (
+            <TaskInlineSelect label="Progress" value={task.status} options={["TODO", "IN_PROGRESS", "DONE", "ON_HOLD", "REVIEW"]} onChange={(value) => onUpdateTask(task.id, { status: value as TaskStatus })} />
+          ) : <Badge value={task.status} />}
           <p className="text-xs text-studio-300">{task.dueDate}</p>
-        </Link>
+        </div>
       ))}
     </div>
   );
 }
 
-function TaskDetail({ task }: { task: HammerTask }) {
+function TaskInlineSelect({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) {
+  const tone = toneForStatus(value);
   return (
-    <Panel>
-      <SectionHeader eyebrow="Selected Task" title={task.title} />
-      <div className="space-y-2 text-[13px] text-studio-300">
-        <p>{task.description}</p>
-        <SmallStat label="Project" value={projectTitle(task.projectId)} />
-        <SmallStat label="Assigned To" value={userName(task.assignedToId)} />
-        <SmallStat label="Due" value={task.dueDate} />
-        <div className="flex flex-wrap gap-2">
-          <Badge value={task.priority} />
-          <Badge value={task.status} />
-          <Badge value={task.targetType} />
-        </div>
-      </div>
-    </Panel>
+    <label className="grid gap-1">
+      <span className="sr-only">{label}</span>
+      <select
+        className={cn("status-badge rounded border px-2 py-1 font-display text-[11px] uppercase outline-none transition focus:border-amberline/60", badgeStyles[tone].solid)}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {options.map((option) => <option key={option} value={option}>{badgeLabel(option)}</option>)}
+      </select>
+    </label>
+  );
+}
+
+function CompactTaskRows({ tasks }: { tasks: HammerTask[] }) {
+  return (
+    <div className="grid gap-1.5">
+      {tasks.map((task) => (
+        <Link
+          key={task.id}
+          href={`/tasks?task=${encodeURIComponent(task.id)}`}
+          className="grid gap-2 rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-2 transition hover:border-amberline/35 hover:bg-white/[0.055] md:grid-cols-[1fr_96px_92px_82px]"
+        >
+          <div className="min-w-0">
+            <p className="truncate text-[13px] font-semibold text-studio-100">{task.title}</p>
+            <p className="truncate text-[11px] text-studio-400">{userName(task.assignedToId)} / due {task.dueDate}</p>
+          </div>
+          <Badge value={task.priority} subtle />
+          <Badge value={task.status} subtle />
+          <span className="hidden self-center text-[11px] text-studio-400 md:block">{statusLabel(task.targetType)}</span>
+        </Link>
+      ))}
+    </div>
   );
 }
 
@@ -1637,10 +2598,10 @@ function ProjectMeta({ label, value }: { label: string; value: string }) {
 function Badge({ value, subtle = false }: { value: string; subtle?: boolean }) {
   const tone = toneForStatus(value);
   const styles = badgeStyles[tone];
-  return <span className={cn("inline-flex rounded border px-2 py-1 font-display text-[11px] uppercase", subtle ? styles.subtle : styles.solid)}>{statusLabel(value)}</span>;
+  return <span className={cn("status-badge inline-flex rounded border px-2 py-1 font-display text-[11px] uppercase", subtle ? styles.subtle : styles.solid)}>{badgeLabel(value)}</span>;
 }
 
-type BadgeTone = "green" | "yellow" | "red" | "blue" | "purple" | "neutral";
+type BadgeTone = "green" | "yellow" | "red" | "darkred" | "blue" | "purple" | "neutral";
 
 const badgeStyles: Record<BadgeTone, { solid: string; subtle: string }> = {
   green: {
@@ -1654,6 +2615,10 @@ const badgeStyles: Record<BadgeTone, { solid: string; subtle: string }> = {
   red: {
     solid: "border-rose-400/40 bg-rose-500/10 text-rose-200",
     subtle: "border-rose-400/25 bg-rose-500/5 text-rose-300"
+  },
+  darkred: {
+    solid: "border-red-700/50 bg-red-950/35 text-red-200",
+    subtle: "border-red-700/35 bg-red-950/20 text-red-300"
   },
   blue: {
     solid: "border-sky-400/35 bg-sky-400/10 text-sky-200",
@@ -1671,12 +2636,26 @@ const badgeStyles: Record<BadgeTone, { solid: string; subtle: string }> = {
 
 function toneForStatus(value: string): BadgeTone {
   const key = value.toUpperCase();
-  if (["GREENLIGHT", "GREENLIGHT_REVIEW", "APPROVED", "DONE", "LOCKED", "CONSIDER", "PROJECT_LINKED"].includes(key)) return "green";
-  if (["REVIEW", "IN_REVIEW", "INTERNAL_REVIEW", "REQUESTED", "IN_PROGRESS", "REVISION_REQUESTED", "CHANGES_REQUESTED", "MEDIUM", "READING", "COVERAGE_REQUESTED", "COVERAGE_COMPLETE"].includes(key)) return "yellow";
-  if (["ON_HOLD", "ARCHIVED", "PASSED", "PASS", "BLOCKED", "REJECTED", "CANCELLED", "URGENT", "REVISION_REQUESTED"].includes(key)) return "red";
+  if (["URGENT"].includes(key)) return "darkred";
+  if (["GREENLIGHT", "GREENLIGHT_REVIEW", "APPROVED", "DONE", "LOCKED", "CONSIDER", "PROJECT_LINKED", "IN_PROGRESS"].includes(key)) return "green";
+  if (["REVIEW", "IN_REVIEW", "INTERNAL_REVIEW", "REQUESTED", "REVISION_REQUESTED", "CHANGES_REQUESTED", "MEDIUM", "READING", "COVERAGE_REQUESTED", "COVERAGE_COMPLETE"].includes(key)) return "yellow";
+  if (["ON_HOLD", "ARCHIVED", "PASSED", "PASS", "BLOCKED", "REJECTED", "CANCELLED", "HIGH", "REVISION_REQUESTED"].includes(key)) return "red";
   if (["SCRIPT", "DEVELOPMENT", "DRAFT", "OUTLINE", "TODO", "LOW", "UPLOADED", "TREATMENT", "RECEIVED", "LOGGED"].includes(key)) return "blue";
   if (["VISDEV", "VISUAL_DEVELOPMENT", "LOOKBOOK", "PACKAGING", "KEYFRAME", "STORYBOARD", "ARTIST", "EXECUTIVE", "PRODUCER", "ADMIN"].includes(key)) return "purple";
   return "neutral";
+}
+
+function badgeLabel(value: string) {
+  if (["TODO", "IN_PROGRESS", "DONE", "ON_HOLD", "REVIEW"].includes(value.toUpperCase())) return taskStatusLabel(value as TaskStatus);
+  return statusLabel(value);
+}
+
+function taskStatusLabel(status: TaskStatus) {
+  if (status === "TODO") return "To Do";
+  if (status === "IN_PROGRESS") return "In Progress";
+  if (status === "DONE") return "Complete";
+  if (status === "ON_HOLD") return "On Hold";
+  return statusLabel(status);
 }
 
 function TableLink({ href, children }: { href: string; children: React.ReactNode }) {
@@ -1727,13 +2706,19 @@ function canViewAllProjects(role?: string) {
   return role === "ADMIN" || role === "EXECUTIVE";
 }
 
-function canAccessScriptDocument(role: string | undefined, document: HammerDocument, activeProjectId: string) {
-  if (canManageScriptLibrary(role)) return true;
-  return Boolean(document.projectId && document.projectId === activeProjectId);
+function canAccessScriptDocument(user: ReturnType<typeof hammerUserByEmail>, document: HammerDocument) {
+  if (canManageScriptLibrary(user.role)) return true;
+  if (!document.projectId) return false;
+  return assignedProjectsForUser(user.id).some((project) => project.id === document.projectId);
 }
 
 function canViewContacts(role?: string) {
   return role === "ADMIN" || role === "PRODUCER" || role === "EXECUTIVE";
+}
+
+function normalizeScriptSection(section?: string): ScriptLibrarySection | undefined {
+  if (section === "inbox" || section === "projects" || section === "all") return section;
+  return undefined;
 }
 
 function projectTitleFromList(projectId: string, projects: HammerProject[]) {
@@ -1862,11 +2847,106 @@ function inferFileType(fileName: string) {
   return "text/plain";
 }
 
+function fileToDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("Could not read image file."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function defaultDueDate() {
+  const date = new Date();
+  date.setDate(date.getDate() + 7);
+  return date.toISOString().slice(0, 10);
+}
+
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${Math.round((bytes / 1024 / 1024) * 10) / 10} MB`;
 }
+
+function referenceToneClass(tone: ProjectReferenceImage["demoTone"] = "steel") {
+  const tones: Record<NonNullable<ProjectReferenceImage["demoTone"]>, string> = {
+    steel: "bg-[linear-gradient(135deg,#1f2937,#64748b_55%,#111827)]",
+    neon: "bg-[linear-gradient(135deg,#0f172a,#155e75_48%,#7c2d12)]",
+    forest: "bg-[linear-gradient(135deg,#10231b,#2f6f54_52%,#0f172a)]",
+    gold: "bg-[linear-gradient(135deg,#3b2f1f,#b45309_54%,#111827)]",
+    ice: "bg-[linear-gradient(135deg,#172554,#0891b2_52%,#e0f2fe)]"
+  };
+  return tones[tone];
+}
+
+const demoReferenceImages: ProjectReferenceImage[] = [
+  {
+    id: "demo-ref-hammer-quarry",
+    projectId: "project-hammer",
+    title: "Quarry Road Night",
+    description: "Wet industrial road, convoy headlights, practical sodium vapor mood for the opening sequence.",
+    category: "ENVIRONMENT_REFERENCE",
+    status: "APPROVED",
+    fileName: "demo-quarry-road.jpg",
+    demoTone: "steel",
+    uploadedAt: "Demo"
+  },
+  {
+    id: "demo-ref-hammer-case",
+    projectId: "project-hammer",
+    title: "Prototype Case Language",
+    description: "Hard-shell utility case with magnetic latch details and scuffed field texture.",
+    category: "PROP_REFERENCE",
+    status: "APPROVED",
+    fileName: "demo-prototype-case.png",
+    demoTone: "gold",
+    uploadedAt: "Demo"
+  },
+  {
+    id: "demo-ref-hammer-rooftop",
+    projectId: "project-hammer",
+    title: "Rooftop Handoff Mood",
+    description: "Municipal rooftop, rain sheen, billboard spill, and zipline silhouette notes.",
+    category: "MOOD_IMAGE",
+    status: "IN_REVIEW",
+    fileName: "demo-rooftop-mood.jpg",
+    demoTone: "neon",
+    uploadedAt: "Demo"
+  },
+  {
+    id: "demo-ref-orchid-corridor",
+    projectId: "project-orchid",
+    title: "Habitat Corridor",
+    description: "Biolab corridor with emergency amber strips and soft condensation on glass.",
+    category: "ENVIRONMENT_REFERENCE",
+    status: "UPLOADED",
+    fileName: "demo-orchid-corridor.jpg",
+    demoTone: "ice",
+    uploadedAt: "Demo"
+  },
+  {
+    id: "demo-ref-orchid-greenhouse",
+    projectId: "project-orchid",
+    title: "Overgrown Module",
+    description: "Dormant station garden coming back online with plant silhouettes and broken grow lights.",
+    category: "MOOD_IMAGE",
+    status: "IN_REVIEW",
+    fileName: "demo-orchid-greenhouse.jpg",
+    demoTone: "forest",
+    uploadedAt: "Demo"
+  },
+  {
+    id: "demo-ref-northstar-observatory",
+    projectId: "project-northstar",
+    title: "Family Observatory",
+    description: "Warm repaired telescope room with child-built star charts and handmade mechanisms.",
+    category: "LOOKBOOK_PAGE",
+    status: "UPLOADED",
+    fileName: "demo-northstar-observatory.jpg",
+    demoTone: "gold",
+    uploadedAt: "Demo"
+  }
+];
 
 function titleForView(view: HammerView, context: { project: HammerProject; document: typeof hammerDocuments[number]; asset: typeof hammerAssets[number] }) {
   const titles: Record<HammerView, string> = {
@@ -1977,6 +3057,6 @@ function backHrefForView(view: HammerView, context: { project: HammerProject; do
 }
 
 function scopedProjectTitle(view: HammerView, activeProject: HammerProject) {
-  if (["assets", "tasks", "reviews"].includes(view)) return activeProject.title;
+  if (["assets", "reviews"].includes(view)) return activeProject.title;
   return null;
 }

@@ -43,15 +43,15 @@ const approvalStyles: Record<ApprovalState, string> = {
 };
 
 export function StatusBadge({ status }: { status: Status }) {
-  return <span className={cn("inline-flex rounded border px-2 py-1 font-display text-[11px] uppercase", statusStyles[status])}>{status.replace("-", " ")}</span>;
+  return <span className={cn("status-badge inline-flex rounded border px-2 py-1 font-display text-[11px] uppercase", statusStyles[status])}>{status.replace("-", " ")}</span>;
 }
 
 export function RiskBadge({ level }: { level: RiskLevel }) {
-  return <span className={cn("inline-flex rounded border px-2 py-1 font-display text-[11px] uppercase", riskStyles[level])}>{level}</span>;
+  return <span className={cn("status-badge inline-flex rounded border px-2 py-1 font-display text-[11px] uppercase", riskStyles[level])}>{level}</span>;
 }
 
 export function ApprovalBadge({ state }: { state: ApprovalState }) {
-  return <span className={cn("inline-flex rounded border px-2 py-1 font-display text-[11px] uppercase", approvalStyles[state])}>{state.replace("-", " ")}</span>;
+  return <span className={cn("status-badge inline-flex rounded border px-2 py-1 font-display text-[11px] uppercase", approvalStyles[state])}>{state.replace("-", " ")}</span>;
 }
 
 export function ProgressBar({ value, tone = "signal" }: { value: number; tone?: "signal" | "amber" | "ember" }) {

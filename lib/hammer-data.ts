@@ -7,7 +7,7 @@ export type EntityType = "CHARACTER" | "LOCATION" | "PROP" | "VEHICLE" | "ACTION
 export type AssetType = "CHARACTER_REFERENCE" | "ENVIRONMENT_REFERENCE" | "PROP_REFERENCE" | "MOOD_IMAGE" | "KEYFRAME" | "LOOKBOOK_PAGE" | "STORYBOARD" | "ANIMATIC" | "OTHER";
 export type AssetStatus = "UPLOADED" | "IN_REVIEW" | "REVISION_REQUESTED" | "APPROVED" | "ARCHIVED";
 export type ApprovalStatus = "REQUESTED" | "APPROVED" | "REJECTED" | "CHANGES_REQUESTED" | "CANCELLED";
-export type TaskStatus = "TODO" | "IN_PROGRESS" | "BLOCKED" | "REVIEW" | "DONE" | "ARCHIVED";
+export type TaskStatus = "TODO" | "IN_PROGRESS" | "ON_HOLD" | "BLOCKED" | "REVIEW" | "DONE" | "ARCHIVED";
 export type TaskPriority = "LOW" | "MEDIUM" | "HIGH" | "URGENT";
 export type ContactType = "WRITER" | "PRODUCER" | "ARTIST" | "EXECUTIVE" | "AGENCY" | "MANAGEMENT" | "LEGAL" | "VENDOR" | "OTHER";
 
@@ -16,11 +16,18 @@ export const HAMMER_ACTIVE_PROJECT_EVENT = "hammer-os-active-project-changed";
 export const HAMMER_DEMO_USER_STORAGE_KEY = "hammer-os-demo-user-email";
 export const HAMMER_DEMO_USER_EVENT = "hammer-os-demo-user-changed";
 export const HAMMER_LOCAL_DOCUMENTS_STORAGE_KEY = "hammer-os-local-documents";
+export const HAMMER_LOCAL_DOCUMENTS_EVENT = "hammer-os-local-documents-changed";
 export const HAMMER_LOCAL_VERSIONS_STORAGE_KEY = "hammer-os-local-document-versions";
 export const HAMMER_LOCAL_PROJECTS_STORAGE_KEY = "hammer-os-local-projects";
 export const HAMMER_LOCAL_PROJECTS_EVENT = "hammer-os-local-projects-changed";
 export const HAMMER_LOCAL_CONTACTS_STORAGE_KEY = "hammer-os-local-contacts";
 export const HAMMER_LOCAL_VERSION_STATUS_STORAGE_KEY = "hammer-os-local-version-statuses";
+export const HAMMER_DOCUMENT_PROJECT_OVERRIDES_STORAGE_KEY = "hammer:document-project-overrides";
+export const HAMMER_LOCAL_USER_STATES_STORAGE_KEY = "hammer-os-local-user-states";
+export const HAMMER_LOCAL_USER_STATES_EVENT = "hammer-os-local-user-states-changed";
+export const HAMMER_LOCAL_TASKS_STORAGE_KEY = "hammer-os-local-tasks";
+export const HAMMER_LOCAL_TASKS_EVENT = "hammer-os-local-tasks-changed";
+export const HAMMER_LOCAL_TASK_UPDATES_STORAGE_KEY = "hammer-os-local-task-updates";
 
 export interface HammerUser {
   id: string;
