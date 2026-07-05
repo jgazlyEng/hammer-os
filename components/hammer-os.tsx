@@ -1719,7 +1719,6 @@ function DocumentRows({
                       <button type="button" disabled={!selectedProjectId || selectedProjectId === doc.projectId} onClick={() => selectedProjectId && onAssignToProject?.(doc.id, selectedProjectId)} className="rounded border border-emerald-400/25 bg-emerald-400/5 px-1.5 py-1 text-[11px] font-semibold text-emerald-300 hover:border-emerald-300/50 hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-40">{moveLabel}</button>
                     </span>
                   ) : null}
-                  {onDelete && doc.id.startsWith("doc-local-") ? <DangerButton label="Delete" onClick={() => onDelete(doc.id)} /> : null}
                 </td>
               </tr>
             );
