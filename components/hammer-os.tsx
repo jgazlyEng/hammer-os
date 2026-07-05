@@ -48,6 +48,7 @@ import {
   type HammerTask,
   type TaskPriority,
   type TaskStatus,
+  type HammerApproval,
   type HammerProjectStatus,
   type HammerProject,
   type HammerUser,
@@ -77,6 +78,19 @@ interface SessionUser {
   email: string;
   name: string;
   appRole?: string;
+}
+
+interface HammerWorkspacePayload {
+  mode?: "database" | "demo";
+  projects?: HammerProject[];
+  documents?: HammerDocument[];
+  versions?: HammerDocumentVersion[];
+  supportingDocuments?: SupportingDocument[];
+  assets?: HammerAsset[];
+  tasks?: HammerTask[];
+  contacts?: HammerContact[];
+  users?: HammerUser[];
+  approvals?: HammerApproval[];
 }
 
 interface ProjectDraft {
@@ -131,6 +145,11 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   const router = useRouter();
   const [projects, setProjects] = useState(hammerProjects);
   const [localProjects, setLocalProjects] = useState<HammerProject[]>([]);
+  const [workspaceMode, setWorkspaceMode] = useState<"demo" | "database">("demo");
+  const [workspaceUsers, setWorkspaceUsers] = useState<HammerUser[]>([]);
+  const [workspaceAssets, setWorkspaceAssets] = useState<HammerAsset[]>([]);
+  const [workspaceContacts, setWorkspaceContacts] = useState<HammerContact[]>([]);
+  const [workspaceApprovals, setWorkspaceApprovals] = useState<HammerApproval[]>([]);
   const [query, setQuery] = useState("");
   const [sessionUser, setSessionUser] = useState<SessionUser | null>(null);
   const [sessionLoaded, setSessionLoaded] = useState(false);
@@ -143,28 +162,73 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   const [localReferenceImages, setLocalReferenceImages] = useState<ProjectReferenceImage[]>([]);
   const [localTasks, setLocalTasks] = useState<HammerTask[]>([]);
   const [taskUpdates, setTaskUpdates] = useState<Record<string, Partial<Pick<HammerTask, "priority" | "status">>>>({});
-  const documents = useMemo(() => [...hammerDocuments, ...localDocuments].map((document) => (
+  const documents = useMemo(() => (workspaceMode === "database" ? localDocuments : [...hammerDocuments, ...localDocuments]).map((document) => (
     Object.prototype.hasOwnProperty.call(documentProjectOverrides, document.id)
       ? { ...document, projectId: documentProjectOverrides[document.id] ?? undefined }
       : document
-  )), [documentProjectOverrides, localDocuments]);
-  const versions = useMemo(() => [...hammerVersions, ...localVersions].map((version) => versionStatuses[version.id] ? { ...version, status: versionStatuses[version.id] } : version), [localVersions, versionStatuses]);
-  const tasks = useMemo(() => [...localTasks, ...hammerTasks].map((task) => ({ ...task, ...taskUpdates[task.id] })), [localTasks, taskUpdates]);
+  )), [documentProjectOverrides, localDocuments, workspaceMode]);
+  const versions = useMemo(() => (workspaceMode === "database" ? localVersions : [...hammerVersions, ...localVersions]).map((version) => versionStatuses[version.id] ? { ...version, status: versionStatuses[version.id] } : version), [localVersions, versionStatuses, workspaceMode]);
+  const tasks = useMemo(() => (workspaceMode === "database" ? localTasks : [...localTasks, ...hammerTasks]).map((task) => ({ ...task, ...taskUpdates[task.id] })), [localTasks, taskUpdates, workspaceMode]);
+  const users = workspaceMode === "database" && workspaceUsers.length ? workspaceUsers : hammerUsers;
+  const assets = workspaceMode === "database" ? workspaceAssets : hammerAssets;
+  const contacts = workspaceMode === "database" ? workspaceContacts : hammerContacts;
+  const approvals = workspaceMode === "database" ? workspaceApprovals : hammerApprovals;
   const project = projects.find((item) => item.id === id) ?? projects[0];
   const document = documents.find((item) => item.id === id) ?? documents[0];
-  const asset = hammerAssets.find((item) => item.id === id) ?? hammerAssets[0];
+  const asset = assets.find((item) => item.id === id) ?? assets[0] ?? hammerAssets[0];
   const activeProject = projects.find((item) => item.id === activeProjectId) ?? projects[0];
   const filteredProjects = projects.filter((item) => `${item.title} ${item.genre} ${item.status}`.toLowerCase().includes(query.toLowerCase()));
-  const currentUser = hammerUserByEmail(sessionUser?.email);
+  const currentUser = users.find((user) => user.email.toLowerCase() === sessionUser?.email?.toLowerCase()) ?? hammerUserByEmail(sessionUser?.email);
+
+  async function loadDatabaseWorkspace() {
+    const response = await fetch("/api/hammer/workspace", { cache: "no-store" });
+    if (!response.ok) throw new Error("Workspace load failed.");
+    const data = await response.json() as HammerWorkspacePayload;
+    if (data.mode !== "database") return;
+    setWorkspaceMode("database");
+    setProjects(data.projects ?? []);
+    setLocalProjects([]);
+    setLocalDocuments(data.documents ?? []);
+    setLocalVersions(data.versions ?? []);
+    setSupportingDocuments(data.supportingDocuments ?? []);
+    setWorkspaceAssets(data.assets ?? []);
+    setLocalReferenceImages([]);
+    setLocalTasks(data.tasks ?? []);
+    setWorkspaceContacts(data.contacts ?? []);
+    setWorkspaceUsers(data.users ?? []);
+    setWorkspaceApprovals(data.approvals ?? []);
+    setVersionStatuses({});
+    setDocumentProjectOverrides({});
+    setTaskUpdates({});
+  }
+
+  async function runWorkspaceAction(action: string, payload: Record<string, unknown>) {
+    if (workspaceMode !== "database") return null;
+    const response = await fetch("/api/hammer/workspace", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, ...payload })
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => null) as { error?: string } | null;
+      throw new Error(data?.error ?? "Database update failed.");
+    }
+    const data = await response.json();
+    await loadDatabaseWorkspace();
+    return data;
+  }
 
   useEffect(() => {
     async function loadSession() {
       try {
         const response = await fetch("/api/auth/session", { cache: "no-store" });
         const data = await response.json();
+        const mode = data.mode === "database" ? "database" : "demo";
+        setWorkspaceMode(mode);
         const storedDemoEmail = data.mode === "database" ? null : window.localStorage.getItem(HAMMER_DEMO_USER_STORAGE_KEY);
         const storedDemoUser = hammerUsers.find((item) => item.email === storedDemoEmail);
         setSessionUser(storedDemoUser ? toSessionUser(storedDemoUser) : data.user ?? data.demoUser ?? null);
+        if (mode === "database") await loadDatabaseWorkspace();
       } catch {
         setSessionUser(null);
       } finally {
@@ -258,7 +322,11 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     };
   }, [projects]);
 
-  function addProject(draft?: Partial<ProjectDraft>) {
+  async function addProject(draft?: Partial<ProjectDraft>) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("createProject", draft as Record<string, unknown> ?? {});
+      return;
+    }
     const next: HammerProject = {
       id: `project-${Date.now()}`,
       title: draft?.title?.trim() || "Untitled Studio Project",
@@ -287,6 +355,22 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     notes: string;
   }) {
     const extractedText = await extractTextFromUpload(input.file);
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("uploadDocumentVersion", {
+        projectId: input.projectId,
+        documentId: input.documentId,
+        title: input.title,
+        type: input.type,
+        writerName: input.writerName,
+        fileName: input.file.name,
+        fileType: input.file.type || inferFileType(input.file.name),
+        fileSize: input.file.size,
+        storagePath: `local://${input.projectId ?? "inbox"}/documents/${input.documentId ?? "new"}/versions/${Date.now()}/${input.file.name}`,
+        notes: input.notes,
+        extractedText
+      });
+      return;
+    }
     const existingDocument = input.documentId ? documents.find((item) => item.id === input.documentId) : undefined;
     const documentId = existingDocument?.id ?? `doc-local-${Date.now()}`;
     const existingVersions = versions.filter((version) => version.documentId === documentId);
@@ -331,7 +415,11 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_DOCUMENTS_EVENT));
   }
 
-  function updateDocumentStatus(versionId: string, status: ScriptStatus) {
+  async function updateDocumentStatus(versionId: string, status: ScriptStatus) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("updateDocumentStatus", { versionId, status });
+      return;
+    }
     setVersionStatuses((current) => {
       const next = { ...current, [versionId]: status };
       window.localStorage.setItem(HAMMER_LOCAL_VERSION_STATUS_STORAGE_KEY, JSON.stringify(next));
@@ -347,6 +435,22 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     file: File;
   }) {
     const extractedText = await extractTextFromUpload(input.file);
+    const scriptDocument = documents.find((document) => document.id === input.scriptDocumentId);
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("uploadSupportingDocument", {
+        scriptDocumentId: input.scriptDocumentId,
+        projectId: scriptDocument?.projectId,
+        title: input.title,
+        type: input.type,
+        notes: input.notes,
+        fileName: input.file.name,
+        fileType: input.file.type || inferFileType(input.file.name),
+        fileSize: input.file.size,
+        storagePath: `local://supporting/${input.scriptDocumentId}/${Date.now()}/${input.file.name}`,
+        extractedText
+      });
+      return;
+    }
     const now = new Date().toISOString().slice(0, 10);
     const id = `supporting-local-${Date.now()}`;
     const nextDocument: SupportingDocument = {
@@ -368,7 +472,11 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     window.localStorage.setItem(HAMMER_SUPPORTING_DOCUMENTS_STORAGE_KEY, JSON.stringify(nextSupportingDocuments));
   }
 
-  function deleteSupportingDocument(documentId: string) {
+  async function deleteSupportingDocument(documentId: string) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("deleteSupportingDocument", { documentId });
+      return;
+    }
     const nextSupportingDocuments = supportingDocuments.filter((document) => document.id !== documentId);
     setSupportingDocuments(nextSupportingDocuments);
     window.localStorage.setItem(HAMMER_SUPPORTING_DOCUMENTS_STORAGE_KEY, JSON.stringify(nextSupportingDocuments));
@@ -383,6 +491,20 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   }) {
     if (!input.file.type.startsWith("image/")) throw new Error("Upload an image file for project reference.");
     const imageUrl = await fileToDataUrl(input.file);
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("uploadReferenceImage", {
+        projectId: input.projectId,
+        title: input.title,
+        description: input.description,
+        category: input.category,
+        fileName: input.file.name,
+        fileType: input.file.type || inferFileType(input.file.name),
+        fileSize: input.file.size,
+        storagePath: `local://references/${input.projectId}/${Date.now()}/${input.file.name}`,
+        dataUrl: imageUrl
+      });
+      return;
+    }
     const now = new Date().toISOString().slice(0, 10);
     const nextImage: ProjectReferenceImage = {
       id: `reference-local-${Date.now()}`,
@@ -400,7 +522,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     window.localStorage.setItem(HAMMER_REFERENCE_IMAGES_STORAGE_KEY, JSON.stringify(nextImages));
   }
 
-  function createTask(input: {
+  async function createTask(input: {
     projectId: string;
     title: string;
     description: string;
@@ -411,6 +533,10 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     targetType: string;
     targetId: string;
   }) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("createTask", input as unknown as Record<string, unknown>);
+      return;
+    }
     const nextTask: HammerTask = {
       id: `task-local-${Date.now()}`,
       projectId: input.projectId,
@@ -430,7 +556,11 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_TASKS_EVENT));
   }
 
-  function updateTask(taskId: string, patch: Partial<Pick<HammerTask, "priority" | "status">>) {
+  async function updateTask(taskId: string, patch: Partial<Pick<HammerTask, "priority" | "status">>) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("updateTask", { taskId, ...patch });
+      return;
+    }
     setTaskUpdates((current) => {
       const next = { ...current, [taskId]: { ...current[taskId], ...patch } };
       window.localStorage.setItem(HAMMER_LOCAL_TASK_UPDATES_STORAGE_KEY, JSON.stringify(next));
@@ -439,7 +569,11 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     });
   }
 
-  function assignDocumentToProject(documentId: string, projectId: string) {
+  async function assignDocumentToProject(documentId: string, projectId: string) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("assignDocumentToProject", { documentId, projectId });
+      return;
+    }
     setDocumentProjectOverrides((current) => {
       const next = { ...current, [documentId]: projectId };
       window.localStorage.setItem(HAMMER_DOCUMENT_PROJECT_OVERRIDES_STORAGE_KEY, JSON.stringify(next));
@@ -448,7 +582,12 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     });
   }
 
-  function deleteUploadedDocument(documentId: string) {
+  async function deleteUploadedDocument(documentId: string) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("deleteDocument", { documentId });
+      if (documentId === id) router.push("/scripts");
+      return;
+    }
     if (!localDocuments.some((document) => document.id === documentId)) return;
     const nextDocuments = localDocuments.filter((document) => document.id !== documentId);
     const nextVersions = localVersions.filter((version) => version.documentId !== documentId);
@@ -479,28 +618,28 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     if (scriptAccessDenied) {
       return <AccessDenied title="Script access required" detail="You can only open scripts attached to your active project. Producers, executives, and admins can access the full script library." />;
     }
-    if (view === "dashboard") return <Dashboard currentUser={currentUser} projects={projects} documents={documents} versions={versions} />;
+    if (view === "dashboard") return <Dashboard currentUser={currentUser} projects={projects} documents={documents} versions={versions} approvals={approvals} />;
     if (view === "projects") return <Projects projects={filteredProjects} />;
     if (view === "project-new") return <ProjectCreationMoved />;
-    if (view === "project-detail") return <ProjectWorkspace project={project} activeTab="overview" currentUser={currentUser} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
-    if (view === "project-documents") return <ProjectWorkspace project={project} activeTab="documents" currentUser={currentUser} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
-    if (view === "project-assets") return <ProjectWorkspace project={project} activeTab="assets" currentUser={currentUser} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
+    if (view === "project-detail") return <ProjectWorkspace project={project} activeTab="overview" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
+    if (view === "project-documents") return <ProjectWorkspace project={project} activeTab="documents" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
+    if (view === "project-assets") return <ProjectWorkspace project={project} activeTab="assets" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
     if (view === "scripts") return <Scripts activeProjectId={activeProject.id} currentUser={currentUser} projects={projects} documents={documents} versions={versions} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} repositoryMode selectedSection={normalizeScriptSection(scriptSection)} />;
     if (view === "script-detail") return <ScriptDetail documentId={document.id} documents={documents} versions={versions} supportingDocuments={supportingDocuments} onUpload={uploadDocumentVersion} onSupportingUpload={uploadSupportingDocument} onSupportingDelete={deleteSupportingDocument} onStatusChange={updateDocumentStatus} onDelete={deleteUploadedDocument} />;
     if (view === "script-versions") return <ScriptVersions documentId={document.id} versions={versions} document={document} onUpload={uploadDocumentVersion} />;
     if (view === "script-diff") return <ScriptDiff documentId={document.id} versions={versions} />;
     if (view === "script-breakdown") return <ScriptBreakdown documentId={document.id} documents={documents} versions={versions} />;
-    if (view === "assets") return <Assets projectId={activeProject.id} />;
-    if (view === "asset-detail") return <AssetDetail assetId={asset.id} />;
-    if (view === "tasks") return <Tasks selectedTaskId={selectedTaskId} currentUser={currentUser} tasks={tasks} projects={projects} onCreateTask={createTask} onUpdateTask={updateTask} />;
+    if (view === "assets") return <Assets projectId={activeProject.id} assets={assets} />;
+    if (view === "asset-detail") return <AssetDetail assetId={asset.id} assets={assets} />;
+    if (view === "tasks") return <Tasks selectedTaskId={selectedTaskId} currentUser={currentUser} users={users} tasks={tasks} projects={projects} onCreateTask={createTask} onUpdateTask={updateTask} />;
     if (view === "contacts") {
       if (!canViewContacts(currentUser.role)) return <AccessDenied title="Contacts access required" detail="Only admins, producers, and executives can view the studio contact directory." />;
-      return <Contacts />;
+      return <Contacts initialContacts={contacts} databaseMode={workspaceMode === "database"} onDatabaseImport={(importedContacts) => runWorkspaceAction("importContacts", { contacts: importedContacts })} />;
     }
     if (view === "reviews") return <LegacyRedirect title="Reviews are folded into Scripts" detail="Review work now starts from scripts awaiting review, so the queue is easier to follow." href="/scripts?section=inbox" label="Open Scripts" />;
     if (view === "executive") {
       if (currentUser.role !== "EXECUTIVE") return <AccessDenied title="Executive access required" detail="The executive dashboard is limited to users with the Executive role." />;
-      return <Executive projects={projects} documents={documents} versions={versions} tasks={tasks} />;
+      return <Executive projects={projects} documents={documents} versions={versions} tasks={tasks} assets={assets} approvals={approvals} />;
     }
     if (currentUser.role !== "ADMIN") return <AccessDenied title="Admin access required" detail="Only admins can manage projects, users, roles, and project access." />;
     return <AdminUsers projects={projects} currentUser={currentUser} onCreateProject={addProject} onStatusChange={updateProjectStatus} />;
@@ -538,24 +677,26 @@ function Dashboard({
   currentUser,
   projects,
   documents,
-  versions
+  versions,
+  approvals = hammerApprovals
 }: {
   currentUser: ReturnType<typeof hammerUserByEmail>;
   projects: HammerProject[];
   documents: HammerDocument[];
   versions: HammerDocumentVersion[];
+  approvals?: HammerApproval[];
 }) {
   const canSeeLibrary = canManageScriptLibrary(currentUser.role);
   const assignedProjectIds = new Set(assignedProjectsForUser(currentUser.id).map((project) => project.id));
   const visibleDocuments = documents.filter((document) => canSeeLibrary || !document.projectId || assignedProjectIds.has(document.projectId));
-  const reviewApprovals = hammerApprovals.filter((approval) => approval.targetType === "DOCUMENT_VERSION" && approval.status === "REQUESTED");
+  const reviewApprovals = approvals.filter((approval) => approval.targetType === "DOCUMENT_VERSION" && approval.status === "REQUESTED");
   const reviewItems = reviewApprovals
     .map((approval) => {
       const version = versions.find((item) => item.id === approval.targetId);
       const document = version ? visibleDocuments.find((item) => item.id === version.documentId) : undefined;
       return document && version ? { approval, document, version } : null;
     })
-    .filter(Boolean) as Array<{ approval: typeof hammerApprovals[number]; document: HammerDocument; version: HammerDocumentVersion }>;
+    .filter(Boolean) as Array<{ approval: HammerApproval; document: HammerDocument; version: HammerDocumentVersion }>;
   const incomingScripts = visibleDocuments
     .filter((document) => !document.projectId)
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -721,12 +862,15 @@ function ProjectWorkspace({
   project,
   activeTab,
   currentUser,
+  users = hammerUsers,
   projects = hammerProjects,
   tasks = hammerTasks,
   documents = hammerDocuments,
   versions = hammerVersions,
   supportingDocuments = [],
   referenceImages = [],
+  assets = hammerAssets,
+  approvals = hammerApprovals,
   onUpload,
   onDelete,
   onAssignToProject,
@@ -736,12 +880,15 @@ function ProjectWorkspace({
   project: HammerProject;
   activeTab: ProjectWorkspaceTab;
   currentUser: ReturnType<typeof hammerUserByEmail>;
+  users?: HammerUser[];
   projects?: HammerProject[];
   tasks?: HammerTask[];
   documents?: HammerDocument[];
   versions?: HammerDocumentVersion[];
   supportingDocuments?: SupportingDocument[];
   referenceImages?: ProjectReferenceImage[];
+  assets?: HammerAsset[];
+  approvals?: HammerApproval[];
   onUpload?: (input: DocumentUploadInput) => Promise<void>;
   onDelete?: (documentId: string) => void;
   onAssignToProject?: (documentId: string, projectId: string) => void;
@@ -752,18 +899,18 @@ function ProjectWorkspace({
   const scriptDocs = docs.filter((doc) => ["SCRIPT", "TREATMENT", "OUTLINE"].includes(doc.type));
   const projectSupportingDocs = supportingDocuments.filter((supportingDocument) => docs.some((doc) => doc.id === supportingDocument.scriptDocumentId));
   const projectTasks = tasks.filter((task) => task.projectId === project.id);
-  const assets = hammerAssets.filter((asset) => asset.projectId === project.id);
+  const projectAssets = assets.filter((asset) => asset.projectId === project.id);
   const projectReferenceImages = [
     ...referenceImages.filter((image) => image.projectId === project.id),
     ...demoReferenceImages.filter((image) => image.projectId === project.id)
   ];
-  const approvals = hammerApprovals.filter((approval) => approval.projectId === project.id);
+  const projectApprovals = approvals.filter((approval) => approval.projectId === project.id);
   const firstScript = docs.find((doc) => doc.type === "SCRIPT") ?? docs[0];
   const latestVersion = firstScript ? currentVersionFor(firstScript.id, documents, versions) : undefined;
   const openTasks = projectTasks.filter((task) => task.status !== "DONE" && task.status !== "ARCHIVED");
   const canViewAllProjectAssignments = canViewAllProjectTasks(currentUser.role);
   const visibleOpenTasks = canViewAllProjectAssignments ? openTasks : openTasks.filter((task) => task.assignedToId === currentUser.id);
-  const pendingReviews = approvals.filter((approval) => approval.status === "REQUESTED" || approval.status === "CHANGES_REQUESTED");
+  const pendingReviews = projectApprovals.filter((approval) => approval.status === "REQUESTED" || approval.status === "CHANGES_REQUESTED");
   const projectIds = new Set([project.id]);
   const tabs = [
     { id: "overview", label: "Overview", href: `/projects/${project.id}` },
@@ -812,7 +959,7 @@ function ProjectWorkspace({
         <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
           <div className="space-y-4">
             <Panel>
-              <SectionHeader eyebrow="Artist Start Here" title="Assignments and Working Brief" action={<div className="flex flex-wrap gap-1.5">{onCreateTask ? <NewAssignmentButton project={project} firstScript={firstScript} onCreateTask={onCreateTask} /> : null}<TableLink href="/tasks">Open tasks</TableLink></div>} />
+              <SectionHeader eyebrow="Artist Start Here" title="Assignments and Working Brief" action={<div className="flex flex-wrap gap-1.5">{onCreateTask ? <NewAssignmentButton project={project} firstScript={firstScript} users={users} onCreateTask={onCreateTask} /> : null}<TableLink href="/tasks">Open tasks</TableLink></div>} />
               <div className="grid gap-3 xl:grid-cols-[0.9fr_1.1fr]">
                 <div className="rounded-md border border-white/10 bg-white/[0.03] p-2.5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
@@ -843,7 +990,7 @@ function ProjectWorkspace({
             </Panel>
             <Panel>
               <SectionHeader eyebrow="Visual Reference" title="Reference Images" action={<TableLink href={`/projects/${project.id}/assets`}>Open reference</TableLink>} />
-              <ReferenceImageGrid images={projectReferenceImages.slice(0, 6)} />
+              <ReferenceImageGrid images={projectReferenceImages.slice(0, 6)} assets={projectAssets.slice(0, 6)} />
             </Panel>
           </div>
           <div className="space-y-4">
@@ -854,7 +1001,7 @@ function ProjectWorkspace({
       ) : null}
 
       {activeTab === "documents" ? <Scripts projectId={project.id} documents={documents} versions={versions} projects={projects} currentUser={currentUser} onUpload={onUpload} onDelete={onDelete} onAssignToProject={canManageScriptLibrary(currentUser.role) ? onAssignToProject : undefined} /> : null}
-      {activeTab === "assets" ? <ProjectReferenceWorkspace project={project} assets={assets} referenceImages={projectReferenceImages} onReferenceUpload={onReferenceUpload} /> : null}
+      {activeTab === "assets" ? <ProjectReferenceWorkspace project={project} assets={projectAssets} referenceImages={projectReferenceImages} onReferenceUpload={onReferenceUpload} /> : null}
     </div>
   );
 }
@@ -901,17 +1048,21 @@ function ProjectSupportingDocs({ docs, supportingDocuments }: { docs: HammerDocu
 function NewAssignmentButton({
   project,
   firstScript,
+  users = hammerUsers,
   onCreateTask
 }: {
   project: HammerProject;
   firstScript?: HammerDocument;
+  users?: HammerUser[];
   onCreateTask: (input: { projectId: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
 }) {
+  const defaultArtistId = users.find((user) => user.role === "ARTIST")?.id ?? users[0]?.id ?? "";
+  const defaultDevelopmentId = users.find((user) => user.role === "DEVELOPMENT")?.id ?? users[0]?.id ?? "";
   const presets = [
-    { label: "Environment Previz", title: "Create environment previz pass", assignee: "user-artist", priority: "HIGH" as TaskPriority, description: "Use the current script, project references, and breakdown notes to create an environment previz pass." },
-    { label: "Character Reference", title: "Create character reference sheet", assignee: "user-artist", priority: "MEDIUM" as TaskPriority, description: "Build visual reference for the assigned character or role based on the current creative packet." },
-    { label: "Coverage Read", title: "Read and summarize project materials", assignee: "user-dev", priority: "MEDIUM" as TaskPriority, description: "Review the script and supporting documents, then add notes for the team." },
-    { label: "Review Breakdown", title: "Review script breakdown", assignee: "user-dev", priority: "HIGH" as TaskPriority, description: "Check scenes, characters, locations, props, and action moments for accuracy." }
+    { label: "Environment Previz", title: "Create environment previz pass", assignee: defaultArtistId, priority: "HIGH" as TaskPriority, description: "Use the current script, project references, and breakdown notes to create an environment previz pass." },
+    { label: "Character Reference", title: "Create character reference sheet", assignee: defaultArtistId, priority: "MEDIUM" as TaskPriority, description: "Build visual reference for the assigned character or role based on the current creative packet." },
+    { label: "Coverage Read", title: "Read and summarize project materials", assignee: defaultDevelopmentId, priority: "MEDIUM" as TaskPriority, description: "Review the script and supporting documents, then add notes for the team." },
+    { label: "Review Breakdown", title: "Review script breakdown", assignee: defaultDevelopmentId, priority: "HIGH" as TaskPriority, description: "Check scenes, characters, locations, props, and action moments for accuracy." }
   ];
   const [open, setOpen] = useState(false);
   const [presetIndex, setPresetIndex] = useState(0);
@@ -963,7 +1114,7 @@ function NewAssignmentButton({
               {presets.map((preset, index) => <option key={preset.label} value={index}>{preset.label}</option>)}
             </select>
             <select className="field" value={assignedToId} onChange={(event) => setAssignedToId(event.target.value)}>
-              {hammerUsers.map((user) => <option key={user.id} value={user.id}>{user.name} / {statusLabel(user.role)}</option>)}
+              {users.map((user) => <option key={user.id} value={user.id}>{user.name} / {statusLabel(user.role)}</option>)}
             </select>
           </div>
           <input className="field" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Task title" />
@@ -1081,6 +1232,7 @@ function ReferenceImageGrid({ images, assets = [] }: { images: ProjectReferenceI
     category: asset.assetType,
     status: asset.status,
     fileName: asset.fileName,
+    imageUrl: asset.imageUrl,
     demoTone: asset.assetType === "PROP_REFERENCE" ? "steel" : "neon",
     uploadedAt: "GCS metadata"
   }));
@@ -2026,21 +2178,21 @@ function describeCharacterDetection(name: string, parsed: ReturnType<typeof pars
   return hasDialogueCue ? "Detected from dialogue cue." : "Detected from character description in action text.";
 }
 
-function Assets({ projectId }: { projectId?: string }) {
-  const assets = hammerAssets.filter((asset) => !projectId || asset.projectId === projectId);
+function Assets({ projectId, assets = hammerAssets }: { projectId?: string; assets?: HammerAsset[] }) {
+  const visibleAssets = assets.filter((asset) => !projectId || asset.projectId === projectId);
   const projectName = projectId ? projectTitle(projectId) : undefined;
   return (
     <Panel>
       <SectionHeader eyebrow={projectName ? `Showing ${projectName}` : "GCS Backed"} title="Assets" action={<PrimaryButton icon={UploadCloud} label="Upload Asset" />} />
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        {assets.length ? assets.map((asset) => <Link key={asset.id} href={`/assets/${asset.id}`} className="rounded-lg border border-white/10 bg-white/[0.03] p-3 transition hover:border-amberline/40"><div className="flex aspect-video items-center justify-center rounded-md bg-studio-950 text-amberline"><PackageCheck className="h-8 w-8" /></div><div className="mt-2.5 flex items-start justify-between gap-3"><div><h3 className="text-[13px] font-semibold text-studio-100">{asset.title}</h3><p className="mt-1 text-xs text-studio-300">{asset.description}</p></div><Badge value={asset.status} /></div><p className="mt-2 text-[11px] text-studio-400">{asset.fileName}</p></Link>) : <div className="md:col-span-2 xl:col-span-3"><EmptyState label={projectName ? `No assets for ${projectName} yet. Upload reference, keyframe, storyboard, or mood art.` : "No assets match this view."} /></div>}
+        {visibleAssets.length ? visibleAssets.map((asset) => <Link key={asset.id} href={`/assets/${asset.id}`} className="rounded-lg border border-white/10 bg-white/[0.03] p-3 transition hover:border-amberline/40"><div className="flex aspect-video items-center justify-center overflow-hidden rounded-md bg-studio-950 text-amberline">{asset.imageUrl ? <img src={asset.imageUrl} alt="" className="h-full w-full object-cover" /> : <PackageCheck className="h-8 w-8" />}</div><div className="mt-2.5 flex items-start justify-between gap-3"><div><h3 className="text-[13px] font-semibold text-studio-100">{asset.title}</h3><p className="mt-1 text-xs text-studio-300">{asset.description}</p></div><Badge value={asset.status} /></div><p className="mt-2 text-[11px] text-studio-400">{asset.fileName}</p></Link>) : <div className="md:col-span-2 xl:col-span-3"><EmptyState label={projectName ? `No assets for ${projectName} yet. Upload reference, keyframe, storyboard, or mood art.` : "No assets match this view."} /></div>}
       </div>
     </Panel>
   );
 }
 
-function AssetDetail({ assetId }: { assetId: string }) {
-  const asset = hammerAssets.find((item) => item.id === assetId) ?? hammerAssets[0];
+function AssetDetail({ assetId, assets = hammerAssets }: { assetId: string; assets?: HammerAsset[] }) {
+  const asset = assets.find((item) => item.id === assetId) ?? hammerAssets[0];
   const links = hammerAssetLinks.filter((link) => link.assetId === asset.id);
   return (
     <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
@@ -2063,6 +2215,7 @@ function Tasks({
   compact = false,
   selectedTaskId,
   currentUser,
+  users = hammerUsers,
   tasks: allTasks = hammerTasks,
   projects = hammerProjects,
   onCreateTask,
@@ -2072,6 +2225,7 @@ function Tasks({
   compact?: boolean;
   selectedTaskId?: string;
   currentUser?: ReturnType<typeof hammerUserByEmail>;
+  users?: HammerUser[];
   tasks?: HammerTask[];
   projects?: HammerProject[];
   onCreateTask?: (input: { projectId: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
@@ -2083,7 +2237,7 @@ function Tasks({
   return (
     <div className="grid gap-4">
       <Panel>
-        <SectionHeader eyebrow={projectName ? `Showing ${projectName}` : "Tracking"} title={compact ? "Tasks" : canViewAllTasks ? "All Tasks" : "My Tasks"} action={onCreateTask ? <NewTaskDialog projects={projects} onCreateTask={onCreateTask} /> : undefined} />
+        <SectionHeader eyebrow={projectName ? `Showing ${projectName}` : "Tracking"} title={compact ? "Tasks" : canViewAllTasks ? "All Tasks" : "My Tasks"} action={onCreateTask ? <NewTaskDialog projects={projects} users={users} onCreateTask={onCreateTask} /> : undefined} />
         {tasks.length ? <TaskRows tasks={tasks} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} onUpdateTask={onUpdateTask} /> : <EmptyState label={projectName ? (canViewAllTasks ? `No tasks for ${projectName}. Create one when there is a next step.` : `No tasks assigned to you for ${projectName}.`) : "No tasks match this view."} />}
       </Panel>
     </div>
@@ -2092,16 +2246,18 @@ function Tasks({
 
 function NewTaskDialog({
   projects,
+  users = hammerUsers,
   onCreateTask
 }: {
   projects: HammerProject[];
+  users?: HammerUser[];
   onCreateTask: (input: { projectId: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [projectId, setProjectId] = useState(projects[0]?.id ?? "");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [assignedToId, setAssignedToId] = useState(hammerUsers[0]?.id ?? "");
+  const [assignedToId, setAssignedToId] = useState(users[0]?.id ?? "");
   const [priority, setPriority] = useState<TaskPriority>("MEDIUM");
   const [status, setStatus] = useState<TaskStatus>("TODO");
 
@@ -2141,7 +2297,7 @@ function NewTaskDialog({
               <textarea className="field min-h-24" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Description of task" />
               <div className="grid gap-3 md:grid-cols-3">
                 <select className="field" value={assignedToId} onChange={(event) => setAssignedToId(event.target.value)}>
-                  {hammerUsers.map((user) => <option key={user.id} value={user.id}>{user.name} / {statusLabel(user.role)}</option>)}
+                  {users.map((user) => <option key={user.id} value={user.id}>{user.name} / {statusLabel(user.role)}</option>)}
                 </select>
                 <select className="field" value={priority} onChange={(event) => setPriority(event.target.value as TaskPriority)}>
                   {(["LOW", "MEDIUM", "HIGH", "URGENT"] as TaskPriority[]).map((item) => <option key={item} value={item}>{statusLabel(item)}</option>)}
@@ -2164,12 +2320,20 @@ function NewTaskDialog({
 
 const contactTypes: ContactType[] = ["WRITER", "PRODUCER", "ARTIST", "EXECUTIVE", "AGENCY", "MANAGEMENT", "LEGAL", "VENDOR", "OTHER"];
 
-function Contacts() {
+function Contacts({
+  initialContacts = hammerContacts,
+  databaseMode = false,
+  onDatabaseImport
+}: {
+  initialContacts?: HammerContact[];
+  databaseMode?: boolean;
+  onDatabaseImport?: (contacts: HammerContact[]) => Promise<unknown>;
+}) {
   const [search, setSearch] = useState("");
   const [type, setType] = useState<ContactType | "ALL">("ALL");
   const [localContacts, setLocalContacts] = useState<HammerContact[]>([]);
   const [importMessage, setImportMessage] = useState("");
-  const contacts = useMemo(() => [...hammerContacts, ...localContacts], [localContacts]);
+  const contacts = useMemo(() => databaseMode ? initialContacts : [...initialContacts, ...localContacts], [databaseMode, initialContacts, localContacts]);
   const filteredContacts = contacts.filter((contact) => {
     const matchesType = type === "ALL" || contact.type === type;
     const haystack = `${contact.name} ${contact.company} ${contact.title} ${contact.email} ${contact.location} ${contact.notes}`.toLowerCase();
@@ -2191,6 +2355,11 @@ function Contacts() {
       const importedContacts = parseContactsCsv(text);
       if (!importedContacts.length) {
         setImportMessage("No contacts found in CSV.");
+        return;
+      }
+      if (databaseMode && onDatabaseImport) {
+        await onDatabaseImport(importedContacts);
+        setImportMessage(`Imported ${importedContacts.length} contact${importedContacts.length === 1 ? "" : "s"} to database.`);
         return;
       }
       const nextContacts = [...localContacts, ...importedContacts];
@@ -2272,25 +2441,29 @@ function Executive({
   projects,
   documents,
   versions,
-  tasks
+  tasks,
+  assets = hammerAssets,
+  approvals = hammerApprovals
 }: {
   projects: HammerProject[];
   documents: HammerDocument[];
   versions: HammerDocumentVersion[];
   tasks: HammerTask[];
+  assets?: HammerAsset[];
+  approvals?: HammerApproval[];
 }) {
-  const briefs = projects.map((project) => buildExecutiveProjectBrief(project, documents, versions, tasks));
+  const briefs = projects.map((project) => buildExecutiveProjectBrief(project, documents, versions, tasks, assets, approvals));
   const decisionReady = briefs.filter((brief) => brief.health === "decision").length;
   const needsAttention = briefs.filter((brief) => brief.health === "attention").length;
   const atRisk = briefs.filter((brief) => brief.health === "risk").length;
   const activeCount = briefs.filter((brief) => !["ARCHIVED", "PASSED"].includes(brief.project.status)).length;
-  const pendingApprovals = hammerApprovals.filter((approval) => approval.status === "REQUESTED" || approval.status === "CHANGES_REQUESTED");
+  const pendingApprovals = approvals.filter((approval) => approval.status === "REQUESTED" || approval.status === "CHANGES_REQUESTED");
   const urgentTasks = tasks.filter((task) => task.priority === "URGENT" || task.status === "BLOCKED" || task.status === "ON_HOLD");
-  const assetsAwaitingApproval = hammerAssets.filter((asset) => asset.status === "IN_REVIEW");
+  const assetsAwaitingApproval = assets.filter((asset) => asset.status === "IN_REVIEW");
   const decisionItems = [
     ...pendingApprovals.map((approval) => {
       const document = documentForApproval(approval, documents, versions);
-      const asset = hammerAssets.find((item) => item.id === approval.targetId);
+      const asset = assets.find((item) => item.id === approval.targetId);
       return {
         id: approval.id,
         label: approval.targetType === "DOCUMENT_VERSION" ? "Script Review" : "Approval",
@@ -2384,12 +2557,12 @@ interface ExecutiveProjectBrief {
   documentCount: number;
   openTasks: HammerTask[];
   urgentTasks: HammerTask[];
-  pendingApprovals: typeof hammerApprovals;
+  pendingApprovals: HammerApproval[];
   reviewAssets: HammerAsset[];
   approvedAssets: HammerAsset[];
 }
 
-function buildExecutiveProjectBrief(project: HammerProject, documents: HammerDocument[], versions: HammerDocumentVersion[], tasks: HammerTask[]): ExecutiveProjectBrief {
+function buildExecutiveProjectBrief(project: HammerProject, documents: HammerDocument[], versions: HammerDocumentVersion[], tasks: HammerTask[], assets: HammerAsset[] = hammerAssets, approvals: HammerApproval[] = hammerApprovals): ExecutiveProjectBrief {
   const projectDocuments = documents.filter((document) => document.projectId === project.id);
   const currentDocument = [...projectDocuments]
     .filter((document) => document.type === "SCRIPT" || document.type === "TREATMENT")
@@ -2398,9 +2571,9 @@ function buildExecutiveProjectBrief(project: HammerProject, documents: HammerDoc
   const projectTasks = tasks.filter((task) => task.projectId === project.id);
   const openTasks = projectTasks.filter((task) => task.status !== "DONE" && task.status !== "ARCHIVED");
   const urgentTasks = openTasks.filter((task) => task.priority === "URGENT" || task.status === "BLOCKED" || task.status === "ON_HOLD");
-  const pendingApprovals = hammerApprovals.filter((approval) => approval.projectId === project.id && (approval.status === "REQUESTED" || approval.status === "CHANGES_REQUESTED"));
-  const reviewAssets = hammerAssets.filter((asset) => asset.projectId === project.id && asset.status === "IN_REVIEW");
-  const approvedAssets = hammerAssets.filter((asset) => asset.projectId === project.id && asset.status === "APPROVED");
+  const pendingApprovals = approvals.filter((approval) => approval.projectId === project.id && (approval.status === "REQUESTED" || approval.status === "CHANGES_REQUESTED"));
+  const reviewAssets = assets.filter((asset) => asset.projectId === project.id && asset.status === "IN_REVIEW");
+  const approvedAssets = assets.filter((asset) => asset.projectId === project.id && asset.status === "APPROVED");
   const reviewTasks = openTasks.filter((task) => task.status === "REVIEW");
   const health = executiveHealthForProject(project, { urgentTasks, pendingApprovals, reviewAssets, reviewTasks });
   const healthLabel = executiveHealthLabel(health);
@@ -2426,7 +2599,7 @@ function buildExecutiveProjectBrief(project: HammerProject, documents: HammerDoc
 
 function executiveHealthForProject(
   project: HammerProject,
-  context: { urgentTasks: HammerTask[]; pendingApprovals: typeof hammerApprovals; reviewAssets: HammerAsset[]; reviewTasks: HammerTask[] }
+  context: { urgentTasks: HammerTask[]; pendingApprovals: HammerApproval[]; reviewAssets: HammerAsset[]; reviewTasks: HammerTask[] }
 ): ExecutiveHealth {
   if (["ON_HOLD", "PASSED", "ARCHIVED"].includes(project.status) || context.urgentTasks.length) return "risk";
   if (project.status === "GREENLIGHT_REVIEW" || context.pendingApprovals.some((approval) => approval.targetType === "DOCUMENT_VERSION")) return "decision";
@@ -2451,7 +2624,7 @@ function executiveSlateSummary(decisionReady: number, needsAttention: number, at
 function executiveProjectSummary(
   project: HammerProject,
   currentVersion: HammerDocumentVersion | undefined,
-  context: { pendingApprovals: typeof hammerApprovals; reviewAssets: HammerAsset[]; urgentTasks: HammerTask[]; openTasks: HammerTask[] }
+  context: { pendingApprovals: HammerApproval[]; reviewAssets: HammerAsset[]; urgentTasks: HammerTask[]; openTasks: HammerTask[] }
 ) {
   if (context.urgentTasks.length) return `${context.urgentTasks.length} urgent or blocked item${context.urgentTasks.length === 1 ? "" : "s"} need producer follow-up.`;
   if (project.status === "GREENLIGHT_REVIEW") return "Greenlight packet is assembled enough for executive review.";
@@ -2463,7 +2636,7 @@ function executiveProjectSummary(
 
 function executiveNextAction(
   project: HammerProject,
-  context: { currentDocument?: HammerDocument; pendingApprovals: typeof hammerApprovals; reviewAssets: HammerAsset[]; urgentTasks: HammerTask[]; reviewTasks: HammerTask[] }
+  context: { currentDocument?: HammerDocument; pendingApprovals: HammerApproval[]; reviewAssets: HammerAsset[]; urgentTasks: HammerTask[]; reviewTasks: HammerTask[] }
 ) {
   if (context.urgentTasks[0]) return `Resolve: ${context.urgentTasks[0].title}`;
   if (context.pendingApprovals[0]) return context.pendingApprovals[0].targetType === "DOCUMENT_VERSION" ? "Review latest script decision." : "Complete pending approval.";
@@ -2474,7 +2647,7 @@ function executiveNextAction(
   return "Assign source material.";
 }
 
-function documentForApproval(approval: typeof hammerApprovals[number], documents: HammerDocument[], versions: HammerDocumentVersion[]) {
+function documentForApproval(approval: HammerApproval, documents: HammerDocument[], versions: HammerDocumentVersion[]) {
   if (approval.targetType !== "DOCUMENT_VERSION") return undefined;
   const version = versions.find((item) => item.id === approval.targetId);
   return version ? documents.find((document) => document.id === version.documentId) : undefined;

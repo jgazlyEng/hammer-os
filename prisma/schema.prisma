@@ -53,6 +53,15 @@ enum DocumentType {
 }
 
 enum DocumentVersionStatus {
+  RECEIVED
+  LOGGED
+  READING
+  COVERAGE_REQUESTED
+  COVERAGE_COMPLETE
+  CONSIDER
+  PASS
+  DEVELOPMENT
+  PROJECT_LINKED
   DRAFT
   OUTLINE
   IN_PROGRESS
@@ -167,6 +176,27 @@ enum TaskTargetType {
   APPROVAL
 }
 
+enum ContactType {
+  WRITER
+  PRODUCER
+  ARTIST
+  EXECUTIVE
+  AGENCY
+  MANAGEMENT
+  LEGAL
+  VENDOR
+  OTHER
+}
+
+enum SupportingDocumentType {
+  CONTEXT
+  COVERAGE
+  NOTES
+  EMAIL
+  WRITER_MATERIAL
+  OTHER
+}
+
 enum RiskLevel {
   low
   medium
@@ -258,6 +288,7 @@ model Project {
 
   owner                   User?           @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   documents               Document[]
+  supportingDocuments     SupportingDocument[]
   entities                Entity[]
   assets                  Asset[]
   assetLinks              AssetLink[]
@@ -297,6 +328,7 @@ model User {
   ownedProjects Project[]          @relation("ProjectOwner")
   documentsCreated Document[]      @relation("DocumentCreator")
   documentVersionsUploaded DocumentVersion[] @relation("DocumentVersionUploader")
+  supportingDocumentsUploaded SupportingDocument[] @relation("SupportingDocumentUploader")
   documentDiffsCreated DocumentDiff[] @relation("DocumentDiffCreator")
   assetsUploaded Asset[]           @relation("AssetUploader")
   commentsCreated Comment[]        @relation("CommentCreator")
@@ -326,23 +358,29 @@ model ProjectMembership {
 
 model Document {
   id               String            @id @default(cuid())
-  projectId        String
+  projectId        String?
   title            String
   type             DocumentType
   currentVersionId String?           @unique
   createdById      String?
+  writerName       String?
+  source           String?
+  contactId        String?
+  submittedAt      DateTime?
   deletedAt        DateTime?
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 
-  project          Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project          Project?          @relation(fields: [projectId], references: [id], onDelete: SetNull)
   currentVersion   DocumentVersion?  @relation("CurrentDocumentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
   createdBy        User?             @relation("DocumentCreator", fields: [createdById], references: [id], onDelete: SetNull)
   versions         DocumentVersion[] @relation("DocumentVersions")
   diffs            DocumentDiff[]
+  supportingDocuments SupportingDocument[]
 
   @@index([projectId])
   @@index([type])
+  @@index([deletedAt])
 }
 
 model DocumentVersion {
@@ -389,6 +427,32 @@ model DocumentDiff {
 
   @@index([documentId])
   @@index([fromVersionId, toVersionId])
+}
+
+model SupportingDocument {
+  id               String                 @id @default(cuid())
+  scriptDocumentId String
+  projectId        String?
+  title            String
+  type             SupportingDocumentType @default(CONTEXT)
+  notes            String?                @db.Text
+  fileName         String
+  fileType         String
+  fileSize         Int
+  storagePath      String
+  extractedText    String?                @db.Text
+  uploadedById     String?
+  deletedAt        DateTime?
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  scriptDocument   Document               @relation(fields: [scriptDocumentId], references: [id], onDelete: Cascade)
+  project          Project?               @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  uploadedBy       User?                  @relation("SupportingDocumentUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([scriptDocumentId])
+  @@index([projectId])
+  @@index([deletedAt])
 }
 
 model TreatmentVersion {
@@ -663,6 +727,7 @@ model Asset {
   fileType      String
   fileSize      Int
   storagePath   String
+  dataUrl        String?     @db.Text
   thumbnailPath String?
   status        AssetStatus @default(UPLOADED)
   uploadedById  String?
@@ -677,6 +742,25 @@ model Asset {
   @@index([projectId])
   @@index([assetType])
   @@index([status])
+}
+
+model Contact {
+  id         String      @id @default(cuid())
+  name       String
+  company    String?
+  type       ContactType @default(OTHER)
+  title      String?
+  email      String?
+  phone      String?
+  location   String?
+  notes      String?     @db.Text
+  projectIds String[]    @default([])
+  deletedAt  DateTime?
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  @@index([type])
+  @@index([deletedAt])
 }
 
 model AssetLink {
