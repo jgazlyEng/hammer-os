@@ -1,10 +1,18 @@
 import { CommentTargetType, DocumentVersionStatus, PrismaClient, TaskTargetType } from "@prisma/client";
-import { hammerApprovals, hammerAssets, hammerComments, hammerDocuments, hammerEntities, hammerProjects, hammerScenes, hammerTasks, hammerUsers, hammerVersions } from "../lib/hammer-data";
+import { hammerApprovals, hammerAssets, hammerComments, hammerContacts, hammerDocuments, hammerEntities, hammerProjectMembers, hammerProjects, hammerScenes, hammerTasks, hammerUsers, hammerVersions, type HammerRole } from "../lib/hammer-data";
 
 const prisma = new PrismaClient();
 
 function toDbDocumentVersionStatus(status: string) {
   return Object.values(DocumentVersionStatus).includes(status as DocumentVersionStatus) ? status as DocumentVersionStatus : DocumentVersionStatus.DRAFT;
+}
+
+function toProjectRole(role: HammerRole) {
+  if (role === "ADMIN") return "owner";
+  if (role === "EXECUTIVE") return "executive";
+  if (role === "PRODUCER") return "producer";
+  if (role === "DEVELOPMENT" || role === "ARTIST" || role === "WRITER") return "department_lead";
+  return "viewer";
 }
 
 async function main() {
@@ -55,22 +63,72 @@ async function main() {
     });
   }
 
-  const seededDocumentIds = new Set(hammerDocuments.filter((document) => document.projectId).map((document) => document.id));
+  for (const membership of hammerProjectMembers) {
+    await prisma.projectMembership.upsert({
+      where: { projectId_userId: { projectId: membership.projectId, userId: membership.userId } },
+      update: { role: toProjectRole(membership.role) },
+      create: {
+        projectId: membership.projectId,
+        userId: membership.userId,
+        role: toProjectRole(membership.role)
+      }
+    });
+  }
 
-  for (const document of hammerDocuments.filter((document) => document.projectId)) {
+  for (const contact of hammerContacts) {
+    await prisma.contact.upsert({
+      where: { id: contact.id },
+      update: {
+        name: contact.name,
+        company: contact.company,
+        type: contact.type,
+        title: contact.title,
+        email: contact.email,
+        phone: contact.phone,
+        location: contact.location,
+        projectIds: contact.projectIds,
+        notes: contact.notes
+      },
+      create: {
+        id: contact.id,
+        name: contact.name,
+        company: contact.company,
+        type: contact.type,
+        title: contact.title,
+        email: contact.email,
+        phone: contact.phone,
+        location: contact.location,
+        projectIds: contact.projectIds,
+        notes: contact.notes
+      }
+    });
+  }
+
+  const seededDocumentIds = new Set(hammerDocuments.map((document) => document.id));
+
+  for (const document of hammerDocuments) {
     await prisma.document.upsert({
       where: { id: document.id },
       update: {
+        projectId: document.projectId,
         title: document.title,
         type: document.type,
-        createdById: document.createdById
+        createdById: document.createdById,
+        writerName: document.writerName,
+        source: document.source,
+        contactId: document.contactId,
+        submittedAt: document.submittedAt ? new Date(`${document.submittedAt}T12:00:00.000Z`) : undefined
       },
       create: {
         id: document.id,
-        projectId: document.projectId!,
+        projectId: document.projectId,
         title: document.title,
         type: document.type,
-        createdById: document.createdById
+        createdById: document.createdById,
+        writerName: document.writerName,
+        source: document.source,
+        contactId: document.contactId,
+        submittedAt: document.submittedAt ? new Date(`${document.submittedAt}T12:00:00.000Z`) : undefined
       }
     });
   }

@@ -153,6 +153,7 @@ export interface HammerAsset {
   fileSize: number;
   storagePath: string;
   thumbnailPath?: string;
+  imageUrl?: string;
   status: AssetStatus;
   uploadedById: string;
 }
