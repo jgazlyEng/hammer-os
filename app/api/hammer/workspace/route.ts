@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import type { AssetStatus, AssetType, ContactType, DocumentType, DocumentVersionStatus, Prisma, ProjectStatus, ProjectStage, SupportingDocumentType, TaskPriority, TaskStatus, TaskTargetType, UserRole } from "@prisma/client";
+import type { AssetStatus, AssetType, ContactStatus, ContactType, DocumentType, DocumentVersionStatus, Prisma, ProjectStatus, ProjectStage, SupportingDocumentType, TaskPriority, TaskStatus, TaskTargetType, UserRole } from "@prisma/client";
 import { forbidden, isDatabaseConfigured, requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
@@ -179,14 +179,35 @@ export async function POST(request: Request) {
               email: optionalString(contact.email),
               phone: optionalString(contact.phone),
               location: optionalString(contact.location),
+              website: optionalString(contact.website),
+              status: contactStatusField(contact.status),
+              ownerId: optionalString(contact.ownerId),
+              tags: Array.isArray(contact.tags) ? contact.tags.filter((tag): tag is string => typeof tag === "string") : parseTags(optionalString(contact.tags)),
+              lastContacted: dateField(contact.lastContacted),
+              nextFollowUp: dateField(contact.nextFollowUp),
               notes: optionalString(contact.notes),
               projectIds: Array.isArray(contact.projectIds) ? contact.projectIds.filter((id): id is string => typeof id === "string") : []
             }
           });
         }))).map(toContact) });
 
+      case "updateContact":
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        return NextResponse.json({ contact: toContact(await prisma.contact.update({
+          where: { id: stringField(body.contactId) },
+          data: {
+            status: body.status ? contactStatusField(body.status) : undefined,
+            ownerId: body.ownerId !== undefined ? optionalString(body.ownerId) : undefined,
+            tags: body.tags !== undefined ? (Array.isArray(body.tags) ? body.tags.filter((tag): tag is string => typeof tag === "string") : parseTags(optionalString(body.tags))) : undefined,
+            lastContacted: body.lastContacted !== undefined ? dateField(body.lastContacted) : undefined,
+            nextFollowUp: body.nextFollowUp !== undefined ? dateField(body.nextFollowUp) : undefined,
+            projectIds: body.projectIds !== undefined ? (Array.isArray(body.projectIds) ? body.projectIds.filter((id): id is string => typeof id === "string") : []) : undefined,
+            notes: body.notes !== undefined ? optionalString(body.notes) : undefined
+          }
+        })) });
+
       default:
-        return NextResponse.json({ error: "Unknown Hammer OS action." }, { status: 400 });
+        return NextResponse.json({ error: "Unknown GreenLight action." }, { status: 400 });
     }
   } catch (error) {
     return NextResponse.json({ error: "Database action failed.", detail: error instanceof Error ? error.message : undefined }, { status: 500 });
@@ -267,8 +288,25 @@ function toTask(task: { id: string; projectId: string; title: string; descriptio
   return { id: task.id, projectId: task.projectId, title: task.title, description: task.description ?? "", assignedToId: task.assignedToId ?? "", createdById: task.createdById ?? "", dueDate: task.dueDate ? dateString(task.dueDate) : "", priority: task.priority, status: task.status, targetType: task.targetType ?? "PROJECT", targetId: task.targetId ?? task.projectId };
 }
 
-function toContact(contact: { id: string; name: string; company: string | null; type: ContactType; title: string | null; email: string | null; phone: string | null; location: string | null; projectIds: string[]; notes: string | null }) {
-  return { id: contact.id, name: contact.name, company: contact.company ?? "", type: contact.type, title: contact.title ?? "", email: contact.email ?? "", phone: contact.phone ?? "", location: contact.location ?? "", projectIds: contact.projectIds, notes: contact.notes ?? "" };
+function toContact(contact: { id: string; name: string; company: string | null; type: ContactType; title: string | null; email: string | null; phone: string | null; location: string | null; website: string | null; status: ContactStatus; ownerId: string | null; tags: string[]; lastContacted: Date | null; nextFollowUp: Date | null; projectIds: string[]; notes: string | null }) {
+  return {
+    id: contact.id,
+    name: contact.name,
+    company: contact.company ?? "",
+    type: contact.type,
+    title: contact.title ?? "",
+    email: contact.email ?? "",
+    phone: contact.phone ?? "",
+    location: contact.location ?? "",
+    website: contact.website ?? undefined,
+    status: contact.status,
+    ownerId: contact.ownerId ?? undefined,
+    tags: contact.tags,
+    lastContacted: contact.lastContacted ? dateString(contact.lastContacted) : undefined,
+    nextFollowUp: contact.nextFollowUp ? dateString(contact.nextFollowUp) : undefined,
+    projectIds: contact.projectIds,
+    notes: contact.notes ?? ""
+  };
 }
 
 function toApproval(approval: { id: string; projectId: string | null; targetType: string; targetId: string; requestedById: string | null; reviewerId: string | null; status: string; decisionNotes: string | null; createdAt: Date; decidedAt: Date | null }) {
@@ -361,9 +399,18 @@ const taskStatuses: TaskStatus[] = ["TODO", "IN_PROGRESS", "ON_HOLD", "BLOCKED",
 function taskTargetField(value: unknown): TaskTargetType {
   return taskTargets.includes(value as TaskTargetType) ? value as TaskTargetType : "PROJECT";
 }
-const taskTargets: TaskTargetType[] = ["PROJECT", "DOCUMENT", "DOCUMENT_VERSION", "SCENE", "ENTITY", "ASSET", "APPROVAL"];
+const taskTargets: TaskTargetType[] = ["PROJECT", "DOCUMENT", "DOCUMENT_VERSION", "SCENE", "ENTITY", "ASSET", "APPROVAL", "CONTACT"];
 
 function contactTypeField(value: unknown): ContactType {
   return contactTypes.includes(value as ContactType) ? value as ContactType : "OTHER";
 }
 const contactTypes: ContactType[] = ["WRITER", "PRODUCER", "ARTIST", "EXECUTIVE", "AGENCY", "MANAGEMENT", "LEGAL", "VENDOR", "OTHER"];
+
+function contactStatusField(value: unknown): ContactStatus {
+  return contactStatuses.includes(value as ContactStatus) ? value as ContactStatus : "ACTIVE";
+}
+const contactStatuses: ContactStatus[] = ["NEW", "ACTIVE", "FOLLOW_UP", "WAITING", "DO_NOT_CONTACT", "ARCHIVED"];
+
+function parseTags(value?: string) {
+  return value ? value.split(/[;,]/).map((tag) => tag.trim()).filter(Boolean) : [];
+}

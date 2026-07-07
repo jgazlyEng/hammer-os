@@ -230,12 +230,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen">
-      <aside className="fixed inset-y-0 left-0 z-30 w-[60px] border-r border-white/10 bg-studio-950/95 backdrop-blur md:w-56">
+      <aside className="fixed inset-y-0 left-0 z-30 w-[60px] border-r border-white/10 bg-[#303633] backdrop-blur md:w-56">
         <div className="flex h-full flex-col px-2 py-3 md:px-3">
           <div className="flex items-center gap-1.5">
-            <Link href="/dashboard" className="flex h-10 min-w-0 flex-1 items-center justify-center rounded-md border border-white/10 bg-white/[0.03] md:justify-start md:px-3">
-              <span className="font-display text-[10px] uppercase tracking-[0.16em] text-amberline md:hidden">H</span>
-              <span className="hidden truncate text-sm font-semibold text-studio-100 md:inline">Hammer OS</span>
+            <Link href="/dashboard" className="logo-mark-tile flex h-10 min-w-0 flex-1 items-center justify-center rounded-md border border-emerald-900/35 bg-[#303633] px-2 shadow-sm">
+              <span className="text-base font-black leading-none text-amberline [-webkit-text-stroke:0.75px_#064e3b] md:hidden">G</span>
+              <span className="hidden truncate font-sans text-[21px] font-black leading-none tracking-normal [-webkit-text-stroke:0.75px_#064e3b] md:inline">
+                <span className="text-amberline">Green</span>
+                <span className="text-black">Light</span>
+              </span>
             </Link>
             <ThemeToggle theme={theme} onChange={changeTheme} />
           </div>
@@ -254,16 +257,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     href={item.href}
                     title={item.label}
                     className={cn(
-                      "group relative flex h-9 items-center justify-center gap-2 rounded-md px-2 text-[13px] text-studio-300 transition hover:bg-white/[0.04] hover:text-studio-100 md:justify-start md:px-2.5",
-                      active && "bg-white/[0.06] text-amberline"
+                      "group relative flex h-9 items-center justify-center gap-2 rounded-md border border-transparent px-2 text-[13px] text-studio-300 transition hover:bg-white/[0.055] hover:text-studio-100 md:justify-start md:px-2.5",
+                      active && "border-emerald-300/20 bg-emerald-400/15 text-studio-100 shadow-[inset_0_0_0_1px_rgba(81,208,138,0.08)]"
                     )}
                   >
-                    <Icon className="h-4 w-4 shrink-0" />
+                    <Icon className={cn("h-4 w-4 shrink-0", active && "text-amberline")} />
                     <span className="hidden md:inline">{item.label}</span>
                     {item.href === "/scripts" && incomingScriptCount ? (
                       <span className="ml-auto hidden rounded-full bg-sky-400 px-1.5 py-0.5 text-[10px] font-bold text-white md:inline-flex">{incomingScriptCount}</span>
                     ) : null}
-                    {active ? <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-amberline" /> : null}
+                    {active ? <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-amberline" /> : null}
                   </Link>
                   {item.href === "/scripts" && active ? (
                     <div className="hidden py-1 pl-6 md:block">
@@ -275,8 +278,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                           key={subItem.key}
                           href={subItem.href}
                           className={cn(
-                            "mt-0.5 flex h-7 items-center gap-2 rounded px-2 text-[12px] text-studio-400 transition hover:bg-white/[0.035] hover:text-studio-100",
-                            currentScriptSection === subItem.key && "bg-white/[0.05] text-amberline"
+                            "mt-0.5 flex h-7 items-center gap-2 rounded border border-transparent px-2 text-[12px] text-studio-400 transition hover:bg-white/[0.045] hover:text-studio-100",
+                            currentScriptSection === subItem.key && "border-emerald-300/15 bg-emerald-400/10 text-amberline"
                           )}
                         >
                           <span>{subItem.label}</span>
