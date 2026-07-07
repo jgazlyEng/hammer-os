@@ -29,7 +29,6 @@ import {
   hammerApprovals,
   hammerAssetLinks,
   hammerAssets,
-  hammerAuditEvents,
   hammerComments,
   hammerContacts,
   hammerDocuments,
@@ -60,6 +59,7 @@ import {
   type DocumentType,
   type ScriptStatus,
   type ContactType,
+  type ContactStatus,
   type HammerContact
 } from "@/lib/hammer-data";
 import { buildTextDiff } from "@/lib/hammer-diff";
@@ -569,6 +569,12 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     });
   }
 
+  async function updateContact(contactId: string, patch: Partial<Pick<HammerContact, "status" | "ownerId" | "tags" | "lastContacted" | "nextFollowUp" | "projectIds" | "notes">>) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("updateContact", { contactId, ...patch });
+    }
+  }
+
   async function assignDocumentToProject(documentId: string, projectId: string) {
     if (workspaceMode === "database") {
       await runWorkspaceAction("assignDocumentToProject", { documentId, projectId });
@@ -634,7 +640,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     if (view === "tasks") return <Tasks selectedTaskId={selectedTaskId} currentUser={currentUser} users={users} tasks={tasks} projects={projects} onCreateTask={createTask} onUpdateTask={updateTask} />;
     if (view === "contacts") {
       if (!canViewContacts(currentUser.role)) return <AccessDenied title="Contacts access required" detail="Only admins, producers, and executives can view the studio contact directory." />;
-      return <Contacts initialContacts={contacts} databaseMode={workspaceMode === "database"} onDatabaseImport={(importedContacts) => runWorkspaceAction("importContacts", { contacts: importedContacts })} />;
+      return <Contacts initialContacts={contacts} currentUser={currentUser} users={users} projects={projects} documents={documents} tasks={tasks} databaseMode={workspaceMode === "database"} onDatabaseImport={(importedContacts) => runWorkspaceAction("importContacts", { contacts: importedContacts })} onUpdateContact={updateContact} />;
     }
     if (view === "reviews") return <LegacyRedirect title="Reviews are folded into Scripts" detail="Review work now starts from scripts awaiting review, so the queue is easier to follow." href="/scripts?section=inbox" label="Open Scripts" />;
     if (view === "executive") {
@@ -839,7 +845,7 @@ function LegacyRedirect({ title, detail, href, label }: { title: string; detail:
     <Panel>
       <SectionHeader eyebrow="Moved" title={title} />
       <p className="max-w-2xl text-[13px] leading-5 text-studio-300">{detail}</p>
-      <Link href={href} className="mt-4 inline-flex rounded-md bg-amberline px-3 py-2 text-[13px] font-semibold text-studio-950 hover:bg-amber-300">
+      <Link href={href} className="mt-4 inline-flex rounded-md bg-amberline px-3 py-2 text-[13px] font-semibold text-studio-950 hover:bg-emerald-300">
         {label}
       </Link>
     </Panel>
@@ -911,7 +917,6 @@ function ProjectWorkspace({
   const canViewAllProjectAssignments = canViewAllProjectTasks(currentUser.role);
   const visibleOpenTasks = canViewAllProjectAssignments ? openTasks : openTasks.filter((task) => task.assignedToId === currentUser.id);
   const pendingReviews = projectApprovals.filter((approval) => approval.status === "REQUESTED" || approval.status === "CHANGES_REQUESTED");
-  const projectIds = new Set([project.id]);
   const tabs = [
     { id: "overview", label: "Overview", href: `/projects/${project.id}` },
     { id: "documents", label: "Scripts & Docs", href: `/projects/${project.id}/documents` },
@@ -980,7 +985,7 @@ function ProjectWorkspace({
               <div className="grid gap-3 xl:grid-cols-2">
                 <div>
                   <h3 className="mb-2 text-sm font-semibold text-studio-100">Associated Scripts</h3>
-                  <DocumentRows docs={scriptDocs.slice(0, 4)} versions={versions} omitProject emptyLabel="No scripts, treatments, or outlines attached yet." />
+                  <ProjectScriptFileList docs={scriptDocs.slice(0, 4)} versions={versions} />
                 </div>
                 <div>
                   <h3 className="mb-2 text-sm font-semibold text-studio-100">Supporting Documentation</h3>
@@ -995,7 +1000,6 @@ function ProjectWorkspace({
           </div>
           <div className="space-y-4">
             <CommentsPanel targetId={project.id} />
-            <ActivityPanel projectIds={projectIds} />
           </div>
         </div>
       ) : null}
@@ -1012,15 +1016,13 @@ function ProjectSupportingDocs({ docs, supportingDocuments }: { docs: HammerDocu
     ...directDocs.map((doc) => ({
       id: doc.id,
       title: doc.title,
-      label: statusLabel(doc.type),
-      detail: doc.writerName ? `By ${doc.writerName}` : `Updated ${doc.updatedAt}`,
+      detail: statusLabel(doc.type),
       href: `/scripts/${doc.id}`
     })),
     ...supportingDocuments.map((doc) => ({
       id: doc.id,
       title: doc.title,
-      label: statusLabel(doc.type),
-      detail: `${doc.fileName} / ${doc.uploadedAt}`,
+      detail: doc.fileName,
       href: undefined
     }))
   ];
@@ -1029,17 +1031,31 @@ function ProjectSupportingDocs({ docs, supportingDocuments }: { docs: HammerDocu
     <div className="grid gap-2">
       {items.slice(0, 5).map((item) => {
         const content = (
-          <div className="rounded-md border border-white/10 bg-white/[0.03] p-2.5">
-            <div className="flex items-start justify-between gap-2">
-              <div>
-                <p className="text-[13px] font-semibold text-studio-100">{item.title}</p>
-                <p className="mt-1 text-xs text-studio-400">{item.detail}</p>
-              </div>
-              <Badge value={item.label} subtle />
+          <div className="rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-2 transition hover:border-amberline/30 hover:bg-white/[0.05]">
+            <div className="min-w-0">
+              <p className="truncate text-[13px] font-semibold text-studio-100">{item.title}</p>
+              <p className="mt-0.5 truncate text-xs text-studio-400">{item.detail}</p>
             </div>
           </div>
         );
         return item.href ? <Link key={item.id} href={item.href}>{content}</Link> : <div key={item.id}>{content}</div>;
+      })}
+    </div>
+  );
+}
+
+function ProjectScriptFileList({ docs, versions }: { docs: HammerDocument[]; versions: HammerDocumentVersion[] }) {
+  if (!docs.length) return <EmptyState label="No scripts, treatments, or outlines attached yet." />;
+  return (
+    <div className="grid gap-2">
+      {docs.map((doc) => {
+        const version = currentVersionFor(doc.id, docs, versions);
+        return (
+          <Link key={doc.id} href={`/scripts/${doc.id}`} className="rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-2 transition hover:border-amberline/30 hover:bg-white/[0.05]">
+            <p className="truncate text-[13px] font-semibold text-studio-100">{doc.title}</p>
+            <p className="mt-0.5 truncate text-xs text-studio-400">{version?.fileName ?? statusLabel(doc.type)}</p>
+          </Link>
+        );
       })}
     </div>
   );
@@ -1102,7 +1118,7 @@ function NewAssignmentButton({
 
   return (
     <div className="relative">
-      <button type="button" onClick={() => setOpen((current) => !current)} className="inline-flex items-center gap-1.5 rounded-md bg-amberline px-2.5 py-1.5 text-xs font-semibold text-studio-950 transition hover:bg-amber-300">
+      <button type="button" onClick={() => setOpen((current) => !current)} className="inline-flex items-center gap-1.5 rounded-md bg-amberline px-2.5 py-1.5 text-xs font-semibold text-studio-950 transition hover:bg-emerald-300">
         <Plus className="h-3.5 w-3.5" />
         New Assignment
       </button>
@@ -1129,7 +1145,7 @@ function NewAssignmentButton({
             <p className="text-[11px] text-studio-400">Linked to {firstScript?.title ?? project.title}</p>
             <div className="flex gap-1.5">
               <button type="button" onClick={() => setOpen(false)} className="rounded border border-white/10 px-2.5 py-1.5 text-xs font-semibold text-studio-300 hover:text-amberline">Cancel</button>
-              <button type="submit" className="rounded bg-amberline px-2.5 py-1.5 text-xs font-semibold text-studio-950 hover:bg-amber-300">Create</button>
+              <button type="submit" className="rounded bg-amberline px-2.5 py-1.5 text-xs font-semibold text-studio-950 hover:bg-emerald-300">Create</button>
             </div>
           </div>
         </form>
@@ -1368,8 +1384,8 @@ function Scripts({
           title="Scripts"
           action={onUpload ? (
             <div className="flex flex-wrap gap-1.5">
-              {canManageLibrary ? <button type="button" onClick={() => { setUploadTarget("INBOX"); setUploadOpen((open) => uploadTarget === "INBOX" ? !open : true); }} className="inline-flex items-center gap-1.5 rounded-md bg-amberline px-2.5 py-1.5 text-xs font-semibold text-studio-950 transition hover:bg-amber-300"><UploadCloud className="h-3.5 w-3.5" />Incoming</button> : null}
-              <button type="button" onClick={() => { setUploadTarget("ACTIVE"); setUploadOpen((open) => uploadTarget === "ACTIVE" ? !open : true); }} className={cn("inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold transition", canManageLibrary ? "border border-white/10 bg-white/[0.025] text-studio-200 hover:border-amberline/40 hover:text-amberline" : "bg-amberline text-studio-950 hover:bg-amber-300")}><UploadCloud className="h-3.5 w-3.5" />To Project</button>
+              {canManageLibrary ? <button type="button" onClick={() => { setUploadTarget("INBOX"); setUploadOpen((open) => uploadTarget === "INBOX" ? !open : true); }} className="inline-flex items-center gap-1.5 rounded-md bg-amberline px-2.5 py-1.5 text-xs font-semibold text-studio-950 transition hover:bg-emerald-300"><UploadCloud className="h-3.5 w-3.5" />Incoming</button> : null}
+              <button type="button" onClick={() => { setUploadTarget("ACTIVE"); setUploadOpen((open) => uploadTarget === "ACTIVE" ? !open : true); }} className={cn("inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold transition", canManageLibrary ? "border border-white/10 bg-white/[0.025] text-studio-200 hover:border-amberline/40 hover:text-amberline" : "bg-amberline text-studio-950 hover:bg-emerald-300")}><UploadCloud className="h-3.5 w-3.5" />To Project</button>
             </div>
           ) : undefined}
         />
@@ -2308,7 +2324,7 @@ function NewTaskDialog({
             </div>
             <div className="mt-4 flex justify-end gap-2">
               <button type="button" onClick={() => setOpen(false)} className="rounded border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:text-amberline">Cancel</button>
-              <button type="submit" className="rounded bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-amber-300">Create Task</button>
+              <button type="submit" className="rounded bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300">Create Task</button>
             </div>
           </form>
         </div>
@@ -2318,26 +2334,58 @@ function NewTaskDialog({
 }
 
 const contactTypes: ContactType[] = ["WRITER", "PRODUCER", "ARTIST", "EXECUTIVE", "AGENCY", "MANAGEMENT", "LEGAL", "VENDOR", "OTHER"];
+const contactStatuses: ContactStatus[] = ["NEW", "ACTIVE", "FOLLOW_UP", "WAITING", "DO_NOT_CONTACT", "ARCHIVED"];
 
 function Contacts({
   initialContacts = hammerContacts,
+  currentUser,
+  users = hammerUsers,
+  projects = hammerProjects,
+  documents = hammerDocuments,
+  tasks = hammerTasks,
   databaseMode = false,
-  onDatabaseImport
+  onDatabaseImport,
+  onUpdateContact
 }: {
   initialContacts?: HammerContact[];
+  currentUser: HammerUser;
+  users?: HammerUser[];
+  projects?: HammerProject[];
+  documents?: HammerDocument[];
+  tasks?: HammerTask[];
   databaseMode?: boolean;
   onDatabaseImport?: (contacts: HammerContact[]) => Promise<unknown>;
+  onUpdateContact?: (contactId: string, patch: Partial<Pick<HammerContact, "status" | "ownerId" | "tags" | "lastContacted" | "nextFollowUp" | "projectIds" | "notes">>) => Promise<void>;
 }) {
   const [search, setSearch] = useState("");
   const [type, setType] = useState<ContactType | "ALL">("ALL");
+  const [status, setStatus] = useState<ContactStatus | "ALL">("ALL");
+  const [ownerId, setOwnerId] = useState("ALL");
   const [localContacts, setLocalContacts] = useState<HammerContact[]>([]);
+  const [selectedContactId, setSelectedContactId] = useState(initialContacts[0]?.id ?? "");
   const [importMessage, setImportMessage] = useState("");
-  const contacts = useMemo(() => databaseMode ? initialContacts : [...initialContacts, ...localContacts], [databaseMode, initialContacts, localContacts]);
+  const [draft, setDraft] = useState({ status: "ACTIVE" as ContactStatus, ownerId: "", tags: "", lastContacted: "", nextFollowUp: "", projectIds: [] as string[], notes: "" });
+  const contacts = useMemo(() => {
+    if (databaseMode) return initialContacts;
+    const localById = new Map(localContacts.map((contact) => [contact.id, contact]));
+    return [
+      ...initialContacts.map((contact) => localById.get(contact.id) ?? contact),
+      ...localContacts.filter((contact) => !initialContacts.some((initialContact) => initialContact.id === contact.id))
+    ];
+  }, [databaseMode, initialContacts, localContacts]);
   const filteredContacts = contacts.filter((contact) => {
     const matchesType = type === "ALL" || contact.type === type;
-    const haystack = `${contact.name} ${contact.company} ${contact.title} ${contact.email} ${contact.location} ${contact.notes}`.toLowerCase();
-    return matchesType && haystack.includes(search.toLowerCase());
+    const matchesStatus = status === "ALL" || (contact.status ?? "ACTIVE") === status;
+    const matchesOwner = ownerId === "ALL" || (contact.ownerId ?? "") === ownerId;
+    const haystack = `${contact.name} ${contact.company} ${contact.title} ${contact.email} ${contact.location} ${contact.notes} ${(contact.tags ?? []).join(" ")}`.toLowerCase();
+    return matchesType && matchesStatus && matchesOwner && haystack.includes(search.toLowerCase());
   });
+  const selectedContact = contacts.find((contact) => contact.id === selectedContactId) ?? filteredContacts[0] ?? contacts[0];
+  const relationshipProjects = selectedContact ? projects.filter((project) => draft.projectIds.includes(project.id)) : [];
+  const relationshipScripts = selectedContact ? documents.filter((document) => document.contactId === selectedContact.id || document.source === selectedContact.company || document.writerName === selectedContact.name) : [];
+  const relationshipTasks = selectedContact ? tasks.filter((task) => task.targetType === "CONTACT" && task.targetId === selectedContact.id) : [];
+  const followUpContacts = contacts.filter((contact) => contact.nextFollowUp && (contact.status ?? "ACTIVE") !== "ARCHIVED").sort((a, b) => (a.nextFollowUp ?? "").localeCompare(b.nextFollowUp ?? "")).slice(0, 5);
+
   useEffect(() => {
     try {
       const storedContacts = window.localStorage.getItem(HAMMER_LOCAL_CONTACTS_STORAGE_KEY);
@@ -2346,6 +2394,19 @@ function Contacts({
       setLocalContacts([]);
     }
   }, []);
+
+  useEffect(() => {
+    if (!selectedContact) return;
+    setDraft({
+      status: selectedContact.status ?? "ACTIVE",
+      ownerId: selectedContact.ownerId ?? "",
+      tags: (selectedContact.tags ?? []).join(", "),
+      lastContacted: selectedContact.lastContacted ?? "",
+      nextFollowUp: selectedContact.nextFollowUp ?? "",
+      projectIds: selectedContact.projectIds,
+      notes: selectedContact.notes
+    });
+  }, [selectedContact]);
 
   async function importContacts(file?: File | null) {
     if (!file) return;
@@ -2375,50 +2436,183 @@ function Contacts({
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url;
-    link.download = `hammer-contacts-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.download = `greenlight-contacts-${new Date().toISOString().slice(0, 10)}.csv`;
     link.click();
     URL.revokeObjectURL(url);
+  }
+
+  async function saveContact() {
+    if (!selectedContact) return;
+    const patch = {
+      status: draft.status,
+      ownerId: draft.ownerId || undefined,
+      tags: draft.tags.split(/[;,]/).map((tag) => tag.trim()).filter(Boolean),
+      lastContacted: draft.lastContacted || undefined,
+      nextFollowUp: draft.nextFollowUp || undefined,
+      projectIds: draft.projectIds,
+      notes: draft.notes
+    };
+    if (databaseMode) {
+      await onUpdateContact?.(selectedContact.id, patch);
+    } else {
+      const updatedContact = { ...selectedContact, ...patch };
+      const nextContacts = [...localContacts.filter((contact) => contact.id !== selectedContact.id), updatedContact];
+      setLocalContacts(nextContacts);
+      window.localStorage.setItem(HAMMER_LOCAL_CONTACTS_STORAGE_KEY, JSON.stringify(nextContacts));
+    }
+    setImportMessage("Contact relationship updated.");
   }
 
   return (
     <div className="space-y-4">
       <Panel>
-        <SectionHeader eyebrow="Directory" title="Contacts" action={<div className="flex flex-wrap gap-2"><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline"><UploadCloud className="h-3.5 w-3.5" />Import CSV<input className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => importContacts(event.target.files?.[0])} /></label><PrimaryButton icon={Plus} label="New Contact" /></div>} />
-        <div className="mb-3 grid gap-2 md:grid-cols-[1fr_220px_220px]">
-          <input className="field" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search contacts, companies, notes" />
+        <SectionHeader eyebrow="Collaborative CRM" title="Contacts" action={<div className="flex flex-wrap gap-2"><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline"><UploadCloud className="h-3.5 w-3.5" />Import CSV<input className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => importContacts(event.target.files?.[0])} /></label><button type="button" className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 hover:border-amberline/40 hover:text-amberline" onClick={exportContacts}>Export CSV</button></div>} />
+        <div className="mb-3 grid gap-2 lg:grid-cols-[1fr_180px_180px_180px]">
+          <input className="field" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search names, companies, tags, notes" />
           <select className="field" value={type} onChange={(event) => setType(event.target.value as ContactType | "ALL")}>
             <option value="ALL">All contact types</option>
             {contactTypes.map((contactType) => <option key={contactType} value={contactType}>{statusLabel(contactType)}</option>)}
           </select>
-          <button type="button" className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 hover:border-amberline/40 hover:text-amberline" onClick={exportContacts}>Export CSV</button>
+          <select className="field" value={status} onChange={(event) => setStatus(event.target.value as ContactStatus | "ALL")}>
+            <option value="ALL">All statuses</option>
+            {contactStatuses.map((contactStatus) => <option key={contactStatus} value={contactStatus}>{statusLabel(contactStatus)}</option>)}
+          </select>
+          <select className="field" value={ownerId} onChange={(event) => setOwnerId(event.target.value)}>
+            <option value="ALL">All owners</option>
+            {users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+          </select>
         </div>
         {importMessage ? <p className="mb-3 text-xs text-studio-300">{importMessage}</p> : null}
-        {filteredContacts.length ? (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[940px] text-left text-[13px]">
-              <thead className="text-[11px] uppercase tracking-[0.12em] text-studio-400">
-                <tr><th className="py-2">Name</th><th>Type</th><th>Company</th><th>Email</th><th>Phone</th><th>Projects</th><th>Notes</th></tr>
-              </thead>
-              <tbody className="divide-y divide-white/10">
-                {filteredContacts.map((contact) => (
-                  <tr key={contact.id} className="text-studio-200">
-                    <td className="py-2.5">
-                      <p className="font-semibold text-studio-100">{contact.name}</p>
-                      <p className="mt-0.5 text-xs text-studio-400">{contact.title} / {contact.location}</p>
-                    </td>
-                    <td><Badge value={contact.type} /></td>
-                    <td>{contact.company}</td>
-                    <td><a className="text-sky-200 hover:text-amberline" href={`mailto:${contact.email}`}>{contact.email}</a></td>
-                    <td className="text-studio-300">{contact.phone}</td>
-                    <td className="space-x-1.5">{contact.projectIds.map((projectId) => <TableLink key={projectId} href={`/projects/${projectId}`}>{projectTitle(projectId)}</TableLink>)}</td>
-                    <td className="max-w-[260px] text-studio-300">{contact.notes}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        <div className="grid gap-4 xl:grid-cols-[minmax(340px,0.9fr)_1.2fr]">
+          <div className="space-y-2">
+            {filteredContacts.length ? filteredContacts.map((contact) => (
+              <button
+                key={contact.id}
+                type="button"
+                onClick={() => setSelectedContactId(contact.id)}
+                className={cn(
+                  "w-full rounded-md border border-white/10 bg-white/[0.03] p-3 text-left transition hover:border-amberline/35 hover:bg-white/[0.05]",
+                  selectedContact?.id === contact.id && "border-amberline/45 bg-emerald-400/10"
+                )}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-[13px] font-semibold text-studio-100">{contact.name}</p>
+                    <p className="mt-0.5 truncate text-xs text-studio-400">{contact.title} / {contact.company}</p>
+                  </div>
+                  <Badge value={contact.status ?? "ACTIVE"} subtle />
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  <Badge value={contact.type} subtle />
+                  {contact.nextFollowUp ? <span className="rounded border border-white/10 bg-white/[0.03] px-1.5 py-0.5 text-[11px] text-studio-300">Follow up {contact.nextFollowUp}</span> : null}
+                </div>
+              </button>
+            )) : <EmptyState label="No contacts match this search." />}
           </div>
-        ) : <EmptyState label="No contacts match this search." />}
+          {selectedContact ? (
+            <div className="space-y-3">
+              <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge value={selectedContact.type} />
+                      <Badge value={selectedContact.status ?? "ACTIVE"} subtle />
+                    </div>
+                    <h3 className="mt-2 text-xl font-semibold text-studio-100">{selectedContact.name}</h3>
+                    <p className="mt-1 text-[13px] text-studio-300">{selectedContact.title} / {selectedContact.company}</p>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {selectedContact.email ? <TableLink href={`mailto:${selectedContact.email}`}>Email</TableLink> : null}
+                    {selectedContact.website ? <TableLink href={selectedContact.website}>Website</TableLink> : null}
+                  </div>
+                </div>
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <label className="grid gap-1">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Status</span>
+                    <select className="field" value={draft.status} onChange={(event) => setDraft((current) => ({ ...current, status: event.target.value as ContactStatus }))}>
+                      {contactStatuses.map((contactStatus) => <option key={contactStatus} value={contactStatus}>{statusLabel(contactStatus)}</option>)}
+                    </select>
+                  </label>
+                  <label className="grid gap-1">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Relationship Owner</span>
+                    <select className="field" value={draft.ownerId} onChange={(event) => setDraft((current) => ({ ...current, ownerId: event.target.value }))}>
+                      <option value="">Unassigned owner</option>
+                      {users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+                    </select>
+                  </label>
+                  <label className="grid gap-1">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Last Contacted</span>
+                    <input className="field" type="date" value={draft.lastContacted} onChange={(event) => setDraft((current) => ({ ...current, lastContacted: event.target.value }))} />
+                  </label>
+                  <label className="grid gap-1">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Next Follow-Up</span>
+                    <input className="field" type="date" value={draft.nextFollowUp} onChange={(event) => setDraft((current) => ({ ...current, nextFollowUp: event.target.value }))} />
+                  </label>
+                </div>
+                <label className="mt-3 grid gap-1">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Tags</span>
+                  <input className="field" value={draft.tags} onChange={(event) => setDraft((current) => ({ ...current, tags: event.target.value }))} placeholder="Tags, separated by commas" />
+                </label>
+                <div className="mt-3">
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Assigned Projects</span>
+                    <span className="text-[11px] text-studio-500">{draft.projectIds.length} selected</span>
+                  </div>
+                  <div className="grid max-h-40 gap-1 overflow-auto rounded-md border border-white/10 bg-white/[0.025] p-2 md:grid-cols-2">
+                    {projects.map((project) => {
+                      const checked = draft.projectIds.includes(project.id);
+                      return (
+                        <label key={project.id} className={cn("flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-[13px] text-studio-300 transition hover:bg-white/[0.04] hover:text-studio-100", checked && "bg-emerald-400/10 text-studio-100")}>
+                          <input
+                            type="checkbox"
+                            className="h-3.5 w-3.5 accent-emerald-400"
+                            checked={checked}
+                            onChange={(event) => setDraft((current) => ({
+                              ...current,
+                              projectIds: event.target.checked ? [...current.projectIds, project.id] : current.projectIds.filter((projectId) => projectId !== project.id)
+                            }))}
+                          />
+                          <span className="truncate">{project.title}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+                <label className="mt-3 grid gap-1">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Relationship Notes</span>
+                  <textarea className="field min-h-24" value={draft.notes} onChange={(event) => setDraft((current) => ({ ...current, notes: event.target.value }))} placeholder="Relationship notes" />
+                </label>
+                <div className="mt-3 flex justify-end"><PrimaryButton icon={CheckCircle2} label="Save Relationship" onClick={saveContact} /></div>
+              </div>
+              <div className="grid gap-3 lg:grid-cols-3">
+                <RelationshipList title="Projects" empty="No linked projects." items={relationshipProjects.map((project) => ({ id: project.id, title: project.title, detail: statusLabel(project.status), href: `/projects/${project.id}` }))} />
+                <RelationshipList title="Scripts" empty="No linked scripts." items={relationshipScripts.map((document) => ({ id: document.id, title: document.title, detail: document.writerName ?? document.source ?? statusLabel(document.type), href: `/scripts/${document.id}` }))} />
+                <RelationshipList title="Follow-Ups" empty="No contact tasks yet." items={relationshipTasks.map((task) => ({ id: task.id, title: task.title, detail: `${statusLabel(task.status)} / ${task.dueDate || "No due date"}`, href: `/tasks?task=${task.id}` }))} />
+              </div>
+            </div>
+          ) : <EmptyState label="Select a contact to view relationship details." />}
+        </div>
       </Panel>
+      <Panel>
+        <SectionHeader eyebrow="Relationship Queue" title="Upcoming Follow-Ups" />
+        {followUpContacts.length ? <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-5">{followUpContacts.map((contact) => <button key={contact.id} type="button" onClick={() => setSelectedContactId(contact.id)} className="rounded-md border border-white/10 bg-white/[0.03] p-2.5 text-left transition hover:border-amberline/35"><p className="truncate text-[13px] font-semibold text-studio-100">{contact.name}</p><p className="mt-1 text-xs text-studio-400">{contact.nextFollowUp} / {userName(contact.ownerId ?? currentUser.id)}</p></button>)}</div> : <EmptyState label="No follow-ups scheduled." />}
+      </Panel>
+    </div>
+  );
+}
+
+function RelationshipList({ title, empty, items }: { title: string; empty: string; items: Array<{ id: string; title: string; detail: string; href: string }> }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
+      <h3 className="text-sm font-semibold text-studio-100">{title}</h3>
+      <div className="mt-2 space-y-2">
+        {items.length ? items.slice(0, 5).map((item) => (
+          <Link key={item.id} href={item.href} className="block rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-2 transition hover:border-amberline/35">
+            <p className="truncate text-[13px] font-semibold text-studio-100">{item.title}</p>
+            <p className="mt-0.5 truncate text-xs text-studio-400">{item.detail}</p>
+          </Link>
+        )) : <EmptyState label={empty} />}
+      </div>
     </div>
   );
 }
@@ -3006,26 +3200,6 @@ function CommentsPanel({ targetId }: { targetId: string }) {
   return <Panel><SectionHeader eyebrow="Notes" title="Comments" />{comments.length ? comments.map((comment) => <div key={comment.id} className="mb-2 rounded border border-white/10 bg-white/[0.03] p-2.5 text-[13px] text-studio-300"><p>{comment.body}</p><p className="mt-1.5 text-[11px] text-studio-500">{userName(comment.createdById)} / {comment.visibility}</p></div>) : <EmptyState label="No comments yet." />}<textarea className="field mt-2.5 min-h-16" placeholder="Add a comment" /></Panel>;
 }
 
-function ActivityPanel({ targetId, projectIds }: { targetId?: string; projectIds?: Set<string> }) {
-  const projectTargetIds = new Set<string>([
-    ...hammerDocuments.filter((document) => document.projectId && projectIds?.has(document.projectId)).map((document) => document.id),
-    ...hammerVersions.filter((version) => {
-      const document = hammerDocuments.find((item) => item.id === version.documentId);
-      return document?.projectId ? projectIds?.has(document.projectId) : false;
-    }).map((version) => version.id),
-    ...hammerAssets.filter((asset) => projectIds?.has(asset.projectId)).map((asset) => asset.id),
-    ...(projectIds ? Array.from(projectIds) : [])
-  ]);
-  const events = hammerAuditEvents
-    .filter((event) => {
-      if (targetId) return event.targetId === targetId;
-      if (projectIds) return projectTargetIds.has(event.targetId);
-      return true;
-    })
-    .slice(0, 5);
-  return <Panel><SectionHeader eyebrow="Audit" title="Recent Activity" />{events.map((event) => <div key={event.id} className="mb-2 rounded border border-white/10 bg-white/[0.03] p-2.5"><p className="text-[13px] font-semibold text-studio-100">{statusLabel(event.action)}</p><p className="mt-0.5 text-xs text-studio-300">{event.metadata}</p><p className="mt-1.5 text-[11px] text-studio-500">{userName(event.actorUserId)} / {event.createdAt}</p></div>)}</Panel>;
-}
-
 function SmallStat({ label, value }: { label: string; value: string }) {
   return <div className="mb-2 rounded-md border border-white/10 bg-white/[0.03] p-2.5"><p className="font-display text-[10px] uppercase tracking-[0.12em] text-studio-400">{label}</p><p className="mt-0.5 break-words text-[13px] font-semibold text-studio-100">{value}</p></div>;
 }
@@ -3102,7 +3276,7 @@ function TableLink({ href, children }: { href: string; children: React.ReactNode
 }
 
 function PrimaryButton({ icon: Icon, label, onClick }: { icon: React.ComponentType<{ className?: string }>; label: string; onClick?: () => void }) {
-  return <button onClick={onClick} className="inline-flex items-center gap-1.5 rounded-md bg-amberline px-2.5 py-1.5 text-xs font-semibold text-studio-950 transition hover:bg-amber-300"><Icon className="h-3.5 w-3.5" />{label}</button>;
+  return <button onClick={onClick} className="inline-flex items-center gap-1.5 rounded-md bg-amberline px-2.5 py-1.5 text-xs font-semibold text-studio-950 transition hover:bg-emerald-300"><Icon className="h-3.5 w-3.5" />{label}</button>;
 }
 
 function GhostButton({ icon: Icon, label }: { icon: React.ComponentType<{ className?: string }>; label: string }) {
@@ -3180,6 +3354,12 @@ function parseContactsCsv(csv: string): HammerContact[] {
       email: record.email || "",
       phone: record.phone || "",
       location: record.location || "",
+      website: record.website || "",
+      status: normalizeContactStatus(record.status),
+      ownerId: record.ownerid || record.owner || "",
+      tags: parseTags(record.tags),
+      lastContacted: record.lastcontacted || "",
+      nextFollowUp: record.nextfollowup || record.followup || "",
       projectIds: parseContactProjects(record.projects || record.project || record.projectids),
       notes: record.notes || ""
     };
@@ -3187,7 +3367,7 @@ function parseContactsCsv(csv: string): HammerContact[] {
 }
 
 function buildContactsCsv(contacts: HammerContact[]) {
-  const headers = ["name", "company", "type", "title", "email", "phone", "location", "projects", "notes"];
+  const headers = ["name", "company", "type", "title", "email", "phone", "location", "website", "status", "ownerId", "tags", "lastContacted", "nextFollowUp", "projects", "notes"];
   const rows = contacts.map((contact) => [
     contact.name,
     contact.company,
@@ -3196,6 +3376,12 @@ function buildContactsCsv(contacts: HammerContact[]) {
     contact.email,
     contact.phone,
     contact.location,
+    contact.website ?? "",
+    contact.status ?? "ACTIVE",
+    contact.ownerId ?? "",
+    (contact.tags ?? []).join("; "),
+    contact.lastContacted ?? "",
+    contact.nextFollowUp ?? "",
     contact.projectIds.map(projectTitle).join("; "),
     contact.notes
   ]);
@@ -3242,6 +3428,15 @@ function normalizeCsvHeader(value: string) {
 function normalizeContactType(value?: string): ContactType {
   const normalized = value?.toUpperCase().replace(/[^A-Z]/g, "_") as ContactType | undefined;
   return normalized && contactTypes.includes(normalized) ? normalized : "OTHER";
+}
+
+function normalizeContactStatus(value?: string): ContactStatus {
+  const normalized = value?.toUpperCase().replace(/[^A-Z]/g, "_") as ContactStatus | undefined;
+  return normalized && contactStatuses.includes(normalized) ? normalized : "ACTIVE";
+}
+
+function parseTags(value?: string) {
+  return value ? value.split(/[;,]/).map((tag) => tag.trim()).filter(Boolean) : [];
 }
 
 function parseContactProjects(value: string) {
@@ -3482,7 +3677,7 @@ function breadcrumbsForView(view: HammerView, context: { project: HammerProject;
   if (view === "asset-detail") return [{ label: "Assets", href: "/assets" }, { label: context.asset.title }];
   if (view === "project-new") return [{ label: "Admin", href: "/admin/users" }, { label: "New Project" }];
   if (view === "admin-users") return [{ label: "Admin" }, { label: "Users" }];
-  return [{ label: "Hammer OS" }, { label: titleForView(view, context) }];
+  return [{ label: "GreenLight" }, { label: titleForView(view, context) }];
 }
 
 function backHrefForView(view: HammerView, context: { project: HammerProject; document: typeof hammerDocuments[number]; asset: typeof hammerAssets[number] }) {

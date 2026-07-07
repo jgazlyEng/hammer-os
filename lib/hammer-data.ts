@@ -10,6 +10,7 @@ export type ApprovalStatus = "REQUESTED" | "APPROVED" | "REJECTED" | "CHANGES_RE
 export type TaskStatus = "TODO" | "IN_PROGRESS" | "ON_HOLD" | "BLOCKED" | "REVIEW" | "DONE" | "ARCHIVED";
 export type TaskPriority = "LOW" | "MEDIUM" | "HIGH" | "URGENT";
 export type ContactType = "WRITER" | "PRODUCER" | "ARTIST" | "EXECUTIVE" | "AGENCY" | "MANAGEMENT" | "LEGAL" | "VENDOR" | "OTHER";
+export type ContactStatus = "NEW" | "ACTIVE" | "FOLLOW_UP" | "WAITING" | "DO_NOT_CONTACT" | "ARCHIVED";
 
 export const HAMMER_ACTIVE_PROJECT_STORAGE_KEY = "hammer-os-active-project-id";
 export const HAMMER_ACTIVE_PROJECT_EVENT = "hammer-os-active-project-changed";
@@ -225,6 +226,12 @@ export interface HammerContact {
   email: string;
   phone: string;
   location: string;
+  website?: string;
+  status?: ContactStatus;
+  ownerId?: string;
+  tags?: string[];
+  lastContacted?: string;
+  nextFollowUp?: string;
   projectIds: string[];
   notes: string;
 }
@@ -239,15 +246,15 @@ export const hammerUsers: HammerUser[] = [
 ];
 
 export const hammerContacts: HammerContact[] = [
-  { id: "contact-maya", name: "Maya Chen", company: "Hammer Studio", type: "PRODUCER", title: "Admin / Studio Operations", email: "admin@hammer.local", phone: "(310) 555-0101", location: "Los Angeles", projectIds: ["project-hammer", "project-orchid", "project-northstar"], notes: "Internal admin and systems owner." },
-  { id: "contact-sam", name: "Sam Rivera", company: "Hammer Studio", type: "PRODUCER", title: "Producer", email: "producer@hammer.studio", phone: "(310) 555-0134", location: "Los Angeles", projectIds: ["project-hammer", "project-northstar"], notes: "Primary producer for HAMMER and NORTHSTAR KIDS." },
-  { id: "contact-june", name: "June Okafor", company: "Independent", type: "WRITER", title: "Screenwriter", email: "writer@hammer.studio", phone: "(323) 555-0188", location: "Los Angeles", projectIds: ["project-hammer", "project-orchid"], notes: "Attached writer for current script and treatment drafts." },
-  { id: "contact-leo", name: "Leo Matsuda", company: "Matsuda Visual", type: "ARTIST", title: "Concept Artist", email: "artist@hammer.studio", phone: "(213) 555-0149", location: "Pasadena", projectIds: ["project-hammer", "project-northstar"], notes: "Keyframe, lookbook, and visual development references." },
-  { id: "contact-vale", name: "Ari Vale", company: "Northstar Pictures", type: "EXECUTIVE", title: "Executive", email: "exec@hammer.studio", phone: "(424) 555-0172", location: "Santa Monica", projectIds: ["project-hammer"], notes: "Reviews greenlight materials and executive approvals." },
-  { id: "contact-catalyst", name: "Catalyst Literary", company: "Catalyst Literary", type: "AGENCY", title: "Literary Agency", email: "submissions@catalyst.example", phone: "(212) 555-0199", location: "New York", projectIds: ["project-orchid"], notes: "Represents writers and IP submissions." },
-  { id: "contact-arc", name: "Arc Management", company: "Arc Management", type: "MANAGEMENT", title: "Talent Management", email: "desk@arc-management.example", phone: "(310) 555-0160", location: "Beverly Hills", projectIds: ["project-hammer"], notes: "Management contact for attached action talent." },
-  { id: "contact-clearance", name: "Clear Frame Legal", company: "Clear Frame Legal", type: "LEGAL", title: "Clearance Counsel", email: "clearance@clearframe.example", phone: "(818) 555-0120", location: "Burbank", projectIds: ["project-hammer", "project-orchid"], notes: "Business docs, rights checks, and clearance review." },
-  { id: "contact-warehouse", name: "Warehouse VFX", company: "Warehouse VFX", type: "VENDOR", title: "VFX Vendor", email: "bids@warehousevfx.example", phone: "(604) 555-0112", location: "Vancouver", projectIds: ["project-hammer"], notes: "Early VFX bid and plate methodology." }
+  { id: "contact-maya", name: "Maya Chen", company: "Hammer Studio", type: "PRODUCER", title: "Admin / Studio Operations", email: "admin@hammer.local", phone: "(310) 555-0101", location: "Los Angeles", status: "ACTIVE", ownerId: "user-admin", tags: ["internal", "operations"], lastContacted: "2026-06-28", projectIds: ["project-hammer", "project-orchid", "project-northstar"], notes: "Internal admin and systems owner." },
+  { id: "contact-sam", name: "Sam Rivera", company: "Hammer Studio", type: "PRODUCER", title: "Producer", email: "producer@hammer.studio", phone: "(310) 555-0134", location: "Los Angeles", status: "ACTIVE", ownerId: "user-producer", tags: ["internal", "producer"], lastContacted: "2026-06-26", projectIds: ["project-hammer", "project-northstar"], notes: "Primary producer for HAMMER and NORTHSTAR KIDS." },
+  { id: "contact-june", name: "June Okafor", company: "Independent", type: "WRITER", title: "Screenwriter", email: "writer@hammer.studio", phone: "(323) 555-0188", location: "Los Angeles", status: "FOLLOW_UP", ownerId: "user-dev", tags: ["writer", "drafts"], lastContacted: "2026-06-18", nextFollowUp: "2026-07-09", projectIds: ["project-hammer", "project-orchid"], notes: "Attached writer for current script and treatment drafts." },
+  { id: "contact-leo", name: "Leo Matsuda", company: "Matsuda Visual", type: "ARTIST", title: "Concept Artist", email: "artist@hammer.studio", phone: "(213) 555-0149", location: "Pasadena", status: "ACTIVE", ownerId: "user-producer", tags: ["artist", "lookbook"], lastContacted: "2026-06-22", projectIds: ["project-hammer", "project-northstar"], notes: "Keyframe, lookbook, and visual development references." },
+  { id: "contact-vale", name: "Ari Vale", company: "Northstar Pictures", type: "EXECUTIVE", title: "Executive", email: "exec@hammer.studio", phone: "(424) 555-0172", location: "Santa Monica", status: "WAITING", ownerId: "user-producer", tags: ["executive", "greenlight"], lastContacted: "2026-06-19", nextFollowUp: "2026-07-08", projectIds: ["project-hammer"], notes: "Reviews greenlight materials and executive approvals." },
+  { id: "contact-catalyst", name: "Catalyst Literary", company: "Catalyst Literary", type: "AGENCY", title: "Literary Agency", email: "submissions@catalyst.example", phone: "(212) 555-0199", location: "New York", status: "FOLLOW_UP", ownerId: "user-dev", tags: ["agency", "submissions"], lastContacted: "2026-06-20", nextFollowUp: "2026-07-10", projectIds: ["project-orchid"], notes: "Represents writers and IP submissions." },
+  { id: "contact-arc", name: "Arc Management", company: "Arc Management", type: "MANAGEMENT", title: "Talent Management", email: "desk@arc-management.example", phone: "(310) 555-0160", location: "Beverly Hills", status: "ACTIVE", ownerId: "user-producer", tags: ["management", "talent"], lastContacted: "2026-06-21", projectIds: ["project-hammer"], notes: "Management contact for attached action talent." },
+  { id: "contact-clearance", name: "Clear Frame Legal", company: "Clear Frame Legal", type: "LEGAL", title: "Clearance Counsel", email: "clearance@clearframe.example", phone: "(818) 555-0120", location: "Burbank", status: "WAITING", ownerId: "user-admin", tags: ["legal", "clearance"], nextFollowUp: "2026-07-11", projectIds: ["project-hammer", "project-orchid"], notes: "Business docs, rights checks, and clearance review." },
+  { id: "contact-warehouse", name: "Warehouse VFX", company: "Warehouse VFX", type: "VENDOR", title: "VFX Vendor", email: "bids@warehousevfx.example", phone: "(604) 555-0112", location: "Vancouver", status: "NEW", ownerId: "user-producer", tags: ["vendor", "vfx"], nextFollowUp: "2026-07-12", projectIds: ["project-hammer"], notes: "Early VFX bid and plate methodology." }
 ];
 
 export const hammerProjectMembers: HammerProjectMember[] = [
