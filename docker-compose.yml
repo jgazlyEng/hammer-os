@@ -25,7 +25,6 @@ services:
     environment:
       DATABASE_URL: postgresql://hammer:hammer@postgres:5432/hammer_os?schema=public
       NEXTAUTH_URL: http://localhost:3000
-      GOOGLE_CALLBACK_URL: http://localhost:3000/api/auth/google/callback
     ports:
       - "3000:3000"
     command: sh -c "npx prisma db push && npm run db:seed && npm run start"

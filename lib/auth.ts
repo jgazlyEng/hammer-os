@@ -115,6 +115,10 @@ export function forbidden() {
   return { error: "You do not have access to this project.", status: 403 as const };
 }
 
+export function shouldUseSecureCookies() {
+  return (process.env.NEXTAUTH_URL ?? "").startsWith("https://");
+}
+
 export async function authenticateWithPassword(email: string, password: string) {
   if (!isDatabaseConfigured()) {
     return demoUser;

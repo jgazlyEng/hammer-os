@@ -35,9 +35,9 @@ async function storeUploadLocally(projectId: string, fileName: string, bytes: Bu
 }
 
 async function storeUploadInGcs(projectId: string, fileName: string, bytes: Buffer): Promise<StoredUpload> {
-  const bucketName = process.env.GCS_UPLOAD_BUCKET;
+  const bucketName = process.env.GCS_UPLOAD_BUCKET ?? process.env.GCS_BUCKET_NAME;
   if (!bucketName) {
-    throw new Error("GCS_UPLOAD_BUCKET is required when UPLOAD_STORAGE_DRIVER=gcs.");
+    throw new Error("GCS_UPLOAD_BUCKET or GCS_BUCKET_NAME is required when UPLOAD_STORAGE_DRIVER=gcs.");
   }
 
   const { Storage } = await import("@google-cloud/storage");
