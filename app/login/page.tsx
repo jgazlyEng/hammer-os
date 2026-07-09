@@ -8,7 +8,7 @@ export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = useState("admin@hammer.local");
   const [password, setPassword] = useState("");
-  const [message, setMessage] = useState("Use your production account. Local demo mode accepts any password when DATABASE_URL is not configured.");
+  const [message, setMessage] = useState("Sign in with your GreenLight account. The first production admin can be bootstrapped with ADMIN_EMAIL and ADMIN_PASSWORD.");
   const [submitting, setSubmitting] = useState(false);
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
@@ -65,14 +65,6 @@ export default function LoginPage() {
           </div>
 
           <form onSubmit={submit} className="space-y-4">
-            <a href="/api/auth/google" className="block w-full rounded-md bg-studio-100 px-4 py-3 text-center font-semibold text-studio-950 transition hover:bg-white">
-              Continue with Google
-            </a>
-            <div className="flex items-center gap-3 text-xs uppercase tracking-[0.16em] text-studio-500">
-              <span className="h-px flex-1 bg-white/10" />
-              Local fallback
-              <span className="h-px flex-1 bg-white/10" />
-            </div>
             <label className="block">
               <span className="mb-2 block font-display text-xs uppercase tracking-[0.16em] text-studio-300">Email</span>
               <input className="field" type="email" value={email} onChange={(event) => setEmail(event.target.value)} />

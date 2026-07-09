@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import type { AssetStatus, AssetType, ContactType, DocumentType, DocumentVersionStatus, Prisma, ProjectLead, ProjectStatus, ProjectStage, SupportingDocumentType, TaskPriority, TaskStatus, TaskTargetType, UserRole } from "@prisma/client";
+import type { AssetStatus, AssetType, ContactStatus, ContactType, DocumentType, DocumentVersionStatus, Prisma, ProjectLead, ProjectStatus, ProjectStage, SupportingDocumentType, TaskPriority, TaskStatus, TaskTargetType, UserRole } from "@prisma/client";
 import { forbidden, isDatabaseConfigured, requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 

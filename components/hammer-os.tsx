@@ -2880,48 +2880,53 @@ function Contacts({
 
   return (
     <div className="space-y-4">
-      <Panel>
-        <SectionHeader eyebrow="Collaborative CRM" title="Contacts" action={<div className="flex flex-wrap gap-2"><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline"><UploadCloud className="h-3.5 w-3.5" />Import CSV<input className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => importContacts(event.target.files?.[0])} /></label><button type="button" className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 hover:border-amberline/40 hover:text-amberline" onClick={exportContacts}>Export CSV</button></div>} />
-        <div className="mb-3 grid gap-2 lg:grid-cols-[1fr_180px_180px_180px]">
-          <input className="field" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search names, companies, tags, notes" />
-          <select className="field" value={type} onChange={(event) => setType(event.target.value as ContactType | "ALL")}>
-            <option value="ALL">All contact types</option>
-            {contactTypes.map((contactType) => <option key={contactType} value={contactType}>{statusLabel(contactType)}</option>)}
-          </select>
-          <select className="field" value={status} onChange={(event) => setStatus(event.target.value as ContactStatus | "ALL")}>
-            <option value="ALL">All statuses</option>
-            {contactStatuses.map((contactStatus) => <option key={contactStatus} value={contactStatus}>{statusLabel(contactStatus)}</option>)}
-          </select>
-          <select className="field" value={ownerId} onChange={(event) => setOwnerId(event.target.value)}>
-            <option value="ALL">All owners</option>
-            {users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
-          </select>
-        </div>
-        {importMessage ? <p className="mb-3 text-xs text-studio-300">{importMessage}</p> : null}
-        {filteredContacts.length ? (
-          <div className="data-scroll">
-            <table className="data-table min-w-[940px]">
-              <thead className="text-[11px] uppercase tracking-[0.12em] text-studio-400">
-                <tr><th className="py-2">Name</th><th>Type</th><th>Company</th><th>Email</th><th>Phone</th><th>Projects</th><th>Notes</th></tr>
-              </thead>
-              <tbody className="divide-y divide-white/10">
-                {filteredContacts.map((contact) => (
-                  <tr key={contact.id} className="text-studio-200">
-                    <td className="py-2.5">
-                      <p className="font-semibold text-studio-100">{contact.name}</p>
-                      <p className="mt-0.5 text-xs text-studio-400">{contact.title} / {contact.location}</p>
-                    </td>
-                    <td><Badge value={contact.type} /></td>
-                    <td>{contact.company}</td>
-                    <td><a className="text-sky-200 hover:text-amberline" href={`mailto:${contact.email}`}>{contact.email}</a></td>
-                    <td className="text-studio-300">{contact.phone}</td>
-                    <td className="space-x-1.5">{contact.projectIds.map((projectId) => <TableLink key={projectId} href={`/projects/${projectId}`}>{projectTitle(projectId)}</TableLink>)}</td>
-                    <td className="max-w-[260px] text-studio-300">{contact.notes}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+        <Panel>
+          <SectionHeader eyebrow="Collaborative CRM" title="Contacts" action={<div className="flex flex-wrap gap-2"><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline"><UploadCloud className="h-3.5 w-3.5" />Import CSV<input className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => importContacts(event.target.files?.[0])} /></label><button type="button" className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 hover:border-amberline/40 hover:text-amberline" onClick={exportContacts}>Export CSV</button></div>} />
+          <div className="mb-3 grid gap-2 lg:grid-cols-[1fr_180px_180px_180px]">
+            <input className="field" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search names, companies, tags, notes" />
+            <select className="field" value={type} onChange={(event) => setType(event.target.value as ContactType | "ALL")}>
+              <option value="ALL">All contact types</option>
+              {contactTypes.map((contactType) => <option key={contactType} value={contactType}>{statusLabel(contactType)}</option>)}
+            </select>
+            <select className="field" value={status} onChange={(event) => setStatus(event.target.value as ContactStatus | "ALL")}>
+              <option value="ALL">All statuses</option>
+              {contactStatuses.map((contactStatus) => <option key={contactStatus} value={contactStatus}>{statusLabel(contactStatus)}</option>)}
+            </select>
+            <select className="field" value={ownerId} onChange={(event) => setOwnerId(event.target.value)}>
+              <option value="ALL">All owners</option>
+              {users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+            </select>
           </div>
+          {importMessage ? <p className="mb-3 text-xs text-studio-300">{importMessage}</p> : null}
+          {filteredContacts.length ? (
+            <div className="data-scroll">
+              <table className="data-table min-w-[940px]">
+                <thead className="text-[11px] uppercase tracking-[0.12em] text-studio-400">
+                  <tr><th className="py-2">Name</th><th>Type</th><th>Company</th><th>Email</th><th>Phone</th><th>Projects</th><th>Notes</th></tr>
+                </thead>
+                <tbody className="divide-y divide-white/10">
+                  {filteredContacts.map((contact) => (
+                    <tr key={contact.id} onClick={() => setSelectedContactId(contact.id)} className={cn("cursor-pointer text-studio-200 transition hover:bg-white/[0.035]", selectedContact?.id === contact.id && "bg-emerald-400/10")}>
+                      <td className="py-2.5">
+                        <p className="font-semibold text-studio-100">{contact.name}</p>
+                        <p className="mt-0.5 text-xs text-studio-400">{contact.title} / {contact.location}</p>
+                      </td>
+                      <td><Badge value={contact.type} /></td>
+                      <td>{contact.company}</td>
+                      <td><a className="text-sky-200 hover:text-amberline" href={`mailto:${contact.email}`} onClick={(event) => event.stopPropagation()}>{contact.email}</a></td>
+                      <td className="text-studio-300">{contact.phone}</td>
+                      <td className="space-x-1.5">{contact.projectIds.map((projectId) => <TableLink key={projectId} href={`/projects/${projectId}`}>{projectTitle(projectId)}</TableLink>)}</td>
+                      <td className="max-w-[260px] text-studio-300">{contact.notes}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : <EmptyState label="No contacts match this search." />}
+        </Panel>
+
+        <Panel>
           {selectedContact ? (
             <div className="space-y-3">
               <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4">
@@ -3004,8 +3009,8 @@ function Contacts({
               </div>
             </div>
           ) : <EmptyState label="Select a contact to view relationship details." />}
-        </div>
-      </Panel>
+        </Panel>
+      </div>
       <Panel>
         <SectionHeader eyebrow="Relationship Queue" title="Upcoming Follow-Ups" />
         {followUpContacts.length ? <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-5">{followUpContacts.map((contact) => <button key={contact.id} type="button" onClick={() => setSelectedContactId(contact.id)} className="rounded-md border border-white/10 bg-white/[0.03] p-2.5 text-left transition hover:border-amberline/35"><p className="truncate text-[13px] font-semibold text-studio-100">{contact.name}</p><p className="mt-1 text-xs text-studio-400">{contact.nextFollowUp} / {userName(contact.ownerId ?? currentUser.id)}</p></button>)}</div> : <EmptyState label="No follow-ups scheduled." />}

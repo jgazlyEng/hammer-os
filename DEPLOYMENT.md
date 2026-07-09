@@ -3,7 +3,7 @@
 ## Local Development
 
 1. Copy `.env.example` to `.env`.
-2. Fill Google OAuth and GCS values, or leave them blank for local password/demo fallback.
+2. Fill database, password login, and storage values.
 3. Start Postgres and the app:
 
 ```bash
@@ -12,16 +12,23 @@ docker compose up --build
 
 The app runs at `http://localhost:3000`. The compose command applies the Prisma schema and seeds sample Hammer OS data.
 
-## Google OAuth
+## Password Login
 
-Create an OAuth client in Google Cloud Console and add:
+For the first production launch, GreenLight uses email/password sessions. Set:
 
 ```text
-http://localhost:3000/api/auth/google/callback
-https://YOUR_DOMAIN/api/auth/google/callback
+DATABASE_URL
+NEXTAUTH_URL
+SESSION_SECRET
+ADMIN_EMAIL
+ADMIN_PASSWORD
 ```
 
-Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`, `NEXTAUTH_URL`, `NEXTAUTH_SECRET`, and `SESSION_SECRET`.
+`NEXTAUTH_URL` can be `http://EXTERNAL_IP` for the temporary VM launch. Once you move to HTTPS, update it to `https://YOUR_DOMAIN`.
+
+`SESSION_SECRET` should be a long random value and must not be blank in production. The bootstrap admin is created on first successful login with `ADMIN_EMAIL` and `ADMIN_PASSWORD` if that user does not already exist.
+
+Google OAuth can be added later after a domain and HTTPS are in place.
 
 ## Google Cloud Storage
 
@@ -33,7 +40,10 @@ GCS_PROJECT_ID
 GCS_CLIENT_EMAIL
 GCS_PRIVATE_KEY
 UPLOAD_STORAGE_DRIVER=gcs
+GCS_UPLOAD_BUCKET
 ```
+
+`GCS_UPLOAD_BUCKET` can match `GCS_BUCKET_NAME`; the app accepts either for server-side script uploads.
 
 Files are stored under:
 
