@@ -47,7 +47,7 @@ export default function LoginPage() {
             <Clapperboard className="h-4 w-4" />
             Script Map
           </div>
-          <h1 className="mt-6 max-w-3xl text-5xl font-semibold leading-tight text-studio-100 md:text-7xl">Hammer OS</h1>
+          <h1 className="mt-6 max-w-3xl text-5xl font-semibold leading-tight text-studio-100 md:text-7xl">GreenLight</h1>
           <p className="mt-5 max-w-2xl text-lg leading-8 text-studio-300">
             Sign in to manage project slates, upload scripts and treatments, review diffs, approve assets, and keep studio development work in one place.
           </p>

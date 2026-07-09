@@ -4,7 +4,7 @@
 
 :root {
   color-scheme: dark;
-  --background: #070908;
+  --background: #202523;
   --foreground: #eef3ef;
   --font-sans: "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
   --font-display: "DIN Alternate", "Aptos Mono", "SFMono-Regular", monospace;
@@ -28,9 +28,9 @@ body {
   min-height: 100vh;
   margin: 0;
   background:
-    linear-gradient(135deg, rgba(231, 182, 90, 0.08), transparent 32%),
-    radial-gradient(circle at 15% 8%, rgba(81, 208, 138, 0.08), transparent 28%),
-    linear-gradient(180deg, #070908 0%, #0b100f 48%, #101713 100%);
+    linear-gradient(135deg, rgba(81, 208, 138, 0.08), transparent 32%),
+    radial-gradient(circle at 15% 8%, rgba(81, 208, 138, 0.06), transparent 28%),
+    linear-gradient(180deg, #202523 0%, #282f2b 48%, #303833 100%);
   color: var(--foreground);
   font-size: 14px;
   -webkit-font-smoothing: antialiased;
@@ -39,7 +39,7 @@ body {
 
 :root[data-theme="light"] body {
   background:
-    linear-gradient(135deg, rgba(231, 182, 90, 0.14), transparent 34%),
+    linear-gradient(135deg, rgba(81, 208, 138, 0.14), transparent 34%),
     radial-gradient(circle at 15% 8%, rgba(81, 208, 138, 0.12), transparent 26%),
     linear-gradient(180deg, #f7f4ed 0%, #f0eee8 52%, #e9ece7 100%);
   color: var(--foreground);
@@ -51,11 +51,11 @@ a {
 }
 
 ::selection {
-  background: rgba(231, 182, 90, 0.35);
+  background: rgba(81, 208, 138, 0.35);
 }
 
 * {
-  scrollbar-color: rgba(231, 182, 90, 0.34) rgba(255, 255, 255, 0.04);
+  scrollbar-color: rgba(81, 208, 138, 0.34) rgba(255, 255, 255, 0.04);
   scrollbar-width: thin;
 }
 
@@ -70,7 +70,7 @@ a {
 
 ::-webkit-scrollbar-thumb {
   border-radius: 999px;
-  background: rgba(231, 182, 90, 0.34);
+  background: rgba(81, 208, 138, 0.34);
 }
 
 @layer components {
@@ -176,6 +176,10 @@ a {
     background-color: rgba(246, 244, 238, 0.94);
   }
 
+  :root[data-theme="light"] .logo-mark-tile {
+    background-color: #f5f3ee;
+  }
+
   :root[data-theme="light"] .field {
     border-color: rgba(24, 32, 28, 0.14);
     background-color: rgba(255, 255, 255, 0.82);
@@ -230,15 +234,15 @@ a {
 
   :root[data-theme="light"] .status-badge.text-emerald-200,
   :root[data-theme="light"] .status-badge.text-emerald-300,
-  :root[data-theme="light"] .status-badge.text-signal {
+  :root[data-theme="light"] .status-badge.text-signal,
+  :root[data-theme="light"] .status-badge.text-amberline {
     border-color: rgba(4, 120, 87, 0.34);
     background-color: rgba(16, 185, 129, 0.16);
     color: #047857;
   }
 
   :root[data-theme="light"] .status-badge.text-amber-200,
-  :root[data-theme="light"] .status-badge.text-amber-300,
-  :root[data-theme="light"] .status-badge.text-amberline {
+  :root[data-theme="light"] .status-badge.text-amber-300 {
     border-color: rgba(180, 83, 9, 0.34);
     background-color: rgba(245, 158, 11, 0.18);
     color: #92400e;

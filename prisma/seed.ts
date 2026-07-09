@@ -200,6 +200,12 @@ async function main() {
         email: contact.email,
         phone: contact.phone,
         location: contact.location,
+        website: contact.website,
+        status: contact.status ?? "ACTIVE",
+        ownerId: contact.ownerId,
+        tags: contact.tags ?? [],
+        lastContacted: contact.lastContacted ? new Date(contact.lastContacted) : null,
+        nextFollowUp: contact.nextFollowUp ? new Date(contact.nextFollowUp) : null,
         projectIds: contact.projectIds,
         notes: contact.notes
       },
@@ -212,6 +218,12 @@ async function main() {
         email: contact.email,
         phone: contact.phone,
         location: contact.location,
+        website: contact.website,
+        status: contact.status ?? "ACTIVE",
+        ownerId: contact.ownerId,
+        tags: contact.tags ?? [],
+        lastContacted: contact.lastContacted ? new Date(contact.lastContacted) : null,
+        nextFollowUp: contact.nextFollowUp ? new Date(contact.nextFollowUp) : null,
         projectIds: contact.projectIds,
         notes: contact.notes
       }
