@@ -1,4 +1,6 @@
 import { CommentTargetType, DocumentVersionStatus, PrismaClient, TaskTargetType } from "@prisma/client";
+import { existsSync, readFileSync } from "fs";
+import { join } from "path";
 import { hammerApprovals, hammerAssets, hammerComments, hammerContacts, hammerDocuments, hammerEntities, hammerProjectMembers, hammerProjects, hammerScenes, hammerTasks, hammerUsers, hammerVersions, type HammerRole } from "../lib/hammer-data";
 
 const prisma = new PrismaClient();
@@ -13,6 +15,109 @@ function toProjectRole(role: HammerRole) {
   if (role === "PRODUCER") return "producer";
   if (role === "DEVELOPMENT" || role === "ARTIST" || role === "WRITER") return "department_lead";
   return "viewer";
+}
+
+function readProjectLeadCsv() {
+  const path = join(process.cwd(), "prisma", "data", "projects-everything.csv");
+  if (!existsSync(path)) return [];
+  const rows = parseCsvRows(readFileSync(path, "utf8"));
+  if (rows.length < 2) return [];
+  const headers = rows[0].map(normalizeCsvHeader);
+  return rows.slice(1).map((row, index) => {
+    const record = Object.fromEntries(headers.map((header, cellIndex) => [header, row[cellIndex]?.trim() ?? ""]));
+    const externalId = record.projectid || undefined;
+    return {
+      id: externalId || `lead-${index + 1}`,
+      title: record.title || "Untitled Slate Item",
+      externalId,
+      logline: optional(record.logline),
+      genre: optional(record.genre),
+      lane: optional(record.lane),
+      creator: optional(record.creatorauthordirector),
+      priorityScore: numeric(record.priorityscore),
+      subgenreTags: optional(record.subgenretags),
+      urgencyLabel: optional(record.urgencylabel),
+      discoveryStage: optional(record.discoverystage),
+      countryLanguage: optional(record.countrylanguage),
+      platformSource: optional(record.platformsource),
+      whyItMatters: optional(record.whyitmatters),
+      signalProof: optional(record.signalproof),
+      sourceLink: optional(record.sourcelink),
+      rightsStatus: optional(record.rightsstatus),
+      rightsHolder: optional(record.rightsholder),
+      contactRep: optional(record.contactrep),
+      adaptationFormat: optional(record.adaptationformat),
+      comps: optional(record.comps),
+      heatScore: numeric(record.heatscore),
+      conceptScore: numeric(record.conceptscore),
+      adaptabilityScore: numeric(record.adaptabilityscore),
+      rightsOpportunityScore: numeric(record.rightsopportunityscore),
+      studioFitScore: numeric(record.studiofitscore),
+      nextActionStatus: optional(record.nextactionstatus),
+      owner: optional(record.owner),
+      nextStep: optional(record.nextstep),
+      lastUpdated: optional(record.lastupdated),
+      notes: optional(record.notes),
+      projectCover: optional(record.projectcover),
+      searchKeywords: optional(record.searchkeywords),
+      originalReleaseDate: optional(record.originalreleasepublicationdate),
+      myPicks: optional(record.mypicks),
+      actionItems: optional(record.actionitems),
+      country: optional(record.country),
+      votes: numeric(record.votes),
+      yearWritten: optional(record.yearwritten),
+      scriptStatus: optional(record.scriptstatus),
+      format: optional(record.format),
+      scriptPdf: optional(record.scriptpdf)
+    };
+  });
+}
+
+function parseCsvRows(csv: string) {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let inQuotes = false;
+  for (let index = 0; index < csv.length; index += 1) {
+    const char = csv[index];
+    const next = csv[index + 1];
+    if (char === '"' && inQuotes && next === '"') {
+      cell += '"';
+      index += 1;
+    } else if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === "," && !inQuotes) {
+      row.push(cell);
+      cell = "";
+    } else if ((char === "\n" || char === "\r") && !inQuotes) {
+      if (char === "\r" && next === "\n") index += 1;
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+    } else {
+      cell += char;
+    }
+  }
+  if (cell || row.length) {
+    row.push(cell);
+    rows.push(row);
+  }
+  return rows.filter((item) => item.some((value) => value.trim()));
+}
+
+function normalizeCsvHeader(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function optional(value?: string) {
+  return value?.trim() || undefined;
+}
+
+function numeric(value?: string) {
+  if (!value?.trim()) return undefined;
+  const parsed = Number(value.replace(/,/g, ""));
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 async function main() {
@@ -60,6 +165,15 @@ async function main() {
         codename: project.title,
         stage: project.stage
       }
+    });
+  }
+
+  const slateRows = readProjectLeadCsv();
+  for (const lead of slateRows) {
+    await prisma.projectLead.upsert({
+      where: { id: lead.id },
+      update: lead,
+      create: lead
     });
   }
 

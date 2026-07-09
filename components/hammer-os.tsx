@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, CheckCircle2, FileDiff, Gauge, ImagePlus, MessageSquare, PackageCheck, Plus, Search, ShieldCheck, Trash2, UploadCloud, UsersRound } from "lucide-react";
+import { ArrowLeft, CheckCircle2, FileDiff, Gauge, ImagePlus, MessageSquare, PackageCheck, Plus, Search, ShieldCheck, Trash2, UploadCloud, UsersRound, X } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { EmptyState, MetricCard, Panel, SectionHeader } from "@/components/ui";
 import {
@@ -51,6 +51,7 @@ import {
   type HammerApproval,
   type HammerProjectStatus,
   type HammerProject,
+  type HammerProjectLead,
   type HammerUser,
   type HammerAsset,
   type HammerDocument,
@@ -89,6 +90,7 @@ interface HammerWorkspacePayload {
   assets?: HammerAsset[];
   tasks?: HammerTask[];
   contacts?: HammerContact[];
+  projectLeads?: HammerProjectLead[];
   users?: HammerUser[];
   approvals?: HammerApproval[];
 }
@@ -150,6 +152,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   const [workspaceAssets, setWorkspaceAssets] = useState<HammerAsset[]>([]);
   const [workspaceContacts, setWorkspaceContacts] = useState<HammerContact[]>([]);
   const [workspaceApprovals, setWorkspaceApprovals] = useState<HammerApproval[]>([]);
+  const [projectLeads, setProjectLeads] = useState<HammerProjectLead[]>([]);
   const [query, setQuery] = useState("");
   const [sessionUser, setSessionUser] = useState<SessionUser | null>(null);
   const [sessionLoaded, setSessionLoaded] = useState(false);
@@ -195,6 +198,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     setLocalReferenceImages([]);
     setLocalTasks(data.tasks ?? []);
     setWorkspaceContacts(data.contacts ?? []);
+    setProjectLeads(data.projectLeads ?? []);
     setWorkspaceUsers(data.users ?? []);
     setWorkspaceApprovals(data.approvals ?? []);
     setVersionStatuses({});
@@ -238,6 +242,25 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
 
     loadSession();
   }, []);
+
+  useEffect(() => {
+    if (workspaceMode === "database" || projectLeads.length) return;
+    let cancelled = false;
+    async function loadDemoProjectLeads() {
+      try {
+        const response = await fetch("/data/projects-everything.csv", { cache: "force-cache" });
+        if (!response.ok) return;
+        const text = await response.text();
+        if (!cancelled) setProjectLeads(parseProjectLeadCsv(text));
+      } catch {
+        if (!cancelled) setProjectLeads([]);
+      }
+    }
+    loadDemoProjectLeads();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectLeads.length, workspaceMode]);
 
   useEffect(() => {
     try {
@@ -341,6 +364,40 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     const nextLocalProjects = [next, ...localProjects];
     setLocalProjects(nextLocalProjects);
     setProjects([next, ...projects]);
+    window.localStorage.setItem(HAMMER_LOCAL_PROJECTS_STORAGE_KEY, JSON.stringify(nextLocalProjects));
+    window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_PROJECTS_EVENT));
+  }
+
+  async function updateProjectLead(leadId: string, patch: Partial<HammerProjectLead>) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("updateProjectLead", { leadId, ...patch });
+      return;
+    }
+    setProjectLeads((current) => current.map((lead) => lead.id === leadId ? { ...lead, ...patch } : lead));
+  }
+
+  async function promoteProjectLead(leadId: string) {
+    const lead = projectLeads.find((item) => item.id === leadId);
+    if (!lead) return;
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("promoteProjectLead", { leadId });
+      return;
+    }
+    const promotedProject: HammerProject = {
+      id: `project-promoted-${Date.now()}`,
+      title: lead.title,
+      logline: lead.logline || "Promoted from development slate.",
+      type: lead.format || lead.adaptationFormat || "Feature",
+      genre: lead.genre || "Unassigned",
+      status: "IDEA",
+      stage: "DEVELOPMENT",
+      ownerId: currentUser.id,
+      updatedAt: new Date().toISOString().slice(0, 10)
+    };
+    const nextLocalProjects = [promotedProject, ...localProjects];
+    setLocalProjects(nextLocalProjects);
+    setProjects([promotedProject, ...projects]);
+    setProjectLeads((current) => current.map((item) => item.id === leadId ? { ...item, promotedProjectId: promotedProject.id, nextActionStatus: "Promoted to Active Project" } : item));
     window.localStorage.setItem(HAMMER_LOCAL_PROJECTS_STORAGE_KEY, JSON.stringify(nextLocalProjects));
     window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_PROJECTS_EVENT));
   }
@@ -619,7 +676,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       return <AccessDenied title="Script access required" detail="You can only open scripts attached to your active project. Producers, executives, and admins can access the full script library." />;
     }
     if (view === "dashboard") return <Dashboard currentUser={currentUser} projects={projects} documents={documents} versions={versions} approvals={approvals} />;
-    if (view === "projects") return <Projects projects={filteredProjects} />;
+    if (view === "projects") return <Projects projects={filteredProjects} projectLeads={projectLeads} users={users} tasks={tasks} onUpdateLead={updateProjectLead} onPromoteLead={promoteProjectLead} onCreateTask={createTask} />;
     if (view === "project-new") return <ProjectCreationMoved />;
     if (view === "project-detail") return <ProjectWorkspace project={project} activeTab="overview" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
     if (view === "project-documents") return <ProjectWorkspace project={project} activeTab="documents" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
@@ -778,13 +835,357 @@ function Dashboard({
   );
 }
 
-function Projects({ projects, onCreate }: { projects: HammerProject[]; onCreate?: () => void }) {
+function Projects({
+  projects,
+  projectLeads,
+  users = hammerUsers,
+  tasks = hammerTasks,
+  onCreate,
+  onUpdateLead,
+  onPromoteLead,
+  onCreateTask
+}: {
+  projects: HammerProject[];
+  projectLeads: HammerProjectLead[];
+  users?: HammerUser[];
+  tasks?: HammerTask[];
+  onCreate?: () => void;
+  onUpdateLead?: (leadId: string, patch: Partial<HammerProjectLead>) => Promise<void>;
+  onPromoteLead?: (leadId: string) => Promise<void>;
+  onCreateTask?: (input: { projectId: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
+}) {
+  const [section, setSection] = useState<"active" | "slate">("active");
+  const [slateSearch, setSlateSearch] = useState("");
+  const [filters, setFilters] = useState({ lane: "ALL", genre: "ALL", urgency: "ALL", rights: "ALL", nextAction: "ALL", owner: "ALL", scriptStatus: "ALL", format: "ALL" });
+  const [selectedLeadId, setSelectedLeadId] = useState("");
+  const [leadDraft, setLeadDraft] = useState<Partial<HammerProjectLead>>({});
+  const selectedLead = selectedLeadId ? projectLeads.find((lead) => lead.id === selectedLeadId) : undefined;
+  const filteredLeads = projectLeads.filter((lead) => {
+    const matchesSearch = `${lead.title} ${lead.logline ?? ""} ${lead.creator ?? ""} ${lead.genre ?? ""} ${lead.lane ?? ""} ${lead.notes ?? ""} ${lead.searchKeywords ?? ""} ${lead.contactRep ?? ""}`.toLowerCase().includes(slateSearch.toLowerCase());
+    return matchesSearch
+      && matchesFilter(filters.lane, lead.lane)
+      && matchesFilter(filters.genre, lead.genre)
+      && matchesFilter(filters.urgency, lead.urgencyLabel)
+      && matchesFilter(filters.rights, lead.rightsStatus)
+      && matchesFilter(filters.nextAction, lead.nextActionStatus)
+      && matchesFilter(filters.owner, lead.owner)
+      && matchesFilter(filters.scriptStatus, lead.scriptStatus)
+      && matchesFilter(filters.format, lead.format);
+  });
+  const slateStats = {
+    total: projectLeads.length,
+    urgent: projectLeads.filter((lead) => lead.urgencyLabel === "Urgent").length,
+    picks: projectLeads.filter((lead) => lead.myPicks).length,
+    promoted: projectLeads.filter((lead) => lead.promotedProjectId).length
+  };
+
+  useEffect(() => {
+    if (!selectedLead) return;
+    setLeadDraft(selectedLead);
+  }, [selectedLead]);
+
+  async function saveLead() {
+    if (!selectedLead || !onUpdateLead) return;
+    await onUpdateLead(selectedLead.id, leadDraft);
+  }
+
+  function setFilter(key: keyof typeof filters, value: string) {
+    setFilters((current) => ({ ...current, [key]: value }));
+  }
+
   return (
-    <Panel>
-      <SectionHeader eyebrow="Slate" title="Projects" action={onCreate ? <PrimaryButton icon={Plus} label="New" onClick={onCreate} /> : undefined} />
-      <ProjectTable projects={projects} />
+    <div className="space-y-4">
+      <Panel>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <SectionHeader eyebrow="Projects" title={section === "active" ? "Active Projects" : "Development Slate"} action={onCreate && section === "active" ? <PrimaryButton icon={Plus} label="New" onClick={onCreate} /> : undefined} />
+          <div className="inline-flex w-fit rounded-md border border-white/10 bg-white/[0.03] p-1">
+            <button type="button" onClick={() => setSection("active")} className={cn("rounded px-3 py-1.5 text-xs font-semibold text-studio-300 transition", section === "active" && "bg-amberline text-studio-950")}>Active Projects</button>
+            <button type="button" onClick={() => setSection("slate")} className={cn("rounded px-3 py-1.5 text-xs font-semibold text-studio-300 transition", section === "slate" && "bg-amberline text-studio-950")}>Development Slate</button>
+          </div>
+        </div>
+      </Panel>
+
+      {section === "active" ? (
+        <Panel>
+          <ProjectTable projects={projects} />
+        </Panel>
+      ) : (
+        <>
+          <div className="space-y-4">
+            <Panel className="min-h-0">
+              <div className="grid gap-2 md:grid-cols-4">
+                <MetricCard label="Slate Items" value={`${slateStats.total}`} sub="All tracked opportunities" />
+                <MetricCard label="Urgent" value={`${slateStats.urgent}`} sub="Needs attention" />
+                <MetricCard label="My Picks" value={`${slateStats.picks}`} sub="Producer marked" />
+                <MetricCard label="Promoted" value={`${slateStats.promoted}`} sub="Now active projects" />
+              </div>
+            </Panel>
+            <Panel>
+              <div className="mb-3 grid gap-2 lg:grid-cols-[1fr_repeat(4,150px)]">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-studio-400" />
+                  <input className="field pl-8" value={slateSearch} onChange={(event) => setSlateSearch(event.target.value)} placeholder="Search title, creator, logline, vendor, contact, notes" />
+                </div>
+                <SlateFilter label="Lane" value={filters.lane} options={uniqueLeadOptions(projectLeads, "lane")} onChange={(value) => setFilter("lane", value)} />
+                <SlateFilter label="Genre" value={filters.genre} options={uniqueLeadOptions(projectLeads, "genre")} onChange={(value) => setFilter("genre", value)} />
+                <SlateFilter label="Rights" value={filters.rights} options={uniqueLeadOptions(projectLeads, "rightsStatus")} onChange={(value) => setFilter("rights", value)} />
+                <SlateFilter label="Owner" value={filters.owner} options={uniqueLeadOptions(projectLeads, "owner")} onChange={(value) => setFilter("owner", value)} />
+              </div>
+              <div className="mb-3 grid gap-2 md:grid-cols-4">
+                <SlateFilter label="Urgency" value={filters.urgency} options={uniqueLeadOptions(projectLeads, "urgencyLabel")} onChange={(value) => setFilter("urgency", value)} />
+                <SlateFilter label="Next Action" value={filters.nextAction} options={uniqueLeadOptions(projectLeads, "nextActionStatus")} onChange={(value) => setFilter("nextAction", value)} />
+                <SlateFilter label="Script Status" value={filters.scriptStatus} options={uniqueLeadOptions(projectLeads, "scriptStatus")} onChange={(value) => setFilter("scriptStatus", value)} />
+                <SlateFilter label="Format" value={filters.format} options={uniqueLeadOptions(projectLeads, "format")} onChange={(value) => setFilter("format", value)} />
+              </div>
+              <div className="mb-2 flex items-center justify-between text-xs text-studio-400">
+                <span>{filteredLeads.length} of {projectLeads.length} slate items</span>
+                <button type="button" className="font-semibold text-amberline" onClick={() => { setSlateSearch(""); setFilters({ lane: "ALL", genre: "ALL", urgency: "ALL", rights: "ALL", nextAction: "ALL", owner: "ALL", scriptStatus: "ALL", format: "ALL" }); }}>Clear filters</button>
+              </div>
+              <div className="data-scroll data-scroll-slate">
+                <table className="data-table min-w-[1320px] table-fixed">
+                  <colgroup>
+                    <col className="w-[300px]" />
+                    <col className="w-[190px]" />
+                    <col className="w-[180px]" />
+                    <col className="w-[120px]" />
+                    <col className="w-[210px]" />
+                    <col className="w-[110px]" />
+                    <col className="w-[220px]" />
+                    <col className="w-[90px]" />
+                  </colgroup>
+                  <thead>
+                    <tr><th>Title</th><th>Lane</th><th>Genre</th><th>Urgency</th><th>Rights</th><th>Owner</th><th>Next Action</th><th>Score</th></tr>
+                  </thead>
+                  <tbody>
+                    {filteredLeads.slice(0, 300).map((lead) => (
+                      <tr key={lead.id} onClick={() => setSelectedLeadId(lead.id)} className={cn("cursor-pointer text-studio-200 hover:bg-white/[0.035]", selectedLeadId === lead.id && "bg-emerald-400/10")}>
+                        <td><p className="truncate font-semibold text-studio-100">{lead.title}</p><p className="mt-0.5 truncate text-xs text-studio-400">{lead.creator || lead.sourceLink || "No source listed"}</p></td>
+                        <td><span className="block truncate">{lead.lane || "-"}</span></td>
+                        <td><span className="block truncate">{lead.genre || "-"}</span></td>
+                        <td>{lead.urgencyLabel ? <Badge value={lead.urgencyLabel} subtle /> : <span className="text-studio-500">-</span>}</td>
+                        <td><span className="block truncate">{lead.rightsStatus || "-"}</span></td>
+                        <td><span className="block truncate">{lead.owner || "-"}</span></td>
+                        <td><span className="block truncate">{lead.nextActionStatus || "-"}</span></td>
+                        <td className="font-semibold text-studio-100">{lead.priorityScore ?? "-"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {filteredLeads.length > 300 ? <p className="mt-2 text-xs text-studio-400">Showing first 300 matches. Narrow the filters or search to keep the list focused.</p> : null}
+            </Panel>
+          </div>
+          {selectedLead ? (
+            <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm" onMouseDown={() => setSelectedLeadId("")}>
+              <div className="w-full max-w-5xl" onMouseDown={(event) => event.stopPropagation()}>
+                <SlateLeadPanel
+                  lead={selectedLead}
+                  draft={leadDraft}
+                  projects={projects}
+                  users={users}
+                  tasks={tasks}
+                  onDraftChange={setLeadDraft}
+                  onSave={saveLead}
+                  onPromote={onPromoteLead}
+                  onCreateTask={onCreateTask}
+                  onClose={() => setSelectedLeadId("")}
+                />
+              </div>
+            </div>
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}
+
+function SlateFilter({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) {
+  return (
+    <label className="grid gap-1">
+      <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">{label}</span>
+      <select className="field" value={value} onChange={(event) => onChange(event.target.value)}>
+        <option value="ALL">All</option>
+        {options.map((option) => <option key={option} value={option}>{option}</option>)}
+      </select>
+    </label>
+  );
+}
+
+function SlateLeadPanel({
+  lead,
+  draft,
+  projects,
+  users,
+  tasks,
+  onDraftChange,
+  onSave,
+  onPromote,
+  onCreateTask,
+  onClose
+}: {
+  lead?: HammerProjectLead;
+  draft: Partial<HammerProjectLead>;
+  projects: HammerProject[];
+  users: HammerUser[];
+  tasks: HammerTask[];
+  onDraftChange: React.Dispatch<React.SetStateAction<Partial<HammerProjectLead>>>;
+  onSave: () => Promise<void>;
+  onPromote?: (leadId: string) => Promise<void>;
+  onCreateTask?: (input: { projectId: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
+  onClose?: () => void;
+}) {
+  if (!lead) return <Panel><EmptyState label="Select a slate item to review details." /></Panel>;
+  const promotedProject = lead.promotedProjectId ? projects.find((project) => project.id === lead.promotedProjectId) : undefined;
+  const slateTasks = tasks.filter((task) => task.targetType === "PROJECT_LEAD" && task.targetId === lead.id);
+  return (
+    <Panel className="max-h-[calc(100vh-4rem)] overflow-y-auto shadow-2xl">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="flex flex-wrap gap-1.5">
+            {lead.lane ? <Badge value={lead.lane} subtle /> : null}
+            {lead.urgencyLabel ? <Badge value={lead.urgencyLabel} subtle /> : null}
+          </div>
+          <h3 className="mt-2 text-xl font-semibold text-studio-100">{lead.title}</h3>
+          <p className="mt-1 text-[13px] text-studio-300">{lead.creator || "Creator not listed"}</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {promotedProject ? <TableLink href={`/projects/${promotedProject.id}`}>Open Active</TableLink> : <button type="button" onClick={() => onPromote?.(lead.id)} className="rounded-md bg-amberline px-2.5 py-1.5 text-xs font-semibold text-studio-950">Promote</button>}
+          {onClose ? (
+            <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close slate details">
+              <X className="h-4 w-4" />
+            </button>
+          ) : null}
+        </div>
+      </div>
+      <p className="mt-3 text-[13px] leading-5 text-studio-300">{lead.logline || "No logline provided."}</p>
+      <div className="mt-4 grid gap-2 md:grid-cols-2">
+        <SlateEditField label="Owner" value={draft.owner} onChange={(value) => onDraftChange((current) => ({ ...current, owner: value }))} />
+        <SlateEditField label="Next Action" value={draft.nextActionStatus} onChange={(value) => onDraftChange((current) => ({ ...current, nextActionStatus: value }))} />
+        <SlateEditField label="Rights Status" value={draft.rightsStatus} onChange={(value) => onDraftChange((current) => ({ ...current, rightsStatus: value }))} />
+        <SlateEditField label="Contact / Rep" value={draft.contactRep} onChange={(value) => onDraftChange((current) => ({ ...current, contactRep: value }))} />
+        <SlateEditField label="Script Status" value={draft.scriptStatus} onChange={(value) => onDraftChange((current) => ({ ...current, scriptStatus: value }))} />
+        <SlateEditField label="Format" value={draft.format} onChange={(value) => onDraftChange((current) => ({ ...current, format: value }))} />
+      </div>
+      <label className="mt-3 grid gap-1">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Next Step</span>
+        <textarea className="field min-h-20" value={draft.nextStep ?? ""} onChange={(event) => onDraftChange((current) => ({ ...current, nextStep: event.target.value }))} />
+      </label>
+      <SlateNextStepTaskCreator lead={lead} nextStep={draft.nextStep ?? ""} projects={projects} users={users} onCreateTask={onCreateTask} />
+      {slateTasks.length ? (
+        <div className="mt-3 rounded-md border border-white/10 bg-white/[0.025] p-2.5">
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Slate Tasks</p>
+          <div className="grid gap-1.5">
+            {slateTasks.slice(0, 4).map((task) => (
+              <Link key={task.id} href={`/tasks?task=${task.id}`} className="rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 transition hover:border-amberline/35">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <p className="text-[13px] font-semibold text-studio-100">{task.title}</p>
+                    <p className="mt-0.5 text-xs text-studio-400">{userName(task.assignedToId)} / due {task.dueDate || "unscheduled"}</p>
+                  </div>
+                  <Badge value={task.status} subtle />
+                </div>
+              </Link>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      <label className="mt-3 grid gap-1">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Notes</span>
+        <textarea className="field min-h-24" value={draft.notes ?? ""} onChange={(event) => onDraftChange((current) => ({ ...current, notes: event.target.value }))} />
+      </label>
+      <div className="mt-3 grid gap-2 md:grid-cols-2">
+        <SmallStat label="Priority" value={`${lead.priorityScore ?? "-"}`} />
+        <SmallStat label="Votes" value={`${lead.votes ?? "-"}`} />
+        <SmallStat label="Year Written" value={lead.yearWritten || "-"} />
+        <SmallStat label="Source" value={lead.sourceLink ? "Available" : "Missing"} />
+      </div>
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        {lead.sourceLink ? <TableLink href={lead.sourceLink}>Source Link</TableLink> : null}
+        {lead.scriptPdf ? <TableLink href={lead.scriptPdf}>Script PDF</TableLink> : null}
+      </div>
+      <div className="mt-4 flex justify-end">
+        <PrimaryButton icon={CheckCircle2} label="Save Slate Item" onClick={onSave} />
+      </div>
     </Panel>
   );
+}
+
+function SlateEditField({ label, value, onChange }: { label: string; value?: string; onChange: (value: string) => void }) {
+  return (
+    <label className="grid gap-1">
+      <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">{label}</span>
+      <input className="field" value={value ?? ""} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
+function SlateNextStepTaskCreator({
+  lead,
+  nextStep,
+  projects,
+  users,
+  onCreateTask
+}: {
+  lead: HammerProjectLead;
+  nextStep: string;
+  projects: HammerProject[];
+  users: HammerUser[];
+  onCreateTask?: (input: { projectId: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
+}) {
+  const [assignedToId, setAssignedToId] = useState(users[0]?.id ?? "");
+  const [dueDate, setDueDate] = useState(defaultDueDate());
+  const [priority, setPriority] = useState<TaskPriority>("MEDIUM");
+  const [message, setMessage] = useState("");
+  const fallbackProjectId = lead.promotedProjectId || projects[0]?.id || "";
+  const taskTitle = `Slate follow-up: ${lead.title}`;
+
+  function createSlateTask() {
+    if (!onCreateTask || !fallbackProjectId || !assignedToId || !nextStep.trim()) {
+      setMessage("Add a next step, assignee, and project context first.");
+      return;
+    }
+    onCreateTask({
+      projectId: fallbackProjectId,
+      title: taskTitle,
+      description: nextStep.trim(),
+      assignedToId,
+      dueDate,
+      priority,
+      status: "TODO",
+      targetType: "PROJECT_LEAD",
+      targetId: lead.id
+    });
+    setMessage("Added to tasks.");
+  }
+
+  return (
+    <div className="mt-3 rounded-md border border-white/10 bg-white/[0.025] p-2.5">
+      <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Create Task From Next Step</p>
+      <div className="grid gap-2">
+        <select className="field" value={assignedToId} onChange={(event) => setAssignedToId(event.target.value)}>
+          {users.map((user) => <option key={user.id} value={user.id}>{user.name} / {statusLabel(user.role)}</option>)}
+        </select>
+        <div className="grid gap-2 md:grid-cols-[1fr_130px]">
+          <input className="field" type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} />
+          <select className="field" value={priority} onChange={(event) => setPriority(event.target.value as TaskPriority)}>
+            {(["LOW", "MEDIUM", "HIGH", "URGENT"] as TaskPriority[]).map((item) => <option key={item} value={item}>{statusLabel(item)}</option>)}
+          </select>
+        </div>
+        <button type="button" onClick={createSlateTask} disabled={!onCreateTask || !nextStep.trim()} className="rounded-md bg-amberline px-2.5 py-1.5 text-xs font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-45">
+          Add to Tasks
+        </button>
+        {message ? <p className="text-xs text-studio-300">{message}</p> : null}
+      </div>
+    </div>
+  );
+}
+
+function matchesFilter(filter: string, value?: string) {
+  return filter === "ALL" || (value || "") === filter;
+}
+
+function uniqueLeadOptions(leads: HammerProjectLead[], key: keyof HammerProjectLead) {
+  return Array.from(new Set(leads.map((lead) => lead[key]).filter((value): value is string => typeof value === "string" && Boolean(value.trim())))).sort((a, b) => a.localeCompare(b)).slice(0, 160);
 }
 
 function ProjectEditor({ onCreate }: { onCreate: () => void }) {
@@ -1672,8 +2073,8 @@ function DocumentRows({
   const [assignmentDrafts, setAssignmentDrafts] = useState<Record<string, string>>({});
   if (!docs.length) return <EmptyState label={emptyLabel} />;
   return (
-    <div className="overflow-x-auto">
-      <table className={cn("w-full text-left text-[13px]", omitProject ? "min-w-[760px]" : "min-w-[860px]")}>
+    <div className="data-scroll">
+      <table className={cn("data-table", omitProject ? "min-w-[760px]" : "min-w-[860px]")}>
         <thead className="text-[11px] uppercase tracking-[0.12em] text-studio-400">
           <tr>
             <th className="py-2">Title</th>
@@ -2232,12 +2633,26 @@ function Tasks({
 }) {
   const canViewAllTasks = canViewAllProjectTasks(currentUser?.role);
   const tasks = allTasks.filter((task) => (!projectId || task.projectId === projectId) && (canViewAllTasks || task.assignedToId === currentUser?.id));
+  const slateTasks = tasks.filter((task) => task.targetType === "PROJECT_LEAD");
+  const projectTasks = tasks.filter((task) => task.targetType !== "PROJECT_LEAD");
   const projectName = projectId ? projectTitle(projectId) : undefined;
   return (
     <div className="grid gap-4">
       <Panel>
-        <SectionHeader eyebrow={projectName ? `Showing ${projectName}` : "Tracking"} title={compact ? "Tasks" : canViewAllTasks ? "All Tasks" : "My Tasks"} action={onCreateTask ? <NewTaskDialog projects={projects} users={users} onCreateTask={onCreateTask} /> : undefined} />
-        {tasks.length ? <TaskRows tasks={tasks} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} onUpdateTask={onUpdateTask} /> : <EmptyState label={projectName ? (canViewAllTasks ? `No tasks for ${projectName}. Create one when there is a next step.` : `No tasks assigned to you for ${projectName}.`) : "No tasks match this view."} />}
+        <SectionHeader eyebrow={projectName ? `Showing ${projectName}` : "Project Work"} title={compact ? "Tasks" : canViewAllTasks ? "Project Tasks" : "My Project Tasks"} action={onCreateTask ? <NewTaskDialog projects={projects} users={users} onCreateTask={onCreateTask} /> : undefined} />
+        {projectTasks.length ? (
+          <TaskRows tasks={projectTasks} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} onUpdateTask={onUpdateTask} />
+        ) : (
+          <EmptyState label={projectName ? (canViewAllTasks ? `No project tasks for ${projectName}. Create one when there is a next step.` : `No project tasks assigned to you for ${projectName}.`) : "No project tasks match this view."} />
+        )}
+      </Panel>
+      <Panel>
+        <SectionHeader eyebrow="Development Slate" title={canViewAllTasks ? "Slate Tasks" : "My Slate Tasks"} />
+        {slateTasks.length ? (
+          <TaskRows tasks={slateTasks} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} onUpdateTask={onUpdateTask} />
+        ) : (
+          <EmptyState label={projectName ? (canViewAllTasks ? `No slate tasks for ${projectName}.` : `No slate tasks assigned to you for ${projectName}.`) : "No slate tasks match this view."} />
+        )}
       </Panel>
     </div>
   );
@@ -2394,8 +2809,8 @@ function Contacts({
         </div>
         {importMessage ? <p className="mb-3 text-xs text-studio-300">{importMessage}</p> : null}
         {filteredContacts.length ? (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[940px] text-left text-[13px]">
+          <div className="data-scroll">
+            <table className="data-table min-w-[940px]">
               <thead className="text-[11px] uppercase tracking-[0.12em] text-studio-400">
                 <tr><th className="py-2">Name</th><th>Type</th><th>Company</th><th>Email</th><th>Phone</th><th>Projects</th><th>Notes</th></tr>
               </thead>
@@ -2458,7 +2873,15 @@ function Executive({
   const activeCount = briefs.filter((brief) => !["ARCHIVED", "PASSED"].includes(brief.project.status)).length;
   const pendingApprovals = approvals.filter((approval) => approval.status === "REQUESTED" || approval.status === "CHANGES_REQUESTED");
   const urgentTasks = tasks.filter((task) => task.priority === "URGENT" || task.status === "BLOCKED" || task.status === "ON_HOLD");
+  const weeklyTasks = tasks
+    .filter((task) => task.status !== "DONE" && task.status !== "ARCHIVED" && isTaskDueThisWeek(task))
+    .sort((a, b) => a.dueDate.localeCompare(b.dueDate) || priorityRank(b.priority) - priorityRank(a.priority))
+    .slice(0, 8);
   const assetsAwaitingApproval = assets.filter((asset) => asset.status === "IN_REVIEW");
+  const atRiskBriefs = briefs.filter((brief) => brief.health === "risk").slice(0, 4);
+  const greenlightCandidates = briefs
+    .filter((brief) => brief.project.status === "GREENLIGHT_REVIEW" || brief.health === "decision")
+    .slice(0, 4);
   const decisionItems = [
     ...pendingApprovals.map((approval) => {
       const document = documentForApproval(approval, documents, versions);
@@ -2492,30 +2915,23 @@ function Executive({
 
   return (
     <div className="space-y-4">
-      <Panel className="border-amberline/20 bg-amberline/[0.06] shadow-none">
-        <div className="grid gap-4 xl:grid-cols-[1fr_auto] xl:items-end">
+      <Panel className="border-amberline/20 bg-amberline/[0.055] shadow-none">
+        <div className="grid gap-4 xl:grid-cols-[1fr_auto] xl:items-center">
           <div>
             <p className="font-display text-[10px] uppercase tracking-[0.16em] text-amberline">Executive Slate Brief</p>
-            <h2 className="mt-1 text-lg font-semibold text-studio-100">Overall status: {executiveSlateSummary(decisionReady, needsAttention, atRisk)}</h2>
-            <p className="mt-1 max-w-3xl text-[13px] leading-5 text-studio-300">A project-level view of what is ready for a decision, what needs attention, and where the studio team is blocked.</p>
+            <h2 className="mt-1 text-xl font-semibold text-studio-100">Overall status: {executiveSlateSummary(decisionReady, needsAttention, atRisk)}</h2>
+            <p className="mt-1 max-w-3xl text-[13px] leading-5 text-studio-300">A concise read on what needs a decision, what is blocked, and what the team needs to finish this week.</p>
           </div>
           <div className="grid grid-cols-2 gap-2 text-center md:grid-cols-4 xl:w-[520px]">
             <ExecutiveStat label="Active" value={activeCount} tone="blue" />
-            <ExecutiveStat label="Decision Ready" value={decisionReady} tone="green" />
-            <ExecutiveStat label="Needs Attention" value={needsAttention} tone="yellow" />
+            <ExecutiveStat label="Decisions" value={decisionItems.length} tone="green" />
             <ExecutiveStat label="At Risk" value={atRisk} tone="red" />
+            <ExecutiveStat label="Due This Week" value={weeklyTasks.length} tone="yellow" />
           </div>
         </div>
       </Panel>
 
-      <div className="grid gap-4 xl:grid-cols-[1fr_0.7fr]">
-        <Panel>
-          <SectionHeader eyebrow="Slate" title="Project Status Updates" />
-          <div className="grid gap-3">
-            {briefs.map((brief) => <ExecutiveProjectCard key={brief.project.id} brief={brief} />)}
-          </div>
-        </Panel>
-
+      <div className="grid gap-4 xl:grid-cols-[1fr_0.78fr]">
         <Panel>
           <SectionHeader eyebrow="Decisions" title="Needs Executive Attention" />
           <div className="space-y-2">
@@ -2533,11 +2949,56 @@ function Executive({
             )) : <EmptyState label="No executive decisions are waiting right now." />}
           </div>
         </Panel>
+
+        <Panel>
+          <SectionHeader eyebrow="This Week" title="Task To-Do List" />
+          <div className="space-y-2">
+            {weeklyTasks.length ? weeklyTasks.map((task) => (
+              <Link key={task.id} href={`/tasks?task=${encodeURIComponent(task.id)}`} className="block rounded-md border border-white/10 bg-white/[0.03] p-3 transition hover:border-amberline/35 hover:bg-white/[0.055]">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-semibold text-studio-100">{task.title}</p>
+                    <p className="mt-1 text-xs text-studio-400">{projectTitle(task.projectId)} / {userName(task.assignedToId)} / due {task.dueDate}</p>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
+                    <Badge value={task.priority} />
+                    <Badge value={task.status} subtle />
+                  </div>
+                </div>
+              </Link>
+            )) : <EmptyState label="No open tasks are due this week." />}
+          </div>
+        </Panel>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <Panel>
+          <SectionHeader eyebrow="Risk" title="Needs Follow-Up" />
+          <div className="space-y-2">
+            {atRiskBriefs.length ? atRiskBriefs.map((brief) => <ExecutiveBriefRow key={brief.project.id} brief={brief} />) : <EmptyState label="No projects are currently marked at risk." />}
+          </div>
+        </Panel>
+
+        <Panel>
+          <SectionHeader eyebrow="Greenlight" title="Candidates" />
+          <div className="space-y-2">
+            {greenlightCandidates.length ? greenlightCandidates.map((brief) => <ExecutiveBriefRow key={brief.project.id} brief={brief} />) : <EmptyState label="No greenlight candidates are ready yet." />}
+          </div>
+        </Panel>
       </div>
 
       <Panel>
-        <SectionHeader eyebrow="Quick Read" title="Slate Table" />
-        <ExecutiveSlateTable briefs={briefs} />
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="font-display text-[10px] uppercase tracking-[0.16em] text-studio-400">Full Slate</p>
+            <h3 className="mt-1 text-base font-semibold text-studio-100">Need the full project-by-project read?</h3>
+            <p className="mt-1 text-[13px] text-studio-300">Open Projects for the complete active project list, or switch to the Development Slate for incoming opportunities.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <TableLink href="/projects">Open Projects</TableLink>
+            <TableLink href="/tasks">Open Tasks</TableLink>
+          </div>
+        </div>
       </Panel>
     </div>
   );
@@ -2646,6 +3107,21 @@ function executiveNextAction(
   return "Assign source material.";
 }
 
+function isTaskDueThisWeek(task: HammerTask) {
+  if (!task.dueDate) return false;
+  const due = new Date(`${task.dueDate}T00:00:00`);
+  if (Number.isNaN(due.getTime())) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const weekFromToday = new Date(today);
+  weekFromToday.setDate(today.getDate() + 7);
+  return due >= today && due <= weekFromToday;
+}
+
+function priorityRank(priority: TaskPriority) {
+  return { LOW: 0, MEDIUM: 1, HIGH: 2, URGENT: 3 }[priority] ?? 0;
+}
+
 function documentForApproval(approval: HammerApproval, documents: HammerDocument[], versions: HammerDocumentVersion[]) {
   if (approval.targetType !== "DOCUMENT_VERSION") return undefined;
   const version = versions.find((item) => item.id === approval.targetId);
@@ -2696,6 +3172,24 @@ function ExecutiveProjectCard({ brief }: { brief: ExecutiveProjectBrief }) {
   );
 }
 
+function ExecutiveBriefRow({ brief }: { brief: ExecutiveProjectBrief }) {
+  return (
+    <Link href={`/projects/${brief.project.id}`} className="block rounded-md border border-white/10 bg-white/[0.03] p-3 transition hover:border-amberline/35 hover:bg-white/[0.055]">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-[13px] font-semibold text-studio-100">{brief.project.title}</p>
+            <ExecutiveHealthBadge health={brief.health} />
+          </div>
+          <p className="mt-1 text-xs leading-5 text-studio-300">{brief.summary}</p>
+          <p className="mt-1 truncate text-xs text-studio-400">{brief.nextAction}</p>
+        </div>
+        <Badge value={brief.project.status} subtle />
+      </div>
+    </Link>
+  );
+}
+
 function ExecutiveHealthBadge({ health }: { health: ExecutiveHealth }) {
   const tone: BadgeTone = health === "decision" ? "green" : health === "attention" ? "yellow" : health === "risk" ? "red" : "blue";
   return <span className={cn("status-badge inline-flex rounded border px-2 py-1 font-display text-[11px] uppercase", badgeStyles[tone].solid)}>{executiveHealthLabel(health)}</span>;
@@ -2713,8 +3207,8 @@ function ExecutiveBriefMetric({ label, value, detail }: { label: string; value: 
 
 function ExecutiveSlateTable({ briefs }: { briefs: ExecutiveProjectBrief[] }) {
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[860px] text-left text-[13px]">
+    <div className="data-scroll">
+      <table className="data-table min-w-[860px]">
         <thead className="text-[11px] uppercase tracking-[0.12em] text-studio-400">
           <tr><th className="py-2">Project</th><th>Overall Status</th><th>Current Material</th><th>Open Items</th><th>Next Step</th></tr>
         </thead>
@@ -2839,8 +3333,8 @@ function AdminUsers({
 
       <Panel>
         <SectionHeader eyebrow="Projects" title="Project Status" />
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[720px] text-left text-[13px]">
+        <div className="data-scroll">
+          <table className="data-table min-w-[720px]">
             <thead className="text-xs uppercase tracking-[0.16em] text-studio-400"><tr><th className="py-2">Project</th><th>Current Status</th><th>Status Control</th><th>Updated</th></tr></thead>
             <tbody className="divide-y divide-white/10">
               {projects.map((project) => (
@@ -2868,8 +3362,8 @@ function AdminUsers({
 
       <Panel>
         <SectionHeader eyebrow="RBAC" title="Users and Roles" action={<GhostButton icon={UsersRound} label="Invite User" />} />
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[900px] text-left text-[13px]">
+        <div className="data-scroll">
+          <table className="data-table min-w-[900px]">
             <thead className="text-xs uppercase tracking-[0.16em] text-studio-400"><tr><th className="py-2">Name</th><th>Email</th><th>Global Role</th><th>Status</th><th>Project Access</th><th>Actions</th></tr></thead>
             <tbody className="divide-y divide-white/10">
               {visibleUsers.map((user) => {
@@ -2917,13 +3411,13 @@ function AdminUsers({
 
 function ProjectTable({ projects }: { projects: HammerProject[] }) {
   if (!projects.length) return <EmptyState label="No projects match this view." />;
-  return <div className="overflow-x-auto"><table className="w-full min-w-[620px] text-left text-[13px]"><thead className="text-[11px] uppercase tracking-[0.12em] text-studio-400"><tr><th className="py-2">Project</th><th>Status</th><th>Owner</th><th>Updated</th></tr></thead><tbody className="divide-y divide-white/10">{projects.map((project) => <tr key={project.id} className="transition hover:bg-white/[0.035]"><td className="py-2.5"><Link className="block font-semibold text-studio-100" href={`/projects/${project.id}`}>{project.title}<p className="mt-0.5 text-xs font-normal text-studio-400">{project.genre}</p></Link></td><td><Link className="block" href={`/projects/${project.id}`}><Badge value={project.status} /></Link></td><td><Link className="block text-studio-300" href={`/projects/${project.id}`}>{userName(project.ownerId)}</Link></td><td><Link className="block text-studio-300" href={`/projects/${project.id}`}>{project.updatedAt}</Link></td></tr>)}</tbody></table></div>;
+  return <div className="data-scroll"><table className="data-table min-w-[620px]"><thead><tr><th>Project</th><th>Status</th><th>Owner</th><th>Updated</th></tr></thead><tbody>{projects.map((project) => <tr key={project.id} className="transition hover:bg-white/[0.035]"><td><Link className="block font-semibold text-studio-100" href={`/projects/${project.id}`}>{project.title}<p className="mt-0.5 text-xs font-normal text-studio-400">{project.genre}</p></Link></td><td><Link className="block" href={`/projects/${project.id}`}><Badge value={project.status} /></Link></td><td><Link className="block text-studio-300" href={`/projects/${project.id}`}>{userName(project.ownerId)}</Link></td><td><Link className="block text-studio-300" href={`/projects/${project.id}`}>{project.updatedAt}</Link></td></tr>)}</tbody></table></div>;
 }
 
 function TaskRows({ tasks, selectedTaskId, showAssignee = false, onUpdateTask }: { tasks: HammerTask[]; selectedTaskId?: string; showAssignee?: boolean; onUpdateTask?: (taskId: string, patch: Partial<Pick<HammerTask, "priority" | "status">>) => void }) {
   const gridClass = showAssignee ? "md:grid-cols-[1fr_130px_120px_110px_100px]" : "md:grid-cols-[1fr_120px_110px_100px]";
   return (
-    <div className="grid gap-2">
+    <div className="data-scroll-list grid gap-2">
       <div className={cn("hidden px-2.5 text-[11px] uppercase tracking-[0.12em] text-studio-400 md:grid", gridClass)}>
         <span>Task</span>
         {showAssignee ? <span>Assignee</span> : null}
@@ -3164,6 +3658,60 @@ function projectTitleFromList(projectId: string, projects: HammerProject[]) {
   return projects.find((project) => project.id === projectId)?.title ?? projectTitle(projectId);
 }
 
+function parseProjectLeadCsv(csv: string): HammerProjectLead[] {
+  const rows = parseCsvRows(csv).filter((row) => row.some((cell) => cell.trim()));
+  if (rows.length < 2) return [];
+  const headers = rows[0].map((header) => normalizeCsvHeader(header));
+  return rows.slice(1).map((row, index) => {
+    const record = Object.fromEntries(headers.map((header, cellIndex) => [header, row[cellIndex]?.trim() ?? ""]));
+    const externalId = record.projectid || undefined;
+    return {
+      id: externalId || `lead-demo-${index + 1}`,
+      title: record.title || "Untitled Slate Item",
+      externalId,
+      logline: record.logline,
+      genre: record.genre,
+      lane: record.lane,
+      creator: record.creatorauthordirector,
+      priorityScore: optionalCsvNumber(record.priorityscore),
+      subgenreTags: record.subgenretags,
+      urgencyLabel: record.urgencylabel,
+      discoveryStage: record.discoverystage,
+      countryLanguage: record.countrylanguage,
+      platformSource: record.platformsource,
+      whyItMatters: record.whyitmatters,
+      signalProof: record.signalproof,
+      sourceLink: record.sourcelink,
+      rightsStatus: record.rightsstatus,
+      rightsHolder: record.rightsholder,
+      contactRep: record.contactrep,
+      adaptationFormat: record.adaptationformat,
+      comps: record.comps,
+      heatScore: optionalCsvNumber(record.heatscore),
+      conceptScore: optionalCsvNumber(record.conceptscore),
+      adaptabilityScore: optionalCsvNumber(record.adaptabilityscore),
+      rightsOpportunityScore: optionalCsvNumber(record.rightsopportunityscore),
+      studioFitScore: optionalCsvNumber(record.studiofitscore),
+      nextActionStatus: record.nextactionstatus,
+      owner: record.owner,
+      nextStep: record.nextstep,
+      lastUpdated: record.lastupdated,
+      notes: record.notes,
+      projectCover: record.projectcover,
+      searchKeywords: record.searchkeywords,
+      originalReleaseDate: record.originalreleasepublicationdate,
+      myPicks: record.mypicks,
+      actionItems: record.actionitems,
+      country: record.country,
+      votes: optionalCsvNumber(record.votes),
+      yearWritten: record.yearwritten,
+      scriptStatus: record.scriptstatus,
+      format: record.format,
+      scriptPdf: record.scriptpdf
+    };
+  });
+}
+
 function parseContactsCsv(csv: string): HammerContact[] {
   const rows = parseCsvRows(csv).filter((row) => row.some((cell) => cell.trim()));
   if (rows.length < 2) return [];
@@ -3184,6 +3732,12 @@ function parseContactsCsv(csv: string): HammerContact[] {
       notes: record.notes || ""
     };
   });
+}
+
+function optionalCsvNumber(value?: string) {
+  if (!value?.trim()) return undefined;
+  const parsed = Number(value.replace(/,/g, ""));
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function buildContactsCsv(contacts: HammerContact[]) {

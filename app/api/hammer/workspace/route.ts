@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import type { AssetStatus, AssetType, ContactType, DocumentType, DocumentVersionStatus, Prisma, ProjectStatus, ProjectStage, SupportingDocumentType, TaskPriority, TaskStatus, TaskTargetType, UserRole } from "@prisma/client";
+import type { AssetStatus, AssetType, ContactType, DocumentType, DocumentVersionStatus, Prisma, ProjectLead, ProjectStatus, ProjectStage, SupportingDocumentType, TaskPriority, TaskStatus, TaskTargetType, UserRole } from "@prisma/client";
 import { forbidden, isDatabaseConfigured, requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
@@ -18,8 +18,9 @@ export async function GET(request: Request) {
     const projectWhere = canViewAllProjects(auth.user.appRole) ? { deletedAt: null } : { deletedAt: null, memberships: { some: { userId: auth.user.id } } };
     const documentWhere = canSeeLibrary ? { deletedAt: null } : { deletedAt: null, projectId: { in: projectIds } };
 
-    const [projects, documents, versions, supportingDocuments, assets, tasks, contacts, users, approvals] = await Promise.all([
+    const [projects, projectLeads, documents, versions, supportingDocuments, assets, tasks, contacts, users, approvals] = await Promise.all([
       prisma.project.findMany({ where: projectWhere, orderBy: { updatedAt: "desc" } }),
+      prisma.projectLead.findMany({ where: { deletedAt: null }, orderBy: [{ promotedProjectId: "asc" }, { updatedAt: "desc" }] }),
       prisma.document.findMany({ where: documentWhere, orderBy: { updatedAt: "desc" } }),
       prisma.documentVersion.findMany({ where: { document: documentWhere }, orderBy: { createdAt: "desc" } }),
       prisma.supportingDocument.findMany({ where: { deletedAt: null, scriptDocument: documentWhere }, orderBy: { createdAt: "desc" } }),
@@ -33,6 +34,7 @@ export async function GET(request: Request) {
     return NextResponse.json({
       mode: "database",
       projects: projects.map(toProject),
+      projectLeads: projectLeads.map(toProjectLead),
       documents: documents.map(toDocument),
       versions: versions.map(toVersion),
       supportingDocuments: supportingDocuments.map(toSupportingDocument),
@@ -78,6 +80,35 @@ export async function POST(request: Request) {
           where: { id: stringField(body.projectId) },
           data: { status: projectStatusField(body.status), auditLogs: { create: audit(auth.user.id, auth.user.email, "project.status_changed", "Project", stringField(body.projectId), { status: body.status }) } }
         })) });
+
+      case "updateProjectLead":
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        return NextResponse.json({ projectLead: toProjectLead(await prisma.projectLead.update({
+          where: { id: stringField(body.leadId) },
+          data: projectLeadPatch(body)
+        })) });
+
+      case "promoteProjectLead": {
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        const lead = await prisma.projectLead.findUnique({ where: { id: stringField(body.leadId) } });
+        if (!lead) return NextResponse.json({ error: "Slate item not found." }, { status: 404 });
+        if (lead.promotedProjectId) return NextResponse.json({ project: toProject(await prisma.project.findUniqueOrThrow({ where: { id: lead.promotedProjectId } })), projectLead: toProjectLead(lead) });
+        const project = await prisma.project.create({
+          data: {
+            title: lead.title,
+            logline: lead.logline || "Promoted from development slate.",
+            type: lead.format || lead.adaptationFormat || "Feature",
+            genre: lead.genre || "Unassigned",
+            status: "IDEA",
+            hammerStage: "DEVELOPMENT",
+            ownerId: auth.user.id,
+            stage: "DEVELOPMENT",
+            auditLogs: { create: audit(auth.user.id, auth.user.email, "project_lead.promoted", "ProjectLead", lead.id, { title: lead.title }) }
+          }
+        });
+        const projectLead = await prisma.projectLead.update({ where: { id: lead.id }, data: { promotedProjectId: project.id, nextActionStatus: "Promoted to Active Project" } });
+        return NextResponse.json({ project: toProject(project), projectLead: toProjectLead(projectLead) });
+      }
 
       case "uploadDocumentVersion":
         return NextResponse.json(await uploadDocumentVersion(auth.user.id, body));
@@ -243,6 +274,54 @@ function toProject(project: { id: string; title: string; logline: string | null;
   return { id: project.id, title: project.title, logline: project.logline ?? "", type: project.type ?? "Feature", genre: project.genre ?? "", status: project.status, stage: project.hammerStage, ownerId: project.ownerId ?? "", updatedAt: dateString(project.updatedAt) };
 }
 
+function toProjectLead(lead: ProjectLead) {
+  return {
+    id: lead.id,
+    title: lead.title,
+    externalId: lead.externalId ?? undefined,
+    logline: lead.logline ?? undefined,
+    genre: lead.genre ?? undefined,
+    lane: lead.lane ?? undefined,
+    creator: lead.creator ?? undefined,
+    priorityScore: lead.priorityScore ?? undefined,
+    subgenreTags: lead.subgenreTags ?? undefined,
+    urgencyLabel: lead.urgencyLabel ?? undefined,
+    discoveryStage: lead.discoveryStage ?? undefined,
+    countryLanguage: lead.countryLanguage ?? undefined,
+    platformSource: lead.platformSource ?? undefined,
+    whyItMatters: lead.whyItMatters ?? undefined,
+    signalProof: lead.signalProof ?? undefined,
+    sourceLink: lead.sourceLink ?? undefined,
+    rightsStatus: lead.rightsStatus ?? undefined,
+    rightsHolder: lead.rightsHolder ?? undefined,
+    contactRep: lead.contactRep ?? undefined,
+    adaptationFormat: lead.adaptationFormat ?? undefined,
+    comps: lead.comps ?? undefined,
+    heatScore: lead.heatScore ?? undefined,
+    conceptScore: lead.conceptScore ?? undefined,
+    adaptabilityScore: lead.adaptabilityScore ?? undefined,
+    rightsOpportunityScore: lead.rightsOpportunityScore ?? undefined,
+    studioFitScore: lead.studioFitScore ?? undefined,
+    nextActionStatus: lead.nextActionStatus ?? undefined,
+    owner: lead.owner ?? undefined,
+    nextStep: lead.nextStep ?? undefined,
+    lastUpdated: lead.lastUpdated ?? undefined,
+    notes: lead.notes ?? undefined,
+    projectCover: lead.projectCover ?? undefined,
+    searchKeywords: lead.searchKeywords ?? undefined,
+    originalReleaseDate: lead.originalReleaseDate ?? undefined,
+    myPicks: lead.myPicks ?? undefined,
+    actionItems: lead.actionItems ?? undefined,
+    country: lead.country ?? undefined,
+    votes: lead.votes ?? undefined,
+    yearWritten: lead.yearWritten ?? undefined,
+    scriptStatus: lead.scriptStatus ?? undefined,
+    format: lead.format ?? undefined,
+    scriptPdf: lead.scriptPdf ?? undefined,
+    promotedProjectId: lead.promotedProjectId ?? undefined
+  };
+}
+
 function toUser(user: { id: string; email: string; name: string; avatarUrl: string | null; googleId: string | null; role: UserRole }) {
   return { id: user.id, email: user.email, name: user.name, avatarUrl: user.avatarUrl ?? undefined, googleId: user.googleId ?? "", role: user.role };
 }
@@ -313,6 +392,35 @@ function numberField(value: unknown) {
   return Number.isFinite(number) ? number : 0;
 }
 
+function optionalNumber(value: unknown) {
+  if (value === "" || value === null || value === undefined) return undefined;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
+}
+
+function projectLeadPatch(body: ActionBody): Prisma.ProjectLeadUpdateInput {
+  return {
+    title: body.title !== undefined ? stringField(body.title) || "Untitled Slate Item" : undefined,
+    logline: body.logline !== undefined ? optionalString(body.logline) : undefined,
+    genre: body.genre !== undefined ? optionalString(body.genre) : undefined,
+    lane: body.lane !== undefined ? optionalString(body.lane) : undefined,
+    creator: body.creator !== undefined ? optionalString(body.creator) : undefined,
+    priorityScore: body.priorityScore !== undefined ? optionalNumber(body.priorityScore) : undefined,
+    urgencyLabel: body.urgencyLabel !== undefined ? optionalString(body.urgencyLabel) : undefined,
+    rightsStatus: body.rightsStatus !== undefined ? optionalString(body.rightsStatus) : undefined,
+    contactRep: body.contactRep !== undefined ? optionalString(body.contactRep) : undefined,
+    nextActionStatus: body.nextActionStatus !== undefined ? optionalString(body.nextActionStatus) : undefined,
+    owner: body.owner !== undefined ? optionalString(body.owner) : undefined,
+    nextStep: body.nextStep !== undefined ? optionalString(body.nextStep) : undefined,
+    lastUpdated: body.lastUpdated !== undefined ? optionalString(body.lastUpdated) : undefined,
+    notes: body.notes !== undefined ? optionalString(body.notes) : undefined,
+    myPicks: body.myPicks !== undefined ? optionalString(body.myPicks) : undefined,
+    actionItems: body.actionItems !== undefined ? optionalString(body.actionItems) : undefined,
+    scriptStatus: body.scriptStatus !== undefined ? optionalString(body.scriptStatus) : undefined,
+    format: body.format !== undefined ? optionalString(body.format) : undefined
+  };
+}
+
 function dateField(value: unknown) {
   const string = stringField(value);
   return string ? new Date(`${string}T00:00:00.000Z`) : undefined;
@@ -361,7 +469,7 @@ const taskStatuses: TaskStatus[] = ["TODO", "IN_PROGRESS", "ON_HOLD", "BLOCKED",
 function taskTargetField(value: unknown): TaskTargetType {
   return taskTargets.includes(value as TaskTargetType) ? value as TaskTargetType : "PROJECT";
 }
-const taskTargets: TaskTargetType[] = ["PROJECT", "DOCUMENT", "DOCUMENT_VERSION", "SCENE", "ENTITY", "ASSET", "APPROVAL"];
+const taskTargets: TaskTargetType[] = ["PROJECT", "PROJECT_LEAD", "DOCUMENT", "DOCUMENT_VERSION", "SCENE", "ENTITY", "ASSET", "APPROVAL"];
 
 function contactTypeField(value: unknown): ContactType {
   return contactTypes.includes(value as ContactType) ? value as ContactType : "OTHER";
