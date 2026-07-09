@@ -51,6 +51,52 @@ export interface HammerProject {
   updatedAt: string;
 }
 
+export interface HammerProjectLead {
+  id: string;
+  title: string;
+  externalId?: string;
+  logline?: string;
+  genre?: string;
+  lane?: string;
+  creator?: string;
+  priorityScore?: number;
+  subgenreTags?: string;
+  urgencyLabel?: string;
+  discoveryStage?: string;
+  countryLanguage?: string;
+  platformSource?: string;
+  whyItMatters?: string;
+  signalProof?: string;
+  sourceLink?: string;
+  rightsStatus?: string;
+  rightsHolder?: string;
+  contactRep?: string;
+  adaptationFormat?: string;
+  comps?: string;
+  heatScore?: number;
+  conceptScore?: number;
+  adaptabilityScore?: number;
+  rightsOpportunityScore?: number;
+  studioFitScore?: number;
+  nextActionStatus?: string;
+  owner?: string;
+  nextStep?: string;
+  lastUpdated?: string;
+  notes?: string;
+  projectCover?: string;
+  searchKeywords?: string;
+  originalReleaseDate?: string;
+  myPicks?: string;
+  actionItems?: string;
+  country?: string;
+  votes?: number;
+  yearWritten?: string;
+  scriptStatus?: string;
+  format?: string;
+  scriptPdf?: string;
+  promotedProjectId?: string;
+}
+
 export const hammerProjectStatuses: HammerProjectStatus[] = [
   "IDEA",
   "SUBMISSION",

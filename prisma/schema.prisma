@@ -168,6 +168,7 @@ enum TaskPriority {
 
 enum TaskTargetType {
   PROJECT
+  PROJECT_LEAD
   DOCUMENT
   DOCUMENT_VERSION
   SCENE
@@ -317,10 +318,72 @@ model Project {
   changeRequests          ChangeRequest[]
   auditLogs               AuditLog[]
   memberships             ProjectMembership[]
+  promotedLeads           ProjectLead[]
 
   @@index([status])
   @@index([hammerStage])
   @@index([ownerId])
+}
+
+model ProjectLead {
+  id                      String    @id @default(cuid())
+  title                   String
+  externalId              String?   @unique
+  logline                 String?   @db.Text
+  genre                   String?
+  lane                    String?
+  creator                 String?
+  priorityScore           Float?
+  subgenreTags            String?
+  urgencyLabel            String?
+  discoveryStage          String?
+  countryLanguage         String?
+  platformSource          String?
+  whyItMatters            String?   @db.Text
+  signalProof             String?   @db.Text
+  sourceLink              String?   @db.Text
+  rightsStatus            String?
+  rightsHolder            String?
+  contactRep              String?
+  adaptationFormat        String?
+  comps                   String?   @db.Text
+  heatScore               Float?
+  conceptScore            Float?
+  adaptabilityScore       Float?
+  rightsOpportunityScore  Float?
+  studioFitScore          Float?
+  nextActionStatus        String?
+  owner                   String?
+  nextStep                String?   @db.Text
+  lastUpdated             String?
+  notes                   String?   @db.Text
+  projectCover            String?   @db.Text
+  searchKeywords          String?   @db.Text
+  originalReleaseDate     String?
+  myPicks                 String?
+  actionItems             String?   @db.Text
+  country                 String?
+  votes                   Float?
+  yearWritten             String?
+  scriptStatus            String?
+  format                  String?
+  scriptPdf               String?   @db.Text
+  promotedProjectId       String?
+  deletedAt               DateTime?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  promotedProject         Project?  @relation(fields: [promotedProjectId], references: [id], onDelete: SetNull)
+
+  @@index([lane])
+  @@index([genre])
+  @@index([urgencyLabel])
+  @@index([rightsStatus])
+  @@index([nextActionStatus])
+  @@index([owner])
+  @@index([scriptStatus])
+  @@index([promotedProjectId])
+  @@index([deletedAt])
 }
 
 model User {

@@ -233,8 +233,8 @@ export function ScriptIntelligenceWorkspace() {
           {workspaceTab === "scenes" ? (
             <div>
               <SectionHeader eyebrow="Scene Breakdown" title="Parsed Scenes" />
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[860px] border-separate border-spacing-y-2 text-left">
+              <div className="data-scroll">
+                <table className="data-table min-w-[860px] border-separate border-spacing-y-2">
                   <thead className="font-display text-xs uppercase tracking-[0.14em] text-studio-300">
                     <tr>
                       <th className="px-3 py-2">Scene</th>
