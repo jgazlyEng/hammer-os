@@ -235,8 +235,8 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       body: JSON.stringify({ action, ...payload })
     });
     if (!response.ok) {
-      const data = await response.json().catch(() => null) as { error?: string } | null;
-      throw new Error(data?.error ?? "Database update failed.");
+      const data = await response.json().catch(() => null) as { error?: string; detail?: string } | null;
+      throw new Error(data?.detail ? `${data.error ?? "Database update failed."}: ${data.detail}` : data?.error ?? "Database update failed.");
     }
     const data = await response.json();
     await loadDatabaseWorkspace();
@@ -647,9 +647,44 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     });
   }
 
+  async function deleteTask(taskId: string) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("deleteTask", { taskId });
+      return;
+    }
+    const nextTasks = localTasks.filter((task) => task.id !== taskId);
+    setLocalTasks(nextTasks);
+    window.localStorage.setItem(HAMMER_LOCAL_TASKS_STORAGE_KEY, JSON.stringify(nextTasks));
+    window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_TASKS_EVENT));
+  }
+
   async function updateContact(contactId: string, patch: Partial<Pick<HammerContact, "status" | "ownerId" | "tags" | "lastContacted" | "nextFollowUp" | "projectIds" | "notes">>) {
     if (workspaceMode === "database") {
       await runWorkspaceAction("updateContact", { contactId, ...patch });
+    }
+  }
+
+  async function deleteProject(projectId: string) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("deleteProject", { projectId });
+      return;
+    }
+    const nextProjects = localProjects.filter((project) => project.id !== projectId);
+    setLocalProjects(nextProjects);
+    setProjects((currentProjects) => currentProjects.filter((project) => project.id !== projectId));
+    window.localStorage.setItem(HAMMER_LOCAL_PROJECTS_STORAGE_KEY, JSON.stringify(nextProjects));
+    window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_PROJECTS_EVENT));
+  }
+
+  async function createUser(input: { name: string; email: string; password: string; appRole: "admin" | "executive" | "producer" | "department_lead" }) {
+    if (workspaceMode !== "database") return;
+    await runWorkspaceAction("createUser", input);
+  }
+
+  async function deleteUser(userId: string) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("deleteUser", { userId });
+      return;
     }
   }
 
@@ -717,18 +752,18 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     if (view === "script-breakdown") return <ScriptBreakdown documentId={document.id} documents={documents} versions={versions} />;
     if (view === "assets") return <Assets projectId={projects.length ? activeProject.id : ""} assets={assets} />;
     if (view === "asset-detail") return <AssetDetail assetId={asset.id} assets={assets} />;
-    if (view === "tasks") return <Tasks selectedTaskId={selectedTaskId} currentUser={currentUser} users={users} tasks={tasks} projects={projects} onCreateTask={createTask} onUpdateTask={updateTask} />;
+    if (view === "tasks") return <Tasks selectedTaskId={selectedTaskId} currentUser={currentUser} users={users} tasks={tasks} projects={projects} onCreateTask={createTask} onUpdateTask={updateTask} onDeleteTask={deleteTask} />;
     if (view === "contacts") {
       if (!canViewContacts(currentUser.role)) return <AccessDenied title="Contacts access required" detail="Only admins, producers, and executives can view the studio contact directory." />;
       return <Contacts initialContacts={contacts} currentUser={currentUser} users={users} projects={projects} documents={documents} tasks={tasks} databaseMode={workspaceMode === "database"} onDatabaseImport={(importedContacts) => runWorkspaceAction("importContacts", { contacts: importedContacts })} onUpdateContact={updateContact} />;
     }
     if (view === "reviews") return <LegacyRedirect title="Reviews are folded into Scripts" detail="Review work now starts from scripts awaiting review, so the queue is easier to follow." href="/scripts?section=inbox" label="Open Scripts" />;
     if (view === "executive") {
-      if (currentUser.role !== "EXECUTIVE") return <AccessDenied title="Executive access required" detail="The executive dashboard is limited to users with the Executive role." />;
+      if (currentUser.role !== "EXECUTIVE" && currentUser.role !== "ADMIN") return <AccessDenied title="Executive access required" detail="The executive dashboard is limited to users with the Executive role." />;
       return <Executive projects={projects} documents={documents} versions={versions} tasks={tasks} assets={assets} approvals={approvals} />;
     }
     if (currentUser.role !== "ADMIN") return <AccessDenied title="Admin access required" detail="Only admins can manage projects, users, roles, and project access." />;
-    return <AdminUsers projects={projects} currentUser={currentUser} onCreateProject={addProject} onStatusChange={updateProjectStatus} />;
+    return <AdminUsers projects={projects} users={users} currentUser={currentUser} databaseMode={workspaceMode === "database"} onCreateProject={addProject} onDeleteProject={deleteProject} onCreateUser={createUser} onDeleteUser={deleteUser} onStatusChange={updateProjectStatus} />;
   })();
 
   function updateProjectStatus(projectId: string, status: HammerProjectStatus) {
@@ -2686,7 +2721,8 @@ function Tasks({
   tasks: allTasks = hammerTasks,
   projects = hammerProjects,
   onCreateTask,
-  onUpdateTask
+  onUpdateTask,
+  onDeleteTask
 }: {
   projectId?: string;
   compact?: boolean;
@@ -2697,8 +2733,10 @@ function Tasks({
   projects?: HammerProject[];
   onCreateTask?: (input: { projectId: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
   onUpdateTask?: (taskId: string, patch: Partial<Pick<HammerTask, "priority" | "status">>) => void;
+  onDeleteTask?: (taskId: string) => void;
 }) {
   const canViewAllTasks = canViewAllProjectTasks(currentUser?.role);
+  const canDeleteTasks = currentUser?.role === "ADMIN";
   const tasks = allTasks.filter((task) => (!projectId || task.projectId === projectId) && (canViewAllTasks || task.assignedToId === currentUser?.id));
   const slateTasks = tasks.filter((task) => task.targetType === "PROJECT_LEAD");
   const projectTasks = tasks.filter((task) => task.targetType !== "PROJECT_LEAD");
@@ -2708,7 +2746,7 @@ function Tasks({
       <Panel>
         <SectionHeader eyebrow={projectName ? `Showing ${projectName}` : "Project Work"} title={compact ? "Tasks" : canViewAllTasks ? "Project Tasks" : "My Project Tasks"} action={onCreateTask ? <NewTaskDialog projects={projects} users={users} onCreateTask={onCreateTask} /> : undefined} />
         {projectTasks.length ? (
-          <TaskRows tasks={projectTasks} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} onUpdateTask={onUpdateTask} />
+          <TaskRows tasks={projectTasks} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} onUpdateTask={onUpdateTask} onDeleteTask={canDeleteTasks ? onDeleteTask : undefined} />
         ) : (
           <EmptyState label={projectName ? (canViewAllTasks ? `No project tasks for ${projectName}. Create one when there is a next step.` : `No project tasks assigned to you for ${projectName}.`) : "No project tasks match this view."} />
         )}
@@ -2716,7 +2754,7 @@ function Tasks({
       <Panel>
         <SectionHeader eyebrow="Development Slate" title={canViewAllTasks ? "Slate Tasks" : "My Slate Tasks"} />
         {slateTasks.length ? (
-          <TaskRows tasks={slateTasks} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} onUpdateTask={onUpdateTask} />
+          <TaskRows tasks={slateTasks} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} onUpdateTask={onUpdateTask} onDeleteTask={canDeleteTasks ? onDeleteTask : undefined} />
         ) : (
           <EmptyState label={projectName ? (canViewAllTasks ? `No slate tasks for ${projectName}.` : `No slate tasks assigned to you for ${projectName}.`) : "No slate tasks match this view."} />
         )}
@@ -3478,16 +3516,28 @@ function ExecutiveSlateTable({ briefs }: { briefs: ExecutiveProjectBrief[] }) {
 
 function AdminUsers({
   projects,
+  users,
   currentUser,
+  databaseMode,
   onCreateProject,
+  onDeleteProject,
+  onCreateUser,
+  onDeleteUser,
   onStatusChange
 }: {
   projects: HammerProject[];
+  users: HammerUser[];
   currentUser: ReturnType<typeof hammerUserByEmail>;
+  databaseMode: boolean;
   onCreateProject: (draft: Partial<ProjectDraft>) => void;
+  onDeleteProject: (projectId: string) => void;
+  onCreateUser: (input: { name: string; email: string; password: string; appRole: "admin" | "executive" | "producer" | "department_lead" }) => Promise<void>;
+  onDeleteUser: (userId: string) => Promise<void>;
   onStatusChange: (projectId: string, status: HammerProjectStatus) => void;
 }) {
   const canCreateProject = currentUser.role === "ADMIN";
+  const [createUserOpen, setCreateUserOpen] = useState(false);
+  const [createdUserReceipt, setCreatedUserReceipt] = useState<{ name: string; email: string; password: string } | null>(null);
   const [localUserStates, setLocalUserStates] = useState<Record<string, { inactive?: boolean; deleted?: boolean }>>({});
   const [projectDraft, setProjectDraft] = useState<ProjectDraft>({
     title: "",
@@ -3512,7 +3562,13 @@ function AdminUsers({
     }
   }, []);
 
-  const visibleUsers = hammerUsers.filter((user) => !localUserStates[user.id]?.deleted);
+  const visibleUsers = users.filter((user) => !localUserStates[user.id]?.deleted);
+
+  async function createAdminUser(input: { name: string; email: string; password: string; appRole: "admin" | "executive" | "producer" | "department_lead" }) {
+    await onCreateUser(input);
+    setCreatedUserReceipt({ name: input.name, email: input.email, password: input.password });
+    setCreateUserOpen(false);
+  }
 
   function updateLocalUserState(userId: string, nextState: { inactive?: boolean; deleted?: boolean }) {
     setLocalUserStates((current) => {
@@ -3529,9 +3585,13 @@ function AdminUsers({
     updateLocalUserState(user.id, { inactive: !inactive });
   }
 
-  function deleteUser(user: HammerUser) {
+  async function deleteUser(user: HammerUser) {
     if (user.id === currentUser.id) return;
-    if (!window.confirm(`Delete ${user.name}? This removes the user from the demo admin list.`)) return;
+    if (!window.confirm(`Delete ${user.name}? This removes their account and project memberships.`)) return;
+    if (databaseMode) {
+      await onDeleteUser(user.id);
+      return;
+    }
     updateLocalUserState(user.id, { deleted: true, inactive: true });
   }
 
@@ -3583,7 +3643,7 @@ function AdminUsers({
         <SectionHeader eyebrow="Projects" title="Project Status" />
         <div className="data-scroll">
           <table className="data-table min-w-[720px]">
-            <thead className="text-xs uppercase tracking-[0.16em] text-studio-400"><tr><th className="py-2">Project</th><th>Current Status</th><th>Status Control</th><th>Updated</th></tr></thead>
+            <thead className="text-xs uppercase tracking-[0.16em] text-studio-400"><tr><th className="py-2">Project</th><th>Current Status</th><th>Status Control</th><th>Updated</th><th>Admin</th></tr></thead>
             <tbody className="divide-y divide-white/10">
               {projects.map((project) => (
                 <tr key={project.id}>
@@ -3601,6 +3661,19 @@ function AdminUsers({
                     </select>
                   </td>
                   <td className="text-studio-300">{project.updatedAt}</td>
+                  <td>
+                    <button
+                      type="button"
+                      disabled={!canCreateProject}
+                      onClick={() => {
+                        if (window.confirm(`Delete project "${project.title}"? This hides it from the active workspace.`)) onDeleteProject(project.id);
+                      }}
+                      className="inline-flex items-center gap-1 rounded border border-rose-400/25 bg-rose-500/5 px-1.5 py-1 text-[11px] font-semibold text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                      Delete
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -3609,7 +3682,14 @@ function AdminUsers({
       </Panel>
 
       <Panel>
-        <SectionHeader eyebrow="RBAC" title="Users and Roles" action={<GhostButton icon={UsersRound} label="Invite User" />} />
+        <SectionHeader eyebrow="RBAC" title="Users and Roles" action={<PrimaryButton icon={UsersRound} label="Create User" onClick={() => setCreateUserOpen(true)} />} />
+        {createdUserReceipt ? (
+          <div className="mb-3 rounded-md border border-emerald-400/25 bg-emerald-400/8 p-3">
+            <p className="text-[13px] font-semibold text-studio-100">Temporary login created for {createdUserReceipt.name}</p>
+            <p className="mt-1 text-xs text-studio-300">{createdUserReceipt.email}</p>
+            <div className="mt-2 rounded border border-white/10 bg-white/[0.035] px-2.5 py-2 font-mono text-sm text-emerald-200">{createdUserReceipt.password}</div>
+          </div>
+        ) : null}
         <div className="data-scroll">
           <table className="data-table min-w-[900px]">
             <thead className="text-xs uppercase tracking-[0.16em] text-studio-400"><tr><th className="py-2">Name</th><th>Email</th><th>Global Role</th><th>Status</th><th>Project Access</th><th>Actions</th></tr></thead>
@@ -3653,8 +3733,100 @@ function AdminUsers({
           </table>
         </div>
       </Panel>
+      {createUserOpen ? (
+        <CreateUserModal
+          disabled={!databaseMode}
+          onClose={() => setCreateUserOpen(false)}
+          onCreate={createAdminUser}
+        />
+      ) : null}
     </div>
   );
+}
+
+function CreateUserModal({
+  disabled,
+  onClose,
+  onCreate
+}: {
+  disabled: boolean;
+  onClose: () => void;
+  onCreate: (input: { name: string; email: string; password: string; appRole: "admin" | "executive" | "producer" | "department_lead" }) => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [appRole, setAppRole] = useState<"admin" | "executive" | "producer" | "department_lead">("producer");
+  const [password, setPassword] = useState(() => temporaryPassword());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (disabled) {
+      setError("User creation requires database mode.");
+      return;
+    }
+    if (!name.trim() || !email.trim() || password.length < 8) {
+      setError("Name, email, and an 8+ character password are required.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await onCreate({ name: name.trim(), email: email.trim().toLowerCase(), password, appRole });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Could not create user.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <form onSubmit={submit} className="w-full max-w-lg rounded-lg border border-white/10 bg-studio-950 p-4 shadow-glow">
+        <SectionHeader eyebrow="Admin" title="Create User" />
+        <div className="grid gap-3">
+          <label className="grid gap-1.5">
+            <span className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">Name</span>
+            <input className="field" value={name} onChange={(event) => setName(event.target.value)} placeholder="Maya Chen" />
+          </label>
+          <label className="grid gap-1.5">
+            <span className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">Email</span>
+            <input className="field" type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="maya@example.com" />
+          </label>
+          <label className="grid gap-1.5">
+            <span className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">Role</span>
+            <select className="field" value={appRole} onChange={(event) => setAppRole(event.target.value as typeof appRole)}>
+              <option value="admin">Admin</option>
+              <option value="executive">Executive</option>
+              <option value="producer">Producer</option>
+              <option value="department_lead">Department Lead</option>
+            </select>
+          </label>
+          <label className="grid gap-1.5">
+            <span className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">Temporary Password</span>
+            <div className="flex gap-2">
+              <input className="field font-mono" value={password} onChange={(event) => setPassword(event.target.value)} />
+              <button type="button" onClick={() => setPassword(temporaryPassword())} className="shrink-0 rounded border border-white/10 px-3 text-xs font-semibold text-studio-200 hover:text-amberline">
+                Regenerate
+              </button>
+            </div>
+          </label>
+        </div>
+        {error ? <p className="mt-3 rounded border border-rose-400/25 bg-rose-500/5 px-2.5 py-2 text-xs text-rose-200">{error}</p> : null}
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:text-amberline">Cancel</button>
+          <button type="submit" disabled={busy || disabled} className="rounded bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">Create User</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function temporaryPassword() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+  const chars = Array.from({ length: 12 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
+  return `${chars}!`;
 }
 
 function ProjectTable({ projects }: { projects: HammerProject[] }) {
@@ -3662,8 +3834,8 @@ function ProjectTable({ projects }: { projects: HammerProject[] }) {
   return <div className="data-scroll"><table className="data-table min-w-[620px]"><thead><tr><th>Project</th><th>Status</th><th>Owner</th><th>Updated</th></tr></thead><tbody>{projects.map((project) => <tr key={project.id} className="transition hover:bg-white/[0.035]"><td><Link className="block font-semibold text-studio-100" href={`/projects/${project.id}`}>{project.title}<p className="mt-0.5 text-xs font-normal text-studio-400">{project.genre}</p></Link></td><td><Link className="block" href={`/projects/${project.id}`}><Badge value={project.status} /></Link></td><td><Link className="block text-studio-300" href={`/projects/${project.id}`}>{userName(project.ownerId)}</Link></td><td><Link className="block text-studio-300" href={`/projects/${project.id}`}>{project.updatedAt}</Link></td></tr>)}</tbody></table></div>;
 }
 
-function TaskRows({ tasks, selectedTaskId, showAssignee = false, onUpdateTask }: { tasks: HammerTask[]; selectedTaskId?: string; showAssignee?: boolean; onUpdateTask?: (taskId: string, patch: Partial<Pick<HammerTask, "priority" | "status">>) => void }) {
-  const gridClass = showAssignee ? "md:grid-cols-[1fr_130px_120px_110px_100px]" : "md:grid-cols-[1fr_120px_110px_100px]";
+function TaskRows({ tasks, selectedTaskId, showAssignee = false, onUpdateTask, onDeleteTask }: { tasks: HammerTask[]; selectedTaskId?: string; showAssignee?: boolean; onUpdateTask?: (taskId: string, patch: Partial<Pick<HammerTask, "priority" | "status">>) => void; onDeleteTask?: (taskId: string) => void }) {
+  const gridClass = showAssignee ? "md:grid-cols-[1fr_130px_120px_110px_100px_72px]" : "md:grid-cols-[1fr_120px_110px_100px_72px]";
   return (
     <div className="data-scroll-list grid gap-2">
       <div className={cn("hidden px-2.5 text-[11px] uppercase tracking-[0.12em] text-studio-400 md:grid", gridClass)}>
@@ -3672,6 +3844,7 @@ function TaskRows({ tasks, selectedTaskId, showAssignee = false, onUpdateTask }:
         <span>Priority</span>
         <span>Progress</span>
         <span>Due</span>
+        <span>{onDeleteTask ? "Admin" : ""}</span>
       </div>
       {tasks.map((task) => (
         <div
@@ -3694,6 +3867,18 @@ function TaskRows({ tasks, selectedTaskId, showAssignee = false, onUpdateTask }:
             <TaskInlineSelect label="Progress" value={task.status} options={["TODO", "IN_PROGRESS", "DONE", "ON_HOLD", "REVIEW"]} onChange={(value) => onUpdateTask(task.id, { status: value as TaskStatus })} />
           ) : <Badge value={task.status} />}
           <p className="text-xs text-studio-300">{task.dueDate}</p>
+          {onDeleteTask ? (
+            <button
+              type="button"
+              onClick={() => {
+                if (window.confirm(`Delete task "${task.title}"?`)) onDeleteTask(task.id);
+              }}
+              className="inline-flex h-7 items-center justify-center gap-1 rounded border border-rose-400/25 bg-rose-500/5 px-2 text-[11px] font-semibold text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200"
+            >
+              <Trash2 className="h-3 w-3" />
+              Delete
+            </button>
+          ) : <span className="hidden md:block" />}
         </div>
       ))}
     </div>

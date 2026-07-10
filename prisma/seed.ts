@@ -285,9 +285,10 @@ async function main() {
   }
 
   for (const document of hammerDocuments) {
+    const currentVersionExists = hammerVersions.some((version) => version.id === document.currentVersionId && version.documentId === document.id);
     await prisma.document.update({
       where: { id: document.id },
-      data: { currentVersionId: document.currentVersionId }
+      data: { currentVersionId: currentVersionExists ? document.currentVersionId : null }
     });
   }
 
