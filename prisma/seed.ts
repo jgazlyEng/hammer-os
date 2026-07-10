@@ -120,6 +120,10 @@ function numeric(value?: string) {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function dateAtNoon(value?: string | null) {
+  return value ? new Date(`${value}T12:00:00.000Z`) : undefined;
+}
+
 async function main() {
   for (const user of hammerUsers) {
     await prisma.user.upsert({
@@ -204,8 +208,8 @@ async function main() {
         status: contact.status ?? "ACTIVE",
         ownerId: contact.ownerId,
         tags: contact.tags ?? [],
-        lastContacted: contact.lastContacted ? new Date(contact.lastContacted) : null,
-        nextFollowUp: contact.nextFollowUp ? new Date(contact.nextFollowUp) : null,
+        lastContacted: dateAtNoon(contact.lastContacted) ?? null,
+        nextFollowUp: dateAtNoon(contact.nextFollowUp) ?? null,
         projectIds: contact.projectIds,
         notes: contact.notes
       },
@@ -222,8 +226,8 @@ async function main() {
         status: contact.status ?? "ACTIVE",
         ownerId: contact.ownerId,
         tags: contact.tags ?? [],
-        lastContacted: contact.lastContacted ? new Date(contact.lastContacted) : null,
-        nextFollowUp: contact.nextFollowUp ? new Date(contact.nextFollowUp) : null,
+        lastContacted: dateAtNoon(contact.lastContacted) ?? null,
+        nextFollowUp: dateAtNoon(contact.nextFollowUp) ?? null,
         projectIds: contact.projectIds,
         notes: contact.notes
       }
@@ -243,7 +247,7 @@ async function main() {
         writerName: document.writerName,
         source: document.source,
         contactId: document.contactId,
-        submittedAt: document.submittedAt ? new Date(`${document.submittedAt}T12:00:00.000Z`) : undefined
+        submittedAt: dateAtNoon(document.submittedAt)
       },
       create: {
         id: document.id,
@@ -254,7 +258,7 @@ async function main() {
         writerName: document.writerName,
         source: document.source,
         contactId: document.contactId,
-        submittedAt: document.submittedAt ? new Date(`${document.submittedAt}T12:00:00.000Z`) : undefined
+        submittedAt: dateAtNoon(document.submittedAt)
       }
     });
   }
@@ -344,7 +348,7 @@ async function main() {
       create: {
         ...task,
         targetType: task.targetType as TaskTargetType,
-        dueDate: new Date(`${task.dueDate}T12:00:00.000Z`)
+        dueDate: dateAtNoon(task.dueDate)
       }
     });
   }
@@ -355,7 +359,8 @@ async function main() {
       update: { body: comment.body, status: comment.status },
       create: {
         ...comment,
-        targetType: comment.targetType as CommentTargetType
+        targetType: comment.targetType as CommentTargetType,
+        createdAt: dateAtNoon(comment.createdAt)
       }
     });
   }
@@ -367,7 +372,8 @@ async function main() {
       create: {
         ...approval,
         targetType: approval.targetType as CommentTargetType,
-        decidedAt: approval.decidedAt ? new Date(`${approval.decidedAt}T12:00:00.000Z`) : undefined
+        createdAt: dateAtNoon(approval.createdAt),
+        decidedAt: dateAtNoon(approval.decidedAt)
       }
     });
   }
