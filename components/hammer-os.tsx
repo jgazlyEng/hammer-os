@@ -72,7 +72,7 @@ const HAMMER_DISMISSED_BREAKDOWN_ENTITIES_STORAGE_KEY = "hammer:dismissed-breakd
 const HAMMER_SUPPORTING_DOCUMENTS_STORAGE_KEY = "hammer:supporting-documents";
 const HAMMER_REFERENCE_IMAGES_STORAGE_KEY = "hammer:reference-images";
 
-type HammerView = "dashboard" | "projects" | "project-new" | "project-detail" | "project-documents" | "project-assets" | "scripts" | "script-detail" | "script-versions" | "script-diff" | "script-breakdown" | "assets" | "asset-detail" | "tasks" | "contacts" | "reviews" | "executive" | "admin-users";
+type HammerView = "dashboard" | "projects" | "project-new" | "project-detail" | "project-documents" | "project-assets" | "scripts" | "script-detail" | "script-versions" | "script-diff" | "script-breakdown" | "assets" | "asset-detail" | "tasks" | "contacts" | "reviews" | "executive" | "admin-users" | "account";
 type ScriptLibrarySection = "inbox" | "projects" | "all";
 
 const emptyProject: HammerProject = {
@@ -397,6 +397,31 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     setProjectLeads((current) => current.map((lead) => lead.id === leadId ? { ...lead, ...patch } : lead));
   }
 
+  async function createProjectLead(input: Partial<HammerProjectLead>) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("createProjectLead", input as Record<string, unknown>);
+      return;
+    }
+    const nextLead: HammerProjectLead = {
+      id: `lead-local-${Date.now()}`,
+      title: input.title || "Untitled Slate Item",
+      ...input
+    };
+    setProjectLeads((current) => [nextLead, ...current]);
+  }
+
+  async function importProjectLeads(leads: HammerProjectLead[]) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("importProjectLeads", { leads });
+      return;
+    }
+    setProjectLeads((current) => {
+      const existing = new Set(current.flatMap((lead) => [lead.id, lead.externalId].filter((value): value is string => Boolean(value))));
+      const fresh = leads.filter((lead) => !existing.has(lead.id) && !(lead.externalId && existing.has(lead.externalId)));
+      return [...fresh, ...current];
+    });
+  }
+
   async function promoteProjectLead(leadId: string) {
     const lead = projectLeads.find((item) => item.id === leadId);
     if (!lead) return;
@@ -664,6 +689,24 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     }
   }
 
+  async function deleteContact(contactId: string) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("deleteContact", { contactId });
+      return;
+    }
+    const nextContacts = workspaceContacts.filter((contact) => contact.id !== contactId);
+    setWorkspaceContacts(nextContacts);
+  }
+
+  async function updateAccount(input: { name: string; email: string; currentPassword: string; newPassword: string }) {
+    if (workspaceMode === "database") {
+      const data = await runWorkspaceAction("updateAccount", input) as { user?: SessionUser } | null;
+      setSessionUser((current) => data?.user ? { ...current, ...data.user } : current);
+      return;
+    }
+    setSessionUser((current) => current ? { ...current, name: input.name, email: input.email } : current);
+  }
+
   async function deleteProject(projectId: string) {
     if (workspaceMode === "database") {
       await runWorkspaceAction("deleteProject", { projectId });
@@ -738,7 +781,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       return <AccessDenied title="Script access required" detail="You can only open scripts attached to your active project. Producers, executives, and admins can access the full script library." />;
     }
     if (view === "dashboard") return <Dashboard currentUser={currentUser} projects={projects} documents={documents} versions={versions} approvals={approvals} />;
-    if (view === "projects") return <Projects projects={filteredProjects} projectLeads={projectLeads} users={users} tasks={tasks} onUpdateLead={updateProjectLead} onPromoteLead={promoteProjectLead} onCreateTask={createTask} />;
+    if (view === "projects") return <Projects projects={filteredProjects} projectLeads={projectLeads} users={users} tasks={tasks} onUpdateLead={updateProjectLead} onCreateLead={createProjectLead} onImportLeads={importProjectLeads} onPromoteLead={promoteProjectLead} onCreateTask={createTask} />;
     if (view === "project-new") return <ProjectCreationMoved />;
     if (["project-detail", "project-documents", "project-assets"].includes(view) && !projects.length) return <EmptyWorkspaceState />;
     if (view === "project-detail") return <ProjectWorkspace project={project} activeTab="overview" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
@@ -755,8 +798,9 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     if (view === "tasks") return <Tasks selectedTaskId={selectedTaskId} currentUser={currentUser} users={users} tasks={tasks} projects={projects} onCreateTask={createTask} onUpdateTask={updateTask} onDeleteTask={deleteTask} />;
     if (view === "contacts") {
       if (!canViewContacts(currentUser.role)) return <AccessDenied title="Contacts access required" detail="Only admins, producers, and executives can view the studio contact directory." />;
-      return <Contacts initialContacts={contacts} currentUser={currentUser} users={users} projects={projects} documents={documents} tasks={tasks} databaseMode={workspaceMode === "database"} onDatabaseImport={(importedContacts) => runWorkspaceAction("importContacts", { contacts: importedContacts })} onUpdateContact={updateContact} />;
+      return <Contacts initialContacts={contacts} currentUser={currentUser} users={users} projects={projects} documents={documents} tasks={tasks} databaseMode={workspaceMode === "database"} onDatabaseImport={(importedContacts) => runWorkspaceAction("importContacts", { contacts: importedContacts })} onUpdateContact={updateContact} onDeleteContact={deleteContact} />;
     }
+    if (view === "account") return <AccountSettings user={sessionUser} onUpdateAccount={updateAccount} />;
     if (view === "reviews") return <LegacyRedirect title="Reviews are folded into Scripts" detail="Review work now starts from scripts awaiting review, so the queue is easier to follow." href="/scripts?section=inbox" label="Open Scripts" />;
     if (view === "executive") {
       if (currentUser.role !== "EXECUTIVE" && currentUser.role !== "ADMIN") return <AccessDenied title="Executive access required" detail="The executive dashboard is limited to users with the Executive role." />;
@@ -906,6 +950,8 @@ function Projects({
   tasks = hammerTasks,
   onCreate,
   onUpdateLead,
+  onCreateLead,
+  onImportLeads,
   onPromoteLead,
   onCreateTask
 }: {
@@ -915,6 +961,8 @@ function Projects({
   tasks?: HammerTask[];
   onCreate?: () => void;
   onUpdateLead?: (leadId: string, patch: Partial<HammerProjectLead>) => Promise<void>;
+  onCreateLead?: (lead: Partial<HammerProjectLead>) => Promise<void>;
+  onImportLeads?: (leads: HammerProjectLead[]) => Promise<void>;
   onPromoteLead?: (leadId: string) => Promise<void>;
   onCreateTask?: (input: { projectId: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
 }) {
@@ -923,6 +971,8 @@ function Projects({
   const [filters, setFilters] = useState({ lane: "ALL", genre: "ALL", urgency: "ALL", rights: "ALL", nextAction: "ALL", owner: "ALL", scriptStatus: "ALL", format: "ALL" });
   const [selectedLeadId, setSelectedLeadId] = useState("");
   const [leadDraft, setLeadDraft] = useState<Partial<HammerProjectLead>>({});
+  const [addSlateOpen, setAddSlateOpen] = useState(false);
+  const [slateImportMessage, setSlateImportMessage] = useState("");
   const selectedLead = selectedLeadId ? projectLeads.find((lead) => lead.id === selectedLeadId) : undefined;
   const filteredLeads = projectLeads.filter((lead) => {
     const matchesSearch = `${lead.title} ${lead.logline ?? ""} ${lead.creator ?? ""} ${lead.genre ?? ""} ${lead.lane ?? ""} ${lead.notes ?? ""} ${lead.searchKeywords ?? ""} ${lead.contactRep ?? ""}`.toLowerCase().includes(slateSearch.toLowerCase());
@@ -953,6 +1003,18 @@ function Projects({
     await onUpdateLead(selectedLead.id, leadDraft);
   }
 
+  async function importSlateCsv(file?: File | null) {
+    if (!file || !onImportLeads) return;
+    try {
+      const text = await file.text();
+      const parsed = parseProjectLeadCsv(text);
+      await onImportLeads(parsed);
+      setSlateImportMessage(`Processed ${parsed.length} slate row${parsed.length === 1 ? "" : "s"}. Existing IDs were ignored.`);
+    } catch (error) {
+      setSlateImportMessage(error instanceof Error ? error.message : "Could not import slate CSV.");
+    }
+  }
+
   function setFilter(key: keyof typeof filters, value: string) {
     setFilters((current) => ({ ...current, [key]: value }));
   }
@@ -961,7 +1023,7 @@ function Projects({
     <div className="space-y-4">
       <Panel>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <SectionHeader eyebrow="Projects" title={section === "active" ? "Active Projects" : "Development Slate"} action={onCreate && section === "active" ? <PrimaryButton icon={Plus} label="New" onClick={onCreate} /> : undefined} />
+          <SectionHeader eyebrow="Projects" title={section === "active" ? "Active Projects" : "Development Slate"} action={section === "active" ? (onCreate ? <PrimaryButton icon={Plus} label="New" onClick={onCreate} /> : undefined) : <div className="flex flex-wrap gap-1.5"><PrimaryButton icon={Plus} label="Add Slate" onClick={() => setAddSlateOpen(true)} /><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline"><UploadCloud className="h-3.5 w-3.5" />Import CSV<input className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => importSlateCsv(event.target.files?.[0])} /></label></div>} />
           <div className="inline-flex w-fit rounded-md border border-white/10 bg-white/[0.03] p-1">
             <button type="button" onClick={() => setSection("active")} className={cn("rounded px-3 py-1.5 text-xs font-semibold text-studio-300 transition", section === "active" && "bg-amberline text-studio-950")}>Active Projects</button>
             <button type="button" onClick={() => setSection("slate")} className={cn("rounded px-3 py-1.5 text-xs font-semibold text-studio-300 transition", section === "slate" && "bg-amberline text-studio-950")}>Development Slate</button>
@@ -1005,6 +1067,7 @@ function Projects({
                 <span>{filteredLeads.length} of {projectLeads.length} slate items</span>
                 <button type="button" className="font-semibold text-amberline" onClick={() => { setSlateSearch(""); setFilters({ lane: "ALL", genre: "ALL", urgency: "ALL", rights: "ALL", nextAction: "ALL", owner: "ALL", scriptStatus: "ALL", format: "ALL" }); }}>Clear filters</button>
               </div>
+              {slateImportMessage ? <p className="mb-2 text-xs text-studio-300">{slateImportMessage}</p> : null}
               <div className="data-scroll data-scroll-slate">
                 <table className="data-table min-w-[1320px] table-fixed">
                   <colgroup>
@@ -1057,6 +1120,16 @@ function Projects({
               </div>
             </div>
           ) : null}
+          {addSlateOpen ? (
+            <SlateCreateModal
+              onClose={() => setAddSlateOpen(false)}
+              onCreate={async (lead) => {
+                if (!onCreateLead) return;
+                await onCreateLead(lead);
+                setAddSlateOpen(false);
+              }}
+            />
+          ) : null}
         </>
       )}
     </div>
@@ -1072,6 +1145,85 @@ function SlateFilter({ label, value, options, onChange }: { label: string; value
         {options.map((option) => <option key={option} value={option}>{option}</option>)}
       </select>
     </label>
+  );
+}
+
+function SlateCreateModal({ onClose, onCreate }: { onClose: () => void; onCreate: (lead: Partial<HammerProjectLead>) => Promise<void> }) {
+  const [draft, setDraft] = useState<Partial<HammerProjectLead>>({
+    title: "",
+    lane: "",
+    genre: "",
+    urgencyLabel: "",
+    rightsStatus: "",
+    owner: "",
+    nextActionStatus: "",
+    priorityScore: undefined
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!draft.title?.trim()) {
+      setError("Title is required.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await onCreate({
+        ...draft,
+        title: draft.title.trim(),
+        priorityScore: draft.priorityScore === undefined ? undefined : Number(draft.priorityScore)
+      });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Could not add slate item.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm">
+      <form onSubmit={submit} className="w-full max-w-4xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl">
+        <div className="flex items-start justify-between gap-3">
+          <SectionHeader eyebrow="Development Slate" title="Add Slate Item" />
+          <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close add slate">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <SlateEditField label="Title" value={draft.title} onChange={(value) => setDraft((current) => ({ ...current, title: value }))} />
+          <SlateEditField label="Creator / Author / Director" value={draft.creator} onChange={(value) => setDraft((current) => ({ ...current, creator: value }))} />
+          <SlateEditField label="Lane" value={draft.lane} onChange={(value) => setDraft((current) => ({ ...current, lane: value }))} />
+          <SlateEditField label="Genre" value={draft.genre} onChange={(value) => setDraft((current) => ({ ...current, genre: value }))} />
+          <SlateEditField label="Urgency" value={draft.urgencyLabel} onChange={(value) => setDraft((current) => ({ ...current, urgencyLabel: value }))} />
+          <SlateEditField label="Rights" value={draft.rightsStatus} onChange={(value) => setDraft((current) => ({ ...current, rightsStatus: value }))} />
+          <SlateEditField label="Owner" value={draft.owner} onChange={(value) => setDraft((current) => ({ ...current, owner: value }))} />
+          <SlateEditField label="Next Action" value={draft.nextActionStatus} onChange={(value) => setDraft((current) => ({ ...current, nextActionStatus: value }))} />
+          <SlateEditField label="Script Status" value={draft.scriptStatus} onChange={(value) => setDraft((current) => ({ ...current, scriptStatus: value }))} />
+          <SlateEditField label="Format" value={draft.format} onChange={(value) => setDraft((current) => ({ ...current, format: value }))} />
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Score</span>
+            <input className="field" type="number" value={draft.priorityScore ?? ""} onChange={(event) => setDraft((current) => ({ ...current, priorityScore: event.target.value ? Number(event.target.value) : undefined }))} />
+          </label>
+          <SlateEditField label="Contact / Rep" value={draft.contactRep} onChange={(value) => setDraft((current) => ({ ...current, contactRep: value }))} />
+        </div>
+        <label className="mt-3 grid gap-1">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Logline</span>
+          <textarea className="field min-h-20" value={draft.logline ?? ""} onChange={(event) => setDraft((current) => ({ ...current, logline: event.target.value }))} />
+        </label>
+        <label className="mt-3 grid gap-1">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Notes</span>
+          <textarea className="field min-h-24" value={draft.notes ?? ""} onChange={(event) => setDraft((current) => ({ ...current, notes: event.target.value }))} />
+        </label>
+        {error ? <p className="mt-3 rounded border border-rose-400/25 bg-rose-500/5 px-2.5 py-2 text-xs text-rose-200">{error}</p> : null}
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:text-amberline">Cancel</button>
+          <button type="submit" disabled={busy} className="rounded bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">Add Slate</button>
+        </div>
+      </form>
+    </div>
   );
 }
 
@@ -2193,7 +2345,7 @@ function DocumentRows({
         <tbody className="divide-y divide-white/10">
           {docs.map((doc) => {
             const version = currentVersionFor(doc.id, docs, versions);
-            const selectedProjectId = assignmentDrafts[doc.id] ?? (doc.projectId && assignableProjects.some((project) => project.id === doc.projectId) ? doc.projectId : defaultProjectId && assignableProjects.some((project) => project.id === defaultProjectId) ? defaultProjectId : assignableProjects[0]?.id ?? "");
+            const selectedProjectId = assignmentDrafts[doc.id] ?? "";
             const canMoveDocument = Boolean(onAssignToProject && assignableProjects.length);
             const moveLabel = doc.projectId ? "Move" : "Assign";
             return (
@@ -2206,10 +2358,6 @@ function DocumentRows({
                 <td>{doc.writerName ?? userName(doc.createdById)}</td>
                 <td>{doc.updatedAt}</td>
                 <td className="space-x-1.5">
-                  <TableLink href={`/scripts/${doc.id}`}>View</TableLink>
-                  <TableLink href={`/scripts/${doc.id}/versions`}>Versions</TableLink>
-                  <TableLink href={`/scripts/${doc.id}/diff`}>Compare</TableLink>
-                  <TableLink href={`/scripts/${doc.id}/breakdown`}>Breakdown</TableLink>
                   {canMoveDocument ? (
                     <span className="inline-flex items-center gap-1 align-middle">
                       <select
@@ -2218,6 +2366,7 @@ function DocumentRows({
                         value={selectedProjectId}
                         onChange={(event) => setAssignmentDrafts((current) => ({ ...current, [doc.id]: event.target.value }))}
                       >
+                        <option value="">Select project</option>
                         {assignableProjects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
                       </select>
                       <button type="button" disabled={!selectedProjectId || selectedProjectId === doc.projectId} onClick={() => selectedProjectId && onAssignToProject?.(doc.id, selectedProjectId)} className="rounded border border-emerald-400/25 bg-emerald-400/5 px-1.5 py-1 text-[11px] font-semibold text-emerald-300 hover:border-emerald-300/50 hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-40">{moveLabel}</button>
@@ -2398,14 +2547,42 @@ function ScriptVersions({
 }) {
   const [uploadOpen, setUploadOpen] = useState(false);
   const documentVersions = versions.filter((version) => version.documentId === documentId).sort((a, b) => b.versionNumber - a.versionNumber);
+  const compareVersions = [...documentVersions].sort((a, b) => a.versionNumber - b.versionNumber);
+  const [fromVersionId, setFromVersionId] = useState(compareVersions[0]?.id ?? "");
+  const [toVersionId, setToVersionId] = useState(compareVersions[1]?.id ?? compareVersions[0]?.id ?? "");
+  const fromVersion = compareVersions.find((version) => version.id === fromVersionId) ?? compareVersions[0];
+  const toVersion = compareVersions.find((version) => version.id === toVersionId) ?? compareVersions[1] ?? fromVersion;
+  const diff = buildTextDiff(fromVersion?.extractedText ?? "", toVersion?.extractedText ?? "");
   return (
-    <Panel>
-      <SectionHeader eyebrow="History" title="Document Versions" action={onUpload ? <PrimaryButton icon={UploadCloud} label="Upload New Version" onClick={() => setUploadOpen((open) => !open)} /> : undefined} />
-      {uploadOpen && onUpload ? <DocumentUploadPanel projectId={document.projectId} documents={[document]} onUpload={onUpload} onDone={() => setUploadOpen(false)} /> : null}
-      <div className="grid gap-3">
-        {documentVersions.map((version) => <div key={version.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-3"><div className="flex items-center justify-between"><p className="text-[13px] font-semibold text-studio-100">Version {version.versionNumber}: {version.fileName}</p><Badge value={version.status} /></div><p className="mt-1.5 text-xs text-studio-300">{version.notes}</p><p className="mt-1 text-[11px] text-studio-500">{version.fileType} / {formatBytes(version.fileSize)} / {version.createdAt}</p></div>)}
-      </div>
-    </Panel>
+    <div className="space-y-4">
+      <Panel>
+        <SectionHeader eyebrow="History" title="Document Versions" action={onUpload ? <PrimaryButton icon={UploadCloud} label="Upload New Version" onClick={() => setUploadOpen((open) => !open)} /> : undefined} />
+        {uploadOpen && onUpload ? <DocumentUploadPanel projectId={document.projectId} documents={[document]} onUpload={onUpload} onDone={() => setUploadOpen(false)} /> : null}
+        <div className="grid gap-3">
+          {documentVersions.map((version) => <div key={version.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-3"><div className="flex items-center justify-between"><p className="text-[13px] font-semibold text-studio-100">Version {version.versionNumber}: {version.fileName}</p><Badge value={version.status} /></div><p className="mt-1.5 text-xs text-studio-300">{version.notes}</p><p className="mt-1 text-[11px] text-studio-500">{version.fileType} / {formatBytes(version.fileSize)} / {version.createdAt}</p></div>)}
+        </div>
+      </Panel>
+      <Panel>
+        <SectionHeader eyebrow="Compare" title="Version Comparison" />
+        <div className="mb-4 grid gap-3 md:grid-cols-2">
+          <select className="field" value={fromVersion?.id ?? ""} onChange={(event) => setFromVersionId(event.target.value)}>
+            {compareVersions.map((version) => <option key={version.id} value={version.id}>Version A: v{version.versionNumber} / {version.fileName}</option>)}
+          </select>
+          <select className="field" value={toVersion?.id ?? ""} onChange={(event) => setToVersionId(event.target.value)}>
+            {compareVersions.map((version) => <option key={version.id} value={version.id}>Version B: v{version.versionNumber} / {version.fileName}</option>)}
+          </select>
+        </div>
+        <div className="mb-4 grid gap-3 md:grid-cols-3">
+          <SmallStat label="Version A" value={fromVersion ? `v${fromVersion.versionNumber}` : "None"} />
+          <SmallStat label="Version B" value={toVersion ? `v${toVersion.versionNumber}` : "None"} />
+          <SmallStat label="Summary" value={`${diff.added} added / ${diff.removed} removed`} />
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <DiffColumn title={fromVersion ? `v${fromVersion.versionNumber} removed` : "Version A"} lines={diff.lines.filter((line) => line.kind !== "added")} />
+          <DiffColumn title={toVersion ? `v${toVersion.versionNumber} added` : "Version B"} lines={diff.lines.filter((line) => line.kind !== "removed")} />
+        </div>
+      </Panel>
+    </div>
   );
 }
 
@@ -2850,7 +3027,8 @@ function Contacts({
   tasks = hammerTasks,
   databaseMode = false,
   onDatabaseImport,
-  onUpdateContact
+  onUpdateContact,
+  onDeleteContact
 }: {
   initialContacts?: HammerContact[];
   currentUser: HammerUser;
@@ -2861,6 +3039,7 @@ function Contacts({
   databaseMode?: boolean;
   onDatabaseImport?: (contacts: HammerContact[]) => Promise<unknown>;
   onUpdateContact?: (contactId: string, patch: Partial<Pick<HammerContact, "status" | "ownerId" | "tags" | "lastContacted" | "nextFollowUp" | "projectIds" | "notes">>) => Promise<void>;
+  onDeleteContact?: (contactId: string) => Promise<void>;
 }) {
   const [search, setSearch] = useState("");
   const [type, setType] = useState<ContactType | "ALL">("ALL");
@@ -2966,6 +3145,20 @@ function Contacts({
       window.localStorage.setItem(HAMMER_LOCAL_CONTACTS_STORAGE_KEY, JSON.stringify(nextContacts));
     }
     setImportMessage("Contact relationship updated.");
+  }
+
+  async function deleteSelectedContact() {
+    if (!selectedContact) return;
+    if (!window.confirm(`Delete contact "${selectedContact.name}"?`)) return;
+    if (databaseMode) {
+      await onDeleteContact?.(selectedContact.id);
+    } else {
+      const nextContacts = localContacts.filter((contact) => contact.id !== selectedContact.id);
+      setLocalContacts(nextContacts);
+      window.localStorage.setItem(HAMMER_LOCAL_CONTACTS_STORAGE_KEY, JSON.stringify(nextContacts));
+    }
+    setSelectedContactId("");
+    setImportMessage("Contact deleted.");
   }
 
   return (
@@ -3091,6 +3284,12 @@ function Contacts({
                   <textarea className="field min-h-24" value={draft.notes} onChange={(event) => setDraft((current) => ({ ...current, notes: event.target.value }))} placeholder="Relationship notes" />
                 </label>
                 <div className="mt-3 flex justify-end"><PrimaryButton icon={CheckCircle2} label="Save Relationship" onClick={saveContact} /></div>
+                <div className="mt-2 flex justify-end">
+                  <button type="button" onClick={deleteSelectedContact} className="inline-flex items-center gap-1.5 rounded border border-rose-400/25 bg-rose-500/5 px-2.5 py-1.5 text-xs font-semibold text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200">
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Delete Contact
+                  </button>
+                </div>
               </div>
               <div className="grid gap-3 lg:grid-cols-3">
                 <RelationshipList title="Projects" empty="No linked projects." items={relationshipProjects.map((project) => ({ id: project.id, title: project.title, detail: statusLabel(project.status), href: `/projects/${project.id}` }))} />
@@ -3122,6 +3321,70 @@ function RelationshipList({ title, empty, items }: { title: string; empty: strin
         )) : <EmptyState label={empty} />}
       </div>
     </div>
+  );
+}
+
+function AccountSettings({ user, onUpdateAccount }: { user: SessionUser | null; onUpdateAccount: (input: { name: string; email: string; currentPassword: string; newPassword: string }) => Promise<void> }) {
+  const [name, setName] = useState(user?.name ?? "");
+  const [email, setEmail] = useState(user?.email ?? "");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setName(user?.name ?? "");
+    setEmail(user?.email ?? "");
+  }, [user?.email, user?.name]);
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setMessage("");
+    try {
+      await onUpdateAccount({ name, email, currentPassword, newPassword });
+      setCurrentPassword("");
+      setNewPassword("");
+      setMessage("Account updated. Sign out and back in if you changed your email.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not update account.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Panel>
+      <SectionHeader eyebrow="Account" title="User Settings" />
+      <form onSubmit={submit} className="grid max-w-2xl gap-3">
+        <label className="grid gap-1">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Name</span>
+          <input className="field" value={name} onChange={(event) => setName(event.target.value)} />
+        </label>
+        <label className="grid gap-1">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Email</span>
+          <input className="field" type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
+        </label>
+        <div className="mt-2 rounded-lg border border-white/10 bg-white/[0.03] p-3">
+          <p className="text-sm font-semibold text-studio-100">Change Password</p>
+          <p className="mt-1 text-xs text-studio-400">Leave these fields blank to keep your current password.</p>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <label className="grid gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Current Password</span>
+              <input className="field" type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} />
+            </label>
+            <label className="grid gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">New Password</span>
+              <input className="field" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} />
+            </label>
+          </div>
+        </div>
+        {message ? <p className="text-xs text-studio-300">{message}</p> : null}
+        <div>
+          <button type="submit" disabled={busy || !user} className="rounded bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">Save Account</button>
+        </div>
+      </form>
+    </Panel>
   );
 }
 
@@ -4432,7 +4695,8 @@ function titleForView(view: HammerView, context: { project: HammerProject; docum
     contacts: "Contacts",
     reviews: "Reviews",
     executive: "Executive",
-    "admin-users": "Admin"
+    "admin-users": "Admin",
+    account: "Account"
   };
   return titles[view];
 }
@@ -4508,6 +4772,7 @@ function breadcrumbsForView(view: HammerView, context: { project: HammerProject;
   if (view === "asset-detail") return [{ label: "Assets", href: "/assets" }, { label: context.asset.title }];
   if (view === "project-new") return [{ label: "Admin", href: "/admin/users" }, { label: "New Project" }];
   if (view === "admin-users") return [{ label: "Admin" }, { label: "Users" }];
+  if (view === "account") return [{ label: "GreenLight" }, { label: "Account" }];
   return [{ label: "GreenLight" }, { label: titleForView(view, context) }];
 }
 
