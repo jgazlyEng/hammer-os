@@ -75,6 +75,27 @@ const HAMMER_REFERENCE_IMAGES_STORAGE_KEY = "hammer:reference-images";
 type HammerView = "dashboard" | "projects" | "project-new" | "project-detail" | "project-documents" | "project-assets" | "scripts" | "script-detail" | "script-versions" | "script-diff" | "script-breakdown" | "assets" | "asset-detail" | "tasks" | "contacts" | "reviews" | "executive" | "admin-users";
 type ScriptLibrarySection = "inbox" | "projects" | "all";
 
+const emptyProject: HammerProject = {
+  id: "no-project",
+  title: "No Projects Yet",
+  logline: "",
+  type: "Feature",
+  genre: "",
+  status: "IDEA",
+  stage: "DEVELOPMENT",
+  ownerId: "",
+  updatedAt: ""
+};
+
+const emptyDocument: HammerDocument = {
+  id: "no-document",
+  title: "No Script Selected",
+  type: "SCRIPT",
+  currentVersionId: "",
+  createdById: "",
+  updatedAt: ""
+};
+
 interface SessionUser {
   email: string;
   name: string;
@@ -176,10 +197,10 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   const assets = workspaceMode === "database" ? workspaceAssets : hammerAssets;
   const contacts = workspaceMode === "database" ? workspaceContacts : hammerContacts;
   const approvals = workspaceMode === "database" ? workspaceApprovals : hammerApprovals;
-  const project = projects.find((item) => item.id === id) ?? projects[0];
-  const document = documents.find((item) => item.id === id) ?? documents[0];
+  const project = projects.find((item) => item.id === id) ?? projects[0] ?? emptyProject;
+  const document = documents.find((item) => item.id === id) ?? documents[0] ?? emptyDocument;
   const asset = assets.find((item) => item.id === id) ?? assets[0] ?? hammerAssets[0];
-  const activeProject = projects.find((item) => item.id === activeProjectId) ?? projects[0];
+  const activeProject = projects.find((item) => item.id === activeProjectId) ?? projects[0] ?? emptyProject;
   const filteredProjects = projects.filter((item) => `${item.title} ${item.genre} ${item.status}`.toLowerCase().includes(query.toLowerCase()));
   const currentUser = users.find((user) => user.email.toLowerCase() === sessionUser?.email?.toLowerCase()) ?? hammerUserByEmail(sessionUser?.email);
 
@@ -684,15 +705,17 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     if (view === "dashboard") return <Dashboard currentUser={currentUser} projects={projects} documents={documents} versions={versions} approvals={approvals} />;
     if (view === "projects") return <Projects projects={filteredProjects} projectLeads={projectLeads} users={users} tasks={tasks} onUpdateLead={updateProjectLead} onPromoteLead={promoteProjectLead} onCreateTask={createTask} />;
     if (view === "project-new") return <ProjectCreationMoved />;
+    if (["project-detail", "project-documents", "project-assets"].includes(view) && !projects.length) return <EmptyWorkspaceState />;
     if (view === "project-detail") return <ProjectWorkspace project={project} activeTab="overview" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
     if (view === "project-documents") return <ProjectWorkspace project={project} activeTab="documents" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
     if (view === "project-assets") return <ProjectWorkspace project={project} activeTab="assets" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
-    if (view === "scripts") return <Scripts activeProjectId={activeProject.id} currentUser={currentUser} projects={projects} documents={documents} versions={versions} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} repositoryMode selectedSection={normalizeScriptSection(scriptSection)} />;
+    if (view === "scripts") return <Scripts activeProjectId={projects.length ? activeProject.id : undefined} currentUser={currentUser} projects={projects} documents={documents} versions={versions} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} repositoryMode selectedSection={normalizeScriptSection(scriptSection)} />;
+    if (["script-detail", "script-versions", "script-diff", "script-breakdown"].includes(view) && !documents.some((item) => item.id === document.id)) return <EmptyScriptState />;
     if (view === "script-detail") return <ScriptDetail documentId={document.id} documents={documents} versions={versions} supportingDocuments={supportingDocuments} onUpload={uploadDocumentVersion} onSupportingUpload={uploadSupportingDocument} onSupportingDelete={deleteSupportingDocument} onStatusChange={updateDocumentStatus} onDelete={deleteUploadedDocument} />;
     if (view === "script-versions") return <ScriptVersions documentId={document.id} versions={versions} document={document} onUpload={uploadDocumentVersion} />;
     if (view === "script-diff") return <ScriptDiff documentId={document.id} versions={versions} />;
     if (view === "script-breakdown") return <ScriptBreakdown documentId={document.id} documents={documents} versions={versions} />;
-    if (view === "assets") return <Assets projectId={activeProject.id} assets={assets} />;
+    if (view === "assets") return <Assets projectId={projects.length ? activeProject.id : ""} assets={assets} />;
     if (view === "asset-detail") return <AssetDetail assetId={asset.id} assets={assets} />;
     if (view === "tasks") return <Tasks selectedTaskId={selectedTaskId} currentUser={currentUser} users={users} tasks={tasks} projects={projects} onCreateTask={createTask} onUpdateTask={updateTask} />;
     if (view === "contacts") {
@@ -1224,6 +1247,34 @@ function ProjectCreationMoved() {
       <p className="text-[13px] leading-5 text-studio-300">New projects are created from Admin so project setup can include status, owner, and access decisions in one place.</p>
       <Link href="/admin/users" className="mt-4 inline-flex rounded-md bg-amberline px-3 py-2 text-[13px] font-semibold text-studio-950">
         Open Admin
+      </Link>
+    </Panel>
+  );
+}
+
+function EmptyWorkspaceState() {
+  return (
+    <Panel>
+      <SectionHeader eyebrow="Setup" title="Create Your First Project" />
+      <p className="max-w-2xl text-[13px] leading-5 text-studio-300">
+        GreenLight is connected, but this database does not have any projects yet. Create a project from Admin, then scripts, documents, reference images, and assignments can attach to it.
+      </p>
+      <Link href="/admin/users" className="mt-4 inline-flex rounded-md bg-amberline px-3 py-2 text-[13px] font-semibold text-studio-950 hover:bg-emerald-300">
+        Open Admin
+      </Link>
+    </Panel>
+  );
+}
+
+function EmptyScriptState() {
+  return (
+    <Panel>
+      <SectionHeader eyebrow="Scripts" title="Script Not Found" />
+      <p className="max-w-2xl text-[13px] leading-5 text-studio-300">
+        This script is not available in the current workspace. Open the script library to upload or select another script.
+      </p>
+      <Link href="/scripts" className="mt-4 inline-flex rounded-md bg-amberline px-3 py-2 text-[13px] font-semibold text-studio-950 hover:bg-emerald-300">
+        Open Scripts
       </Link>
     </Panel>
   );
