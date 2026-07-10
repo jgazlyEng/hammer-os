@@ -432,7 +432,7 @@ function canManageLibrary(role: string) {
 }
 
 function canViewAllProjects(role: string) {
-  return role === "admin" || role === "executive";
+  return role === "admin" || role === "executive" || role === "producer";
 }
 
 function canViewAllTasks(role: string) {
