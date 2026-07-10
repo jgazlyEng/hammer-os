@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { AssetStatus, AssetType, ContactStatus, ContactType, DocumentType, DocumentVersionStatus, Prisma, ProjectLead, ProjectStatus, ProjectStage, SupportingDocumentType, TaskPriority, TaskStatus, TaskTargetType, UserRole } from "@prisma/client";
-import { forbidden, isDatabaseConfigured, requireUser } from "@/lib/auth";
+import { forbidden, hashPassword, isDatabaseConfigured, requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -197,6 +197,41 @@ export async function POST(request: Request) {
           }
         })) });
 
+      case "deleteTask":
+        if (!canViewAllTasks(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        return NextResponse.json({ task: toTask(await prisma.task.update({
+          where: { id: stringField(body.taskId) },
+          data: { deletedAt: new Date() }
+        })) });
+
+      case "deleteProject":
+        if (auth.user.appRole !== "admin") return NextResponse.json(forbidden(), { status: 403 });
+        return NextResponse.json({ project: toProject(await prisma.project.update({
+          where: { id: stringField(body.projectId) },
+          data: { deletedAt: new Date() }
+        })) });
+
+      case "createUser":
+        if (auth.user.appRole !== "admin") return NextResponse.json(forbidden(), { status: 403 });
+        if (!stringField(body.email) || !stringField(body.name) || stringField(body.password).length < 8) {
+          return NextResponse.json({ error: "Name, email, and an 8+ character password are required." }, { status: 400 });
+        }
+        return NextResponse.json({ user: toUser(await prisma.user.create({
+          data: {
+            email: stringField(body.email).toLowerCase(),
+            name: stringField(body.name) || stringField(body.email),
+            passwordHash: hashPassword(stringField(body.password)),
+            appRole: appRoleField(body.appRole),
+            role: userRoleForAppRole(appRoleField(body.appRole))
+          }
+        })) }, { status: 201 });
+
+      case "deleteUser":
+        if (auth.user.appRole !== "admin") return NextResponse.json(forbidden(), { status: 403 });
+        if (stringField(body.userId) === auth.user.id) return NextResponse.json({ error: "Admins cannot delete their own active session user." }, { status: 400 });
+        await prisma.user.delete({ where: { id: stringField(body.userId) } });
+        return NextResponse.json({ ok: true });
+
       case "importContacts":
         if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
         return NextResponse.json({ contacts: (await prisma.$transaction((Array.isArray(body.contacts) ? body.contacts : []).map((item) => {
@@ -343,8 +378,8 @@ function toProjectLead(lead: ProjectLead) {
   };
 }
 
-function toUser(user: { id: string; email: string; name: string; avatarUrl: string | null; googleId: string | null; role: UserRole }) {
-  return { id: user.id, email: user.email, name: user.name, avatarUrl: user.avatarUrl ?? undefined, googleId: user.googleId ?? "", role: user.role };
+function toUser(user: { id: string; email: string; name: string; avatarUrl: string | null; googleId: string | null; role: UserRole; appRole?: string }) {
+  return { id: user.id, email: user.email, name: user.name, avatarUrl: user.avatarUrl ?? undefined, googleId: user.googleId ?? "", role: hammerRoleForAppRole(user.appRole) ?? user.role };
 }
 
 function toDocument(document: { id: string; projectId: string | null; title: string; type: DocumentType; currentVersionId: string | null; createdById: string | null; updatedAt: Date; writerName: string | null; source: string | null; contactId: string | null; submittedAt: Date | null }) {
@@ -508,6 +543,25 @@ function taskTargetField(value: unknown): TaskTargetType {
   return taskTargets.includes(value as TaskTargetType) ? value as TaskTargetType : "PROJECT";
 }
 const taskTargets: TaskTargetType[] = ["PROJECT", "PROJECT_LEAD", "DOCUMENT", "DOCUMENT_VERSION", "SCENE", "ENTITY", "ASSET", "APPROVAL"];
+
+function appRoleField(value: unknown) {
+  return value === "admin" || value === "executive" || value === "producer" || value === "department_lead" ? value : "producer";
+}
+
+function userRoleForAppRole(value: string): UserRole {
+  if (value === "admin") return "ADMIN";
+  if (value === "executive") return "EXECUTIVE";
+  if (value === "department_lead") return "DEVELOPMENT";
+  return "PRODUCER";
+}
+
+function hammerRoleForAppRole(value?: string) {
+  if (value === "admin") return "ADMIN";
+  if (value === "executive") return "EXECUTIVE";
+  if (value === "producer") return "PRODUCER";
+  if (value === "department_lead") return "DEVELOPMENT";
+  return undefined;
+}
 
 function contactTypeField(value: unknown): ContactType {
   return contactTypes.includes(value as ContactType) ? value as ContactType : "OTHER";

@@ -68,6 +68,25 @@ function toShellUser(user: HammerUser): ShellUser {
   };
 }
 
+function shellUserToHammerUser(user: ShellUser | null): HammerUser {
+  const fallback = hammerUserByEmail(user?.email);
+  if (!user) return fallback;
+  return {
+    ...fallback,
+    email: user.email,
+    name: user.name,
+    role: hammerRoleForShellRole(user.appRole) ?? fallback.role
+  };
+}
+
+function hammerRoleForShellRole(role?: string): HammerUser["role"] | undefined {
+  if (role === "admin" || role === "ADMIN") return "ADMIN";
+  if (role === "executive" || role === "EXECUTIVE") return "EXECUTIVE";
+  if (role === "producer" || role === "PRODUCER") return "PRODUCER";
+  if (role === "department_lead" || role === "DEVELOPMENT") return "DEVELOPMENT";
+  return undefined;
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -81,7 +100,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<ShellUser | null>(null);
   const [authMode, setAuthMode] = useState<"database" | "demo">("demo");
   const [theme, setTheme] = useState<ThemeMode>("dark");
-  const currentUser = hammerUserByEmail(user?.email);
+  const currentUser = shellUserToHammerUser(user);
   const safeLocalProjects = useMemo(() => localProjects.filter(isValidProject), [localProjects]);
   const allProjects = useMemo(() => [...safeLocalProjects, ...hammerProjects.filter((project) => !safeLocalProjects.some((item) => item.id === project.id))], [safeLocalProjects]);
   const assignedProjects = assignedProjectsForUser(currentUser.id);
@@ -259,7 +278,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <nav className="mt-4 space-y-0.5">
             {[
               ...navItems,
-              ...(currentUser.role === "EXECUTIVE" ? [executiveNavItem] : []),
+              ...(currentUser.role === "EXECUTIVE" || currentUser.role === "ADMIN" ? [executiveNavItem] : []),
               ...(canViewContacts(currentUser.role) ? [contactsNavItem] : []),
             ].map((item) => {
               const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
