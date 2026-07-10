@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { BarChart3, ClipboardList, ContactRound, FileClock, FolderKanban, LayoutDashboard, LogOut, Moon, Settings2, Sun, UserRound } from "lucide-react";
 import {
@@ -38,6 +38,7 @@ const navItems = [
 const contactsNavItem = { href: "/contacts", label: "Contacts", icon: ContactRound };
 const executiveNavItem = { href: "/executive", label: "Executive", icon: BarChart3 };
 const adminNavItem = { href: "/admin/users", label: "Admin", icon: Settings2 };
+const accountNavItem = { href: "/account", label: "Account", icon: UserRound };
 const HAMMER_THEME_STORAGE_KEY = "hammer-os-theme";
 type ThemeMode = "dark" | "light";
 type LocalUserState = Record<string, { inactive?: boolean; deleted?: boolean }>;
@@ -89,7 +90,6 @@ function hammerRoleForShellRole(role?: string): HammerUser["role"] | undefined {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
   const router = useRouter();
   const [projectId, setProjectId] = useState(hammerProjects[0]?.id ?? "");
   const [projectPreferenceLoaded, setProjectPreferenceLoaded] = useState(false);
@@ -114,7 +114,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       : document
   )), [documentProjectOverrides, localDocuments]);
   const incomingScriptCount = allDocuments.filter((document) => isScriptLibraryDocument(document) && !document.projectId).length;
-  const currentScriptSection = searchParams.get("section") ?? "inbox";
   const availableDemoUsers = hammerUsers.filter((demoUser) => !localUserStates[demoUser.id]?.inactive && !localUserStates[demoUser.id]?.deleted);
   const showProjectContext = pathname.startsWith("/projects/") && !pathname.startsWith("/projects/new");
 
@@ -300,26 +299,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     ) : null}
                     {active ? <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-amberline" /> : null}
                   </Link>
-                  {item.href === "/scripts" && active ? (
-                    <div className="hidden py-1 pl-6 md:block">
-                      {[
-                        { href: "/scripts?section=inbox", label: "Inbox", key: "inbox", count: incomingScriptCount },
-                        { href: "/scripts?section=projects", label: "Active Projects", key: "projects" }
-                      ].map((subItem) => (
-                        <Link
-                          key={subItem.key}
-                          href={subItem.href}
-                          className={cn(
-                            "mt-0.5 flex h-7 items-center gap-2 rounded border border-transparent px-2 text-[12px] text-studio-400 transition hover:bg-white/[0.045] hover:text-studio-100",
-                            currentScriptSection === subItem.key && "border-emerald-300/15 bg-emerald-400/10 text-amberline"
-                          )}
-                        >
-                          <span>{subItem.label}</span>
-                          {subItem.count ? <span className="ml-auto rounded-full bg-sky-400 px-1.5 py-0.5 text-[10px] font-bold text-white">{subItem.count}</span> : null}
-                        </Link>
-                      ))}
-                    </div>
-                  ) : null}
                 </div>
               );
             })}
@@ -348,6 +327,26 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 })()}
               </nav>
             ) : null}
+            <nav className={cn(currentUser.role === "ADMIN" ? "" : "border-t border-white/10 pt-3")}>
+              {(() => {
+                const active = pathname === accountNavItem.href || pathname.startsWith(`${accountNavItem.href}/`);
+                const Icon = accountNavItem.icon;
+                return (
+                  <Link
+                    href={accountNavItem.href}
+                    title={accountNavItem.label}
+                    className={cn(
+                      "group relative flex h-9 items-center justify-center gap-2 rounded-md px-2 text-[13px] text-studio-400 transition hover:bg-white/[0.04] hover:text-studio-100 md:justify-start md:px-2.5",
+                      active && "bg-white/[0.06] text-amberline"
+                    )}
+                  >
+                    <Icon className="h-4 w-4 shrink-0" />
+                    <span className="hidden md:inline">{accountNavItem.label}</span>
+                    {active ? <span className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-amberline" /> : null}
+                  </Link>
+                );
+              })()}
+            </nav>
           <div className="hidden md:block">
             <SessionPanel user={user} mode={authMode} demoUsers={availableDemoUsers} onDemoUserChange={setUser} />
           </div>
@@ -552,11 +551,8 @@ function SessionPanel({ user, mode, demoUsers, onDemoUserChange }: { user: Shell
           ))}
         </select>
       ) : null}
-      <div className="mt-2 grid grid-cols-2 gap-1.5">
-        <Link href="/login" className="rounded border border-white/10 px-2 py-1.5 text-center text-[11px] font-semibold text-studio-300 hover:text-amberline">
-          Sign in
-        </Link>
-        <button type="button" onClick={logout} className="inline-flex items-center justify-center gap-1.5 rounded border border-white/10 px-2 py-1.5 text-[11px] font-semibold text-studio-300 hover:text-ember">
+      <div className="mt-2">
+        <button type="button" onClick={logout} className="inline-flex w-full items-center justify-center gap-1.5 rounded border border-white/10 px-2 py-1.5 text-[11px] font-semibold text-studio-300 hover:text-ember">
           <LogOut className="h-3.5 w-3.5" />
           Exit
         </button>

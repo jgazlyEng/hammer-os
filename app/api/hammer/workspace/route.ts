@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { AssetStatus, AssetType, ContactStatus, ContactType, DocumentType, DocumentVersionStatus, Prisma, ProjectLead, ProjectStatus, ProjectStage, SupportingDocumentType, TaskPriority, TaskStatus, TaskTargetType, UserRole } from "@prisma/client";
-import { forbidden, hashPassword, isDatabaseConfigured, requireUser } from "@/lib/auth";
+import { forbidden, hashPassword, isDatabaseConfigured, requireUser, verifyPassword } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
 export const runtime = "nodejs";
@@ -87,6 +87,26 @@ export async function POST(request: Request) {
           where: { id: stringField(body.leadId) },
           data: projectLeadPatch(body)
         })) });
+
+      case "createProjectLead":
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        return NextResponse.json({ projectLead: toProjectLead(await prisma.projectLead.create({
+          data: projectLeadCreate(body)
+        })) }, { status: 201 });
+
+      case "importProjectLeads": {
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        const leads = Array.isArray(body.leads) ? body.leads as Record<string, unknown>[] : [];
+        const existingIds = new Set((await prisma.projectLead.findMany({
+          select: { id: true, externalId: true }
+        })).flatMap((lead) => [lead.id, lead.externalId].filter((value): value is string => Boolean(value))));
+        const newLeads = leads
+          .map((lead) => projectLeadCreate(lead))
+          .filter((lead) => !(lead.id && existingIds.has(lead.id)) && !(lead.externalId && existingIds.has(lead.externalId)));
+        if (!newLeads.length) return NextResponse.json({ projectLeads: [], skipped: leads.length });
+        const created = await prisma.$transaction(newLeads.map((lead) => prisma.projectLead.create({ data: lead })));
+        return NextResponse.json({ projectLeads: created.map(toProjectLead), skipped: leads.length - created.length });
+      }
 
       case "promoteProjectLead": {
         if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
@@ -232,6 +252,25 @@ export async function POST(request: Request) {
         await prisma.user.delete({ where: { id: stringField(body.userId) } });
         return NextResponse.json({ ok: true });
 
+      case "updateAccount": {
+        const nextPassword = stringField(body.newPassword);
+        const currentPassword = stringField(body.currentPassword);
+        const user = await prisma.user.findUnique({ where: { id: auth.user.id } });
+        if (!user) return NextResponse.json({ error: "User not found." }, { status: 404 });
+        if (nextPassword) {
+          if (nextPassword.length < 8) return NextResponse.json({ error: "New password must be at least 8 characters." }, { status: 400 });
+          if (!currentPassword || !verifyPassword(currentPassword, user.passwordHash)) return NextResponse.json({ error: "Current password is required to change password." }, { status: 400 });
+        }
+        return NextResponse.json({ user: toUser(await prisma.user.update({
+          where: { id: auth.user.id },
+          data: {
+            name: stringField(body.name) || user.name,
+            email: stringField(body.email) ? stringField(body.email).toLowerCase() : user.email,
+            passwordHash: nextPassword ? hashPassword(nextPassword) : undefined
+          }
+        })) });
+      }
+
       case "importContacts":
         if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
         return NextResponse.json({ contacts: (await prisma.$transaction((Array.isArray(body.contacts) ? body.contacts : []).map((item) => {
@@ -270,6 +309,13 @@ export async function POST(request: Request) {
             projectIds: body.projectIds !== undefined ? (Array.isArray(body.projectIds) ? body.projectIds.filter((id): id is string => typeof id === "string") : []) : undefined,
             notes: body.notes !== undefined ? optionalString(body.notes) : undefined
           }
+        })) });
+
+      case "deleteContact":
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        return NextResponse.json({ contact: toContact(await prisma.contact.update({
+          where: { id: stringField(body.contactId) },
+          data: { deletedAt: new Date() }
         })) });
 
       default:
@@ -491,6 +537,54 @@ function projectLeadPatch(body: ActionBody): Prisma.ProjectLeadUpdateInput {
     actionItems: body.actionItems !== undefined ? optionalString(body.actionItems) : undefined,
     scriptStatus: body.scriptStatus !== undefined ? optionalString(body.scriptStatus) : undefined,
     format: body.format !== undefined ? optionalString(body.format) : undefined
+  };
+}
+
+function projectLeadCreate(body: Record<string, unknown>): Prisma.ProjectLeadCreateInput {
+  const externalId = optionalString(body.externalId);
+  return {
+    id: optionalString(body.id) ?? externalId ?? undefined,
+    title: stringField(body.title) || "Untitled Slate Item",
+    externalId,
+    logline: optionalString(body.logline),
+    genre: optionalString(body.genre),
+    lane: optionalString(body.lane),
+    creator: optionalString(body.creator),
+    priorityScore: optionalNumber(body.priorityScore),
+    subgenreTags: optionalString(body.subgenreTags),
+    urgencyLabel: optionalString(body.urgencyLabel),
+    discoveryStage: optionalString(body.discoveryStage),
+    countryLanguage: optionalString(body.countryLanguage),
+    platformSource: optionalString(body.platformSource),
+    whyItMatters: optionalString(body.whyItMatters),
+    signalProof: optionalString(body.signalProof),
+    sourceLink: optionalString(body.sourceLink),
+    rightsStatus: optionalString(body.rightsStatus),
+    rightsHolder: optionalString(body.rightsHolder),
+    contactRep: optionalString(body.contactRep),
+    adaptationFormat: optionalString(body.adaptationFormat),
+    comps: optionalString(body.comps),
+    heatScore: optionalNumber(body.heatScore),
+    conceptScore: optionalNumber(body.conceptScore),
+    adaptabilityScore: optionalNumber(body.adaptabilityScore),
+    rightsOpportunityScore: optionalNumber(body.rightsOpportunityScore),
+    studioFitScore: optionalNumber(body.studioFitScore),
+    nextActionStatus: optionalString(body.nextActionStatus),
+    owner: optionalString(body.owner),
+    nextStep: optionalString(body.nextStep),
+    lastUpdated: optionalString(body.lastUpdated),
+    notes: optionalString(body.notes),
+    projectCover: optionalString(body.projectCover),
+    searchKeywords: optionalString(body.searchKeywords),
+    originalReleaseDate: optionalString(body.originalReleaseDate),
+    myPicks: optionalString(body.myPicks),
+    actionItems: optionalString(body.actionItems),
+    country: optionalString(body.country),
+    votes: optionalNumber(body.votes),
+    yearWritten: optionalString(body.yearWritten),
+    scriptStatus: optionalString(body.scriptStatus),
+    format: optionalString(body.format),
+    scriptPdf: optionalString(body.scriptPdf)
   };
 }
 
