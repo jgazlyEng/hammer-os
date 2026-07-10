@@ -74,6 +74,7 @@ const HAMMER_REFERENCE_IMAGES_STORAGE_KEY = "hammer:reference-images";
 
 type HammerView = "dashboard" | "projects" | "project-new" | "project-detail" | "project-documents" | "project-assets" | "scripts" | "script-detail" | "script-versions" | "script-diff" | "script-breakdown" | "assets" | "asset-detail" | "tasks" | "contacts" | "reviews" | "executive" | "admin-users" | "account";
 type ScriptLibrarySection = "inbox" | "projects" | "all";
+type AppRole = "admin" | "executive" | "producer" | "department_lead";
 
 const emptyProject: HammerProject = {
   id: "no-project",
@@ -689,6 +690,20 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     }
   }
 
+  async function createContact(input: Omit<HammerContact, "id">) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("createContact", input as unknown as Record<string, unknown>);
+      return;
+    }
+    const nextContact: HammerContact = {
+      id: `contact-local-${Date.now()}`,
+      ...input
+    };
+    const nextContacts = [nextContact, ...workspaceContacts];
+    setWorkspaceContacts(nextContacts);
+    window.localStorage.setItem(HAMMER_LOCAL_CONTACTS_STORAGE_KEY, JSON.stringify(nextContacts));
+  }
+
   async function deleteContact(contactId: string) {
     if (workspaceMode === "database") {
       await runWorkspaceAction("deleteContact", { contactId });
@@ -719,9 +734,18 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_PROJECTS_EVENT));
   }
 
-  async function createUser(input: { name: string; email: string; password: string; appRole: "admin" | "executive" | "producer" | "department_lead" }) {
+  async function createUser(input: { name: string; email: string; password: string; appRole: AppRole }) {
     if (workspaceMode !== "database") return;
     await runWorkspaceAction("createUser", input);
+  }
+
+  async function updateUserRole(userId: string, appRole: AppRole) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("updateUserRole", { userId, appRole });
+      return;
+    }
+    const role = hammerRoleForAppRole(appRole);
+    setWorkspaceUsers((current) => current.map((user) => user.id === userId ? { ...user, role } : user));
   }
 
   async function deleteUser(userId: string) {
@@ -742,6 +766,24 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_DOCUMENTS_EVENT));
       return next;
     });
+  }
+
+  async function updateDocumentMetadata(documentId: string, patch: Partial<Pick<HammerDocument, "title" | "type" | "writerName" | "source">>) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("updateDocumentMetadata", { documentId, ...patch });
+      return;
+    }
+    const now = new Date().toISOString().slice(0, 10);
+    const existing = documents.find((document) => document.id === documentId);
+    if (!existing) return;
+    const updatedDocument = { ...existing, ...patch, updatedAt: now };
+    const nextDocuments = [
+      ...localDocuments.filter((document) => document.id !== documentId),
+      updatedDocument
+    ];
+    setLocalDocuments(nextDocuments);
+    window.localStorage.setItem(HAMMER_LOCAL_DOCUMENTS_STORAGE_KEY, JSON.stringify(nextDocuments));
+    window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_DOCUMENTS_EVENT));
   }
 
   async function deleteUploadedDocument(documentId: string) {
@@ -781,15 +823,18 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       return <AccessDenied title="Script access required" detail="You can only open scripts attached to your active project. Producers, executives, and admins can access the full script library." />;
     }
     if (view === "dashboard") return <Dashboard currentUser={currentUser} projects={projects} documents={documents} versions={versions} approvals={approvals} />;
-    if (view === "projects") return <Projects projects={filteredProjects} projectLeads={projectLeads} users={users} tasks={tasks} onUpdateLead={updateProjectLead} onCreateLead={createProjectLead} onImportLeads={importProjectLeads} onPromoteLead={promoteProjectLead} onCreateTask={createTask} />;
-    if (view === "project-new") return <ProjectCreationMoved />;
+    if (view === "projects") return <Projects projects={filteredProjects} projectLeads={projectLeads} users={users} tasks={tasks} currentUser={currentUser} canCreateProject={canManageScriptLibrary(currentUser.role)} onCreateProject={addProject} onUpdateLead={updateProjectLead} onCreateLead={createProjectLead} onImportLeads={importProjectLeads} onPromoteLead={promoteProjectLead} onCreateTask={createTask} />;
+    if (view === "project-new") {
+      if (!canManageScriptLibrary(currentUser.role)) return <AccessDenied title="Project creation access required" detail="Only admins, producers, and executives can create new projects." />;
+      return <ProjectEditor users={users} currentUser={currentUser} onCreate={addProject} />;
+    }
     if (["project-detail", "project-documents", "project-assets"].includes(view) && !projects.length) return <EmptyWorkspaceState />;
     if (view === "project-detail") return <ProjectWorkspace project={project} activeTab="overview" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
     if (view === "project-documents") return <ProjectWorkspace project={project} activeTab="documents" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
     if (view === "project-assets") return <ProjectWorkspace project={project} activeTab="assets" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
     if (view === "scripts") return <Scripts activeProjectId={projects.length ? activeProject.id : undefined} currentUser={currentUser} projects={projects} documents={documents} versions={versions} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} repositoryMode selectedSection={normalizeScriptSection(scriptSection)} />;
     if (["script-detail", "script-versions", "script-diff", "script-breakdown"].includes(view) && !documents.some((item) => item.id === document.id)) return <EmptyScriptState />;
-    if (view === "script-detail") return <ScriptDetail documentId={document.id} documents={documents} versions={versions} supportingDocuments={supportingDocuments} onUpload={uploadDocumentVersion} onSupportingUpload={uploadSupportingDocument} onSupportingDelete={deleteSupportingDocument} onStatusChange={updateDocumentStatus} onDelete={deleteUploadedDocument} />;
+    if (view === "script-detail") return <ScriptDetail documentId={document.id} documents={documents} versions={versions} supportingDocuments={supportingDocuments} onUpload={uploadDocumentVersion} onSupportingUpload={uploadSupportingDocument} onSupportingDelete={deleteSupportingDocument} onStatusChange={updateDocumentStatus} onUpdateMetadata={canManageScriptLibrary(currentUser.role) ? updateDocumentMetadata : undefined} onDelete={deleteUploadedDocument} />;
     if (view === "script-versions") return <ScriptVersions documentId={document.id} versions={versions} document={document} onUpload={uploadDocumentVersion} />;
     if (view === "script-diff") return <ScriptDiff documentId={document.id} versions={versions} />;
     if (view === "script-breakdown") return <ScriptBreakdown documentId={document.id} documents={documents} versions={versions} />;
@@ -798,7 +843,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     if (view === "tasks") return <Tasks selectedTaskId={selectedTaskId} currentUser={currentUser} users={users} tasks={tasks} projects={projects} onCreateTask={createTask} onUpdateTask={updateTask} onDeleteTask={deleteTask} />;
     if (view === "contacts") {
       if (!canViewContacts(currentUser.role)) return <AccessDenied title="Contacts access required" detail="Only admins, producers, and executives can view the studio contact directory." />;
-      return <Contacts initialContacts={contacts} currentUser={currentUser} users={users} projects={projects} documents={documents} tasks={tasks} databaseMode={workspaceMode === "database"} onDatabaseImport={(importedContacts) => runWorkspaceAction("importContacts", { contacts: importedContacts })} onUpdateContact={updateContact} onDeleteContact={deleteContact} />;
+      return <Contacts initialContacts={contacts} currentUser={currentUser} users={users} projects={projects} documents={documents} tasks={tasks} databaseMode={workspaceMode === "database"} onDatabaseImport={(importedContacts) => runWorkspaceAction("importContacts", { contacts: importedContacts })} onCreateContact={createContact} onUpdateContact={updateContact} onDeleteContact={deleteContact} />;
     }
     if (view === "account") return <AccountSettings user={sessionUser} onUpdateAccount={updateAccount} />;
     if (view === "reviews") return <LegacyRedirect title="Reviews are folded into Scripts" detail="Review work now starts from scripts awaiting review, so the queue is easier to follow." href="/scripts?section=inbox" label="Open Scripts" />;
@@ -807,7 +852,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       return <Executive projects={projects} documents={documents} versions={versions} tasks={tasks} assets={assets} approvals={approvals} />;
     }
     if (currentUser.role !== "ADMIN") return <AccessDenied title="Admin access required" detail="Only admins can manage projects, users, roles, and project access." />;
-    return <AdminUsers projects={projects} users={users} currentUser={currentUser} databaseMode={workspaceMode === "database"} onCreateProject={addProject} onDeleteProject={deleteProject} onCreateUser={createUser} onDeleteUser={deleteUser} onStatusChange={updateProjectStatus} />;
+    return <AdminUsers projects={projects} users={users} currentUser={currentUser} databaseMode={workspaceMode === "database"} onCreateProject={addProject} onDeleteProject={deleteProject} onCreateUser={createUser} onUpdateUserRole={updateUserRole} onDeleteUser={deleteUser} onStatusChange={updateProjectStatus} />;
   })();
 
   function updateProjectStatus(projectId: string, status: HammerProjectStatus) {
@@ -946,9 +991,11 @@ function Dashboard({
 function Projects({
   projects,
   projectLeads,
+  currentUser,
   users = hammerUsers,
   tasks = hammerTasks,
-  onCreate,
+  canCreateProject = false,
+  onCreateProject,
   onUpdateLead,
   onCreateLead,
   onImportLeads,
@@ -957,9 +1004,11 @@ function Projects({
 }: {
   projects: HammerProject[];
   projectLeads: HammerProjectLead[];
+  currentUser: HammerUser;
   users?: HammerUser[];
   tasks?: HammerTask[];
-  onCreate?: () => void;
+  canCreateProject?: boolean;
+  onCreateProject?: (draft: Partial<ProjectDraft>) => Promise<void>;
   onUpdateLead?: (leadId: string, patch: Partial<HammerProjectLead>) => Promise<void>;
   onCreateLead?: (lead: Partial<HammerProjectLead>) => Promise<void>;
   onImportLeads?: (leads: HammerProjectLead[]) => Promise<void>;
@@ -971,6 +1020,7 @@ function Projects({
   const [filters, setFilters] = useState({ lane: "ALL", genre: "ALL", urgency: "ALL", rights: "ALL", nextAction: "ALL", owner: "ALL", scriptStatus: "ALL", format: "ALL" });
   const [selectedLeadId, setSelectedLeadId] = useState("");
   const [leadDraft, setLeadDraft] = useState<Partial<HammerProjectLead>>({});
+  const [createProjectOpen, setCreateProjectOpen] = useState(false);
   const [addSlateOpen, setAddSlateOpen] = useState(false);
   const [slateImportMessage, setSlateImportMessage] = useState("");
   const selectedLead = selectedLeadId ? projectLeads.find((lead) => lead.id === selectedLeadId) : undefined;
@@ -1023,7 +1073,7 @@ function Projects({
     <div className="space-y-4">
       <Panel>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <SectionHeader eyebrow="Projects" title={section === "active" ? "Active Projects" : "Development Slate"} action={section === "active" ? (onCreate ? <PrimaryButton icon={Plus} label="New" onClick={onCreate} /> : undefined) : <div className="flex flex-wrap gap-1.5"><PrimaryButton icon={Plus} label="Add Slate" onClick={() => setAddSlateOpen(true)} /><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline"><UploadCloud className="h-3.5 w-3.5" />Import CSV<input className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => importSlateCsv(event.target.files?.[0])} /></label></div>} />
+          <SectionHeader eyebrow="Projects" title={section === "active" ? "Active Projects" : "Development Slate"} action={section === "active" ? (canCreateProject ? <PrimaryButton icon={Plus} label="Create Project" onClick={() => setCreateProjectOpen(true)} /> : undefined) : <div className="flex flex-wrap gap-1.5"><PrimaryButton icon={Plus} label="Add Slate" onClick={() => setAddSlateOpen(true)} /><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline"><UploadCloud className="h-3.5 w-3.5" />Import CSV<input className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => importSlateCsv(event.target.files?.[0])} /></label></div>} />
           <div className="inline-flex w-fit rounded-md border border-white/10 bg-white/[0.03] p-1">
             <button type="button" onClick={() => setSection("active")} className={cn("rounded px-3 py-1.5 text-xs font-semibold text-studio-300 transition", section === "active" && "bg-amberline text-studio-950")}>Active Projects</button>
             <button type="button" onClick={() => setSection("slate")} className={cn("rounded px-3 py-1.5 text-xs font-semibold text-studio-300 transition", section === "slate" && "bg-amberline text-studio-950")}>Development Slate</button>
@@ -1127,6 +1177,17 @@ function Projects({
                 if (!onCreateLead) return;
                 await onCreateLead(lead);
                 setAddSlateOpen(false);
+              }}
+            />
+          ) : null}
+          {createProjectOpen && onCreateProject ? (
+            <ProjectCreateModal
+              users={users}
+              currentUser={currentUser}
+              onClose={() => setCreateProjectOpen(false)}
+              onCreate={async (draft) => {
+                await onCreateProject(draft);
+                setCreateProjectOpen(false);
               }}
             />
           ) : null}
@@ -1404,24 +1465,135 @@ function uniqueLeadOptions(leads: HammerProjectLead[], key: keyof HammerProjectL
   return Array.from(new Set(leads.map((lead) => lead[key]).filter((value): value is string => typeof value === "string" && Boolean(value.trim())))).sort((a, b) => a.localeCompare(b)).slice(0, 160);
 }
 
-function ProjectEditor({ onCreate }: { onCreate: () => void }) {
+function ProjectCreateModal({ users, currentUser, onClose, onCreate }: { users: HammerUser[]; currentUser: HammerUser; onClose: () => void; onCreate: (draft: Partial<ProjectDraft>) => Promise<void> }) {
+  const [draft, setDraft] = useState<ProjectDraft>({
+    title: "",
+    logline: "",
+    type: "Feature",
+    genre: "",
+    status: "IDEA",
+    stage: "DEVELOPMENT",
+    ownerId: currentUser.id
+  });
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!draft.title.trim()) {
+      setMessage("Project title is required.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      await onCreate(draft);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not create project.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
+      <form onSubmit={submit} className="my-6 w-full max-w-3xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-glow">
+        <div className="flex items-start justify-between gap-3">
+          <SectionHeader eyebrow="Projects" title="Create Project" />
+          <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close create project">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="grid gap-3">
+          <input className="field" value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="Project title" />
+          <textarea className="field min-h-24" value={draft.logline} onChange={(event) => setDraft({ ...draft, logline: event.target.value })} placeholder="Logline" />
+          <div className="grid gap-3 md:grid-cols-2">
+            <input className="field" value={draft.type} onChange={(event) => setDraft({ ...draft, type: event.target.value })} placeholder="Feature, Series, Short..." />
+            <input className="field" value={draft.genre} onChange={(event) => setDraft({ ...draft, genre: event.target.value })} placeholder="Genre" />
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            <select className="field" value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as HammerProjectStatus })}>
+              {hammerProjectStatuses.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}
+            </select>
+            <select className="field" value={draft.stage} onChange={(event) => setDraft({ ...draft, stage: event.target.value as HammerProject["stage"] })}>
+              {(["DEVELOPMENT", "SCRIPT", "TREATMENT", "VISDEV", "LOOKBOOK", "PACKAGING", "GREENLIGHT"] as HammerProject["stage"][]).map((stage) => <option key={stage} value={stage}>{statusLabel(stage)}</option>)}
+            </select>
+            <select className="field" value={draft.ownerId} onChange={(event) => setDraft({ ...draft, ownerId: event.target.value })}>
+              {users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+            </select>
+          </div>
+        </div>
+        {message ? <p className="mt-3 rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 text-xs text-studio-300">{message}</p> : null}
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:text-amberline">Cancel</button>
+          <button type="submit" disabled={busy} className="rounded bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">Create Project</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function ProjectEditor({ users, currentUser, onCreate }: { users: HammerUser[]; currentUser: HammerUser; onCreate: (draft: Partial<ProjectDraft>) => Promise<void> }) {
+  const router = useRouter();
+  const [draft, setDraft] = useState<ProjectDraft>({
+    title: "",
+    logline: "",
+    type: "Feature",
+    genre: "",
+    status: "IDEA",
+    stage: "DEVELOPMENT",
+    ownerId: currentUser.id
+  });
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!draft.title.trim()) {
+      setMessage("Project title is required.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      await onCreate(draft);
+      router.push("/projects");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not create project.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
       <Panel>
         <SectionHeader eyebrow="New Project" title="Create Project" />
-        <div className="space-y-3">
-          <input className="field" placeholder="Title" />
-          <textarea className="field min-h-24" placeholder="Logline" />
+        <form onSubmit={submit} className="space-y-3">
+          <input className="field" value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="Title" />
+          <textarea className="field min-h-24" value={draft.logline} onChange={(event) => setDraft({ ...draft, logline: event.target.value })} placeholder="Logline" />
           <div className="grid gap-3 md:grid-cols-2">
-            <input className="field" placeholder="Type" />
-            <input className="field" placeholder="Genre" />
+            <input className="field" value={draft.type} onChange={(event) => setDraft({ ...draft, type: event.target.value })} placeholder="Type" />
+            <input className="field" value={draft.genre} onChange={(event) => setDraft({ ...draft, genre: event.target.value })} placeholder="Genre" />
           </div>
-          <button onClick={onCreate} className="w-full rounded-md bg-amberline px-3 py-2 text-[13px] font-semibold text-studio-950">Create Project</button>
-        </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            <select className="field" value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as HammerProjectStatus })}>
+              {hammerProjectStatuses.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}
+            </select>
+            <select className="field" value={draft.stage} onChange={(event) => setDraft({ ...draft, stage: event.target.value as HammerProject["stage"] })}>
+              {(["DEVELOPMENT", "SCRIPT", "TREATMENT", "VISDEV", "LOOKBOOK", "PACKAGING", "GREENLIGHT"] as HammerProject["stage"][]).map((stage) => <option key={stage} value={stage}>{statusLabel(stage)}</option>)}
+            </select>
+            <select className="field" value={draft.ownerId} onChange={(event) => setDraft({ ...draft, ownerId: event.target.value })}>
+              {users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+            </select>
+          </div>
+          {message ? <p className="rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 text-xs text-studio-300">{message}</p> : null}
+          <button type="submit" disabled={busy} className="w-full rounded-md bg-amberline px-3 py-2 text-[13px] font-semibold text-studio-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">Create Project</button>
+        </form>
       </Panel>
       <Panel>
-        <SectionHeader eyebrow="Defaults" title="MVP Fields" />
-        <p className="text-[13px] leading-5 text-studio-300">New projects start in IDEA / DEVELOPMENT, assign the current producer as owner, and write an audit event. The Postgres schema supports soft delete through deletedAt.</p>
+        <SectionHeader eyebrow="Access" title="Who Can Create Projects" />
+        <p className="text-[13px] leading-5 text-studio-300">Admins, producers, and executives can create projects. New projects are saved to the production database, assigned an owner, and appear in Active Projects for users with appropriate access.</p>
       </Panel>
     </div>
   );
@@ -2391,6 +2563,7 @@ function ScriptDetail({
   onSupportingUpload,
   onSupportingDelete,
   onStatusChange,
+  onUpdateMetadata,
   onDelete
 }: {
   documentId: string;
@@ -2401,14 +2574,52 @@ function ScriptDetail({
   onSupportingUpload?: (input: { scriptDocumentId: string; title: string; type: SupportingDocumentType; notes: string; file: File }) => Promise<void>;
   onSupportingDelete?: (documentId: string) => void;
   onStatusChange?: (versionId: string, status: ScriptStatus) => void;
+  onUpdateMetadata?: (documentId: string, patch: Partial<Pick<HammerDocument, "title" | "type" | "writerName" | "source">>) => Promise<void>;
   onDelete?: (documentId: string) => void;
 }) {
   const doc = documents.find((item) => item.id === documentId) ?? documents[0];
   const version = currentVersionFor(doc.id, documents, versions);
   const [tab, setTab] = useState<"overview" | "notes" | "files" | "versions" | "breakdown">("overview");
+  const [metadataDraft, setMetadataDraft] = useState({
+    title: doc.title,
+    type: doc.type,
+    writerName: doc.writerName ?? "",
+    source: doc.source ?? ""
+  });
+  const [metadataMessage, setMetadataMessage] = useState("");
   const documentVersions = versions.filter((item) => item.documentId === doc.id).sort((a, b) => b.versionNumber - a.versionNumber);
   const attachedSupportingDocuments = supportingDocuments.filter((item) => item.scriptDocumentId === doc.id);
   const relatedComments = hammerComments.filter((comment) => comment.targetId === (version?.id ?? doc.id) || comment.targetId === doc.id);
+
+  useEffect(() => {
+    setMetadataDraft({
+      title: doc.title,
+      type: doc.type,
+      writerName: doc.writerName ?? "",
+      source: doc.source ?? ""
+    });
+    setMetadataMessage("");
+  }, [doc.id, doc.source, doc.title, doc.type, doc.writerName]);
+
+  async function saveMetadata() {
+    if (!onUpdateMetadata) return;
+    if (!metadataDraft.title.trim()) {
+      setMetadataMessage("Title is required.");
+      return;
+    }
+    try {
+      await onUpdateMetadata(doc.id, {
+        title: metadataDraft.title.trim(),
+        type: metadataDraft.type,
+        writerName: metadataDraft.writerName.trim(),
+        source: metadataDraft.source.trim()
+      });
+      setMetadataMessage("Script details updated.");
+    } catch (error) {
+      setMetadataMessage(error instanceof Error ? error.message : "Could not update script details.");
+    }
+  }
+
   return (
     <div className="space-y-4">
       <Panel>
@@ -2449,19 +2660,57 @@ function ScriptDetail({
             <SectionHeader eyebrow="Document" title="Readable Text" />
             <pre className="max-h-[620px] overflow-auto rounded-lg border border-white/10 bg-black/25 p-3 text-[13px] leading-5 text-studio-200">{version?.extractedText}</pre>
           </Panel>
-          <Panel>
-            <SectionHeader eyebrow="Review" title="Current Decision" />
-            <div className="space-y-3">
-              <Badge value={version?.status ?? "DRAFT"} />
-              {version && onStatusChange ? (
-                <select className="field" value={version.status} onChange={(event) => onStatusChange(version.id, event.target.value as ScriptStatus)}>
-                  {hammerScriptStatuses.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}
-                </select>
-              ) : null}
-              {doc.source ? <SmallStat label="Source" value={doc.source} /> : null}
-              <p className="text-[13px] text-studio-300">{version?.notes}</p>
-            </div>
-          </Panel>
+          <div className="space-y-4">
+            <Panel>
+              <SectionHeader eyebrow="Review" title="Current Decision" />
+              <div className="space-y-3">
+                <Badge value={version?.status ?? "DRAFT"} />
+                {version && onStatusChange ? (
+                  <select className="field" value={version.status} onChange={(event) => onStatusChange(version.id, event.target.value as ScriptStatus)}>
+                    {hammerScriptStatuses.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}
+                  </select>
+                ) : null}
+                {doc.source ? <SmallStat label="Source" value={doc.source} /> : null}
+                <p className="text-[13px] text-studio-300">{version?.notes}</p>
+              </div>
+            </Panel>
+            <Panel>
+              <SectionHeader eyebrow="Metadata" title="Script Details" />
+              {onUpdateMetadata ? (
+                <div className="space-y-3">
+                  <label className="grid gap-1">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Title</span>
+                    <input className="field" value={metadataDraft.title} onChange={(event) => setMetadataDraft((current) => ({ ...current, title: event.target.value }))} />
+                  </label>
+                  <label className="grid gap-1">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Document Type</span>
+                    <select className="field" value={metadataDraft.type} onChange={(event) => setMetadataDraft((current) => ({ ...current, type: event.target.value as DocumentType }))}>
+                      {(["SCRIPT", "TREATMENT", "OUTLINE", "NOTES", "COVERAGE", "BUSINESS_DOCUMENT"] as DocumentType[]).map((documentType) => (
+                        <option key={documentType} value={documentType}>{statusLabel(documentType)}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="grid gap-1">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Writer</span>
+                    <input className="field" value={metadataDraft.writerName} onChange={(event) => setMetadataDraft((current) => ({ ...current, writerName: event.target.value }))} placeholder="Writer name" />
+                  </label>
+                  <label className="grid gap-1">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Source</span>
+                    <input className="field" value={metadataDraft.source} onChange={(event) => setMetadataDraft((current) => ({ ...current, source: event.target.value }))} placeholder="Source, agency, manager, internal" />
+                  </label>
+                  <PrimaryButton icon={CheckCircle2} label="Save Details" onClick={saveMetadata} />
+                  {metadataMessage ? <p className="text-xs text-studio-300">{metadataMessage}</p> : null}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <SmallStat label="Title" value={doc.title} />
+                  <SmallStat label="Type" value={statusLabel(doc.type)} />
+                  <SmallStat label="Writer" value={doc.writerName ?? userName(doc.createdById)} />
+                  <SmallStat label="Source" value={doc.source ?? "Internal"} />
+                </div>
+              )}
+            </Panel>
+          </div>
         </div>
       ) : null}
 
@@ -3027,6 +3276,7 @@ function Contacts({
   tasks = hammerTasks,
   databaseMode = false,
   onDatabaseImport,
+  onCreateContact,
   onUpdateContact,
   onDeleteContact
 }: {
@@ -3038,6 +3288,7 @@ function Contacts({
   tasks?: HammerTask[];
   databaseMode?: boolean;
   onDatabaseImport?: (contacts: HammerContact[]) => Promise<unknown>;
+  onCreateContact?: (contact: Omit<HammerContact, "id">) => Promise<void>;
   onUpdateContact?: (contactId: string, patch: Partial<Pick<HammerContact, "status" | "ownerId" | "tags" | "lastContacted" | "nextFollowUp" | "projectIds" | "notes">>) => Promise<void>;
   onDeleteContact?: (contactId: string) => Promise<void>;
 }) {
@@ -3047,6 +3298,7 @@ function Contacts({
   const [ownerId, setOwnerId] = useState("ALL");
   const [localContacts, setLocalContacts] = useState<HammerContact[]>([]);
   const [selectedContactId, setSelectedContactId] = useState(initialContacts[0]?.id ?? "");
+  const [createOpen, setCreateOpen] = useState(false);
   const [importMessage, setImportMessage] = useState("");
   const [draft, setDraft] = useState({ status: "ACTIVE" as ContactStatus, ownerId: "", tags: "", lastContacted: "", nextFollowUp: "", projectIds: [] as string[], notes: "" });
   const contacts = useMemo(() => {
@@ -3147,6 +3399,23 @@ function Contacts({
     setImportMessage("Contact relationship updated.");
   }
 
+  async function createManualContact(input: Omit<HammerContact, "id">) {
+    if (databaseMode) {
+      await onCreateContact?.(input);
+    } else {
+      const nextContact: HammerContact = {
+        id: `contact-local-${Date.now()}`,
+        ...input
+      };
+      const nextContacts = [nextContact, ...localContacts];
+      setLocalContacts(nextContacts);
+      setSelectedContactId(nextContact.id);
+      window.localStorage.setItem(HAMMER_LOCAL_CONTACTS_STORAGE_KEY, JSON.stringify(nextContacts));
+    }
+    setCreateOpen(false);
+    setImportMessage("Contact added.");
+  }
+
   async function deleteSelectedContact() {
     if (!selectedContact) return;
     if (!window.confirm(`Delete contact "${selectedContact.name}"?`)) return;
@@ -3165,7 +3434,7 @@ function Contacts({
     <div className="space-y-4">
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
         <Panel>
-          <SectionHeader eyebrow="Collaborative CRM" title="Contacts" action={<div className="flex flex-wrap gap-2"><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline"><UploadCloud className="h-3.5 w-3.5" />Import CSV<input className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => importContacts(event.target.files?.[0])} /></label><button type="button" className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 hover:border-amberline/40 hover:text-amberline" onClick={exportContacts}>Export CSV</button></div>} />
+          <SectionHeader eyebrow="Collaborative CRM" title="Contacts" action={<div className="flex flex-wrap gap-2"><PrimaryButton icon={Plus} label="Add Contact" onClick={() => setCreateOpen(true)} /><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline"><UploadCloud className="h-3.5 w-3.5" />Import CSV<input className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => importContacts(event.target.files?.[0])} /></label><button type="button" className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 hover:border-amberline/40 hover:text-amberline" onClick={exportContacts}>Export CSV</button></div>} />
           <div className="mb-3 grid gap-2 lg:grid-cols-[1fr_180px_180px_180px]">
             <input className="field" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search names, companies, tags, notes" />
             <select className="field" value={type} onChange={(event) => setType(event.target.value as ContactType | "ALL")}>
@@ -3304,6 +3573,189 @@ function Contacts({
         <SectionHeader eyebrow="Relationship Queue" title="Upcoming Follow-Ups" />
         {followUpContacts.length ? <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-5">{followUpContacts.map((contact) => <button key={contact.id} type="button" onClick={() => setSelectedContactId(contact.id)} className="rounded-md border border-white/10 bg-white/[0.03] p-2.5 text-left transition hover:border-amberline/35"><p className="truncate text-[13px] font-semibold text-studio-100">{contact.name}</p><p className="mt-1 text-xs text-studio-400">{contact.nextFollowUp} / {userName(contact.ownerId ?? currentUser.id)}</p></button>)}</div> : <EmptyState label="No follow-ups scheduled." />}
       </Panel>
+      {createOpen ? (
+        <ContactCreateModal
+          users={users}
+          projects={projects}
+          currentUser={currentUser}
+          onClose={() => setCreateOpen(false)}
+          onCreate={createManualContact}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ContactCreateModal({
+  users,
+  projects,
+  currentUser,
+  onClose,
+  onCreate
+}: {
+  users: HammerUser[];
+  projects: HammerProject[];
+  currentUser: HammerUser;
+  onClose: () => void;
+  onCreate: (contact: Omit<HammerContact, "id">) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState<Omit<HammerContact, "id">>({
+    name: "",
+    company: "",
+    type: "WRITER",
+    title: "",
+    email: "",
+    phone: "",
+    location: "",
+    website: "",
+    status: "NEW",
+    ownerId: currentUser.id,
+    tags: [],
+    lastContacted: "",
+    nextFollowUp: "",
+    projectIds: [],
+    notes: ""
+  });
+  const [tagsText, setTagsText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!draft.name.trim()) {
+      setError("Name is required.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await onCreate({
+        ...draft,
+        name: draft.name.trim(),
+        company: draft.company.trim(),
+        title: draft.title.trim(),
+        email: draft.email.trim(),
+        phone: draft.phone.trim(),
+        location: draft.location.trim(),
+        website: draft.website?.trim(),
+        tags: tagsText.split(/[;,]/).map((tag) => tag.trim()).filter(Boolean),
+        lastContacted: draft.lastContacted || undefined,
+        nextFollowUp: draft.nextFollowUp || undefined,
+        ownerId: draft.ownerId || undefined,
+        notes: draft.notes.trim()
+      });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Could not add contact.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
+      <form onSubmit={submit} className="my-6 w-full max-w-3xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-glow">
+        <div className="flex items-start justify-between gap-3">
+          <SectionHeader eyebrow="Collaborative CRM" title="Add Contact" />
+          <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close add contact">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Name</span>
+            <input className="field" value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Contact name" />
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Contact Type</span>
+            <select className="field" value={draft.type} onChange={(event) => setDraft((current) => ({ ...current, type: event.target.value as ContactType }))}>
+              {contactTypes.map((contactType) => <option key={contactType} value={contactType}>{statusLabel(contactType)}</option>)}
+            </select>
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Company</span>
+            <input className="field" value={draft.company} onChange={(event) => setDraft((current) => ({ ...current, company: event.target.value }))} placeholder="Company, agency, vendor" />
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Title / Role</span>
+            <input className="field" value={draft.title} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} placeholder="Writer, manager, artist..." />
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Email</span>
+            <input className="field" type="email" value={draft.email} onChange={(event) => setDraft((current) => ({ ...current, email: event.target.value }))} placeholder="name@example.com" />
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Phone</span>
+            <input className="field" value={draft.phone} onChange={(event) => setDraft((current) => ({ ...current, phone: event.target.value }))} placeholder="Phone number" />
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Location</span>
+            <input className="field" value={draft.location} onChange={(event) => setDraft((current) => ({ ...current, location: event.target.value }))} placeholder="Los Angeles, CA" />
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Website</span>
+            <input className="field" value={draft.website ?? ""} onChange={(event) => setDraft((current) => ({ ...current, website: event.target.value }))} placeholder="https://..." />
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Status</span>
+            <select className="field" value={draft.status} onChange={(event) => setDraft((current) => ({ ...current, status: event.target.value as ContactStatus }))}>
+              {contactStatuses.map((contactStatus) => <option key={contactStatus} value={contactStatus}>{statusLabel(contactStatus)}</option>)}
+            </select>
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Relationship Owner</span>
+            <select className="field" value={draft.ownerId ?? ""} onChange={(event) => setDraft((current) => ({ ...current, ownerId: event.target.value }))}>
+              <option value="">Unassigned owner</option>
+              {users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+            </select>
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Last Contacted</span>
+            <input className="field" type="date" value={draft.lastContacted ?? ""} onChange={(event) => setDraft((current) => ({ ...current, lastContacted: event.target.value }))} />
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Next Follow-Up</span>
+            <input className="field" type="date" value={draft.nextFollowUp ?? ""} onChange={(event) => setDraft((current) => ({ ...current, nextFollowUp: event.target.value }))} />
+          </label>
+        </div>
+        <label className="mt-3 grid gap-1">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Tags</span>
+          <input className="field" value={tagsText} onChange={(event) => setTagsText(event.target.value)} placeholder="Tags, separated by commas" />
+        </label>
+        <div className="mt-3">
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Assigned Projects</span>
+            <span className="text-[11px] text-studio-500">{draft.projectIds.length} selected</span>
+          </div>
+          <div className="grid max-h-40 gap-1 overflow-auto rounded-md border border-white/10 bg-white/[0.025] p-2 md:grid-cols-2">
+            {projects.map((project) => {
+              const checked = draft.projectIds.includes(project.id);
+              return (
+                <label key={project.id} className={cn("flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-[13px] text-studio-300 transition hover:bg-white/[0.04] hover:text-studio-100", checked && "bg-emerald-400/10 text-studio-100")}>
+                  <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5 accent-emerald-400"
+                    checked={checked}
+                    onChange={(event) => setDraft((current) => ({
+                      ...current,
+                      projectIds: event.target.checked ? [...current.projectIds, project.id] : current.projectIds.filter((projectId) => projectId !== project.id)
+                    }))}
+                  />
+                  <span className="truncate">{project.title}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+        <label className="mt-3 grid gap-1">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Relationship Notes</span>
+          <textarea className="field min-h-24" value={draft.notes} onChange={(event) => setDraft((current) => ({ ...current, notes: event.target.value }))} placeholder="Relationship notes" />
+        </label>
+        {error ? <p className="mt-3 rounded border border-rose-400/25 bg-rose-500/5 px-2.5 py-2 text-xs text-rose-200">{error}</p> : null}
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:text-amberline">Cancel</button>
+          <button type="submit" disabled={busy} className="rounded bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">Add Contact</button>
+        </div>
+      </form>
     </div>
   );
 }
@@ -3786,6 +4238,7 @@ function AdminUsers({
   onCreateProject,
   onDeleteProject,
   onCreateUser,
+  onUpdateUserRole,
   onDeleteUser,
   onStatusChange
 }: {
@@ -3795,12 +4248,14 @@ function AdminUsers({
   databaseMode: boolean;
   onCreateProject: (draft: Partial<ProjectDraft>) => void;
   onDeleteProject: (projectId: string) => void;
-  onCreateUser: (input: { name: string; email: string; password: string; appRole: "admin" | "executive" | "producer" | "department_lead" }) => Promise<void>;
+  onCreateUser: (input: { name: string; email: string; password: string; appRole: AppRole }) => Promise<void>;
+  onUpdateUserRole: (userId: string, appRole: AppRole) => Promise<void>;
   onDeleteUser: (userId: string) => Promise<void>;
   onStatusChange: (projectId: string, status: HammerProjectStatus) => void;
 }) {
-  const canCreateProject = currentUser.role === "ADMIN";
+  const canCreateProject = currentUser.role === "ADMIN" || currentUser.role === "PRODUCER" || currentUser.role === "EXECUTIVE";
   const [createUserOpen, setCreateUserOpen] = useState(false);
+  const [roleUser, setRoleUser] = useState<HammerUser | null>(null);
   const [createdUserReceipt, setCreatedUserReceipt] = useState<{ name: string; email: string; password: string } | null>(null);
   const [localUserStates, setLocalUserStates] = useState<Record<string, { inactive?: boolean; deleted?: boolean }>>({});
   const [projectDraft, setProjectDraft] = useState<ProjectDraft>({
@@ -3828,10 +4283,15 @@ function AdminUsers({
 
   const visibleUsers = users.filter((user) => !localUserStates[user.id]?.deleted);
 
-  async function createAdminUser(input: { name: string; email: string; password: string; appRole: "admin" | "executive" | "producer" | "department_lead" }) {
+  async function createAdminUser(input: { name: string; email: string; password: string; appRole: AppRole }) {
     await onCreateUser(input);
     setCreatedUserReceipt({ name: input.name, email: input.email, password: input.password });
     setCreateUserOpen(false);
+  }
+
+  async function assignUserRole(userId: string, appRole: AppRole) {
+    await onUpdateUserRole(userId, appRole);
+    setRoleUser(null);
   }
 
   function updateLocalUserState(userId: string, nextState: { inactive?: boolean; deleted?: boolean }) {
@@ -3970,7 +4430,14 @@ function AdminUsers({
                     <td className="text-studio-300">Membership role + resource visibility</td>
                     <td>
                       <div className="flex flex-wrap gap-1.5">
-                        <GhostButton icon={ShieldCheck} label="Assign Role" />
+                        <button
+                          type="button"
+                          onClick={() => setRoleUser(user)}
+                          className="inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.025] px-1.5 py-1 text-[11px] font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline"
+                        >
+                          <ShieldCheck className="h-3 w-3" />
+                          Assign Role
+                        </button>
                         <button
                           type="button"
                           disabled={isCurrentUser}
@@ -4004,6 +4471,13 @@ function AdminUsers({
           onCreate={createAdminUser}
         />
       ) : null}
+      {roleUser ? (
+        <AssignRoleModal
+          user={roleUser}
+          onClose={() => setRoleUser(null)}
+          onAssign={assignUserRole}
+        />
+      ) : null}
     </div>
   );
 }
@@ -4015,11 +4489,11 @@ function CreateUserModal({
 }: {
   disabled: boolean;
   onClose: () => void;
-  onCreate: (input: { name: string; email: string; password: string; appRole: "admin" | "executive" | "producer" | "department_lead" }) => Promise<void>;
+  onCreate: (input: { name: string; email: string; password: string; appRole: AppRole }) => Promise<void>;
 }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [appRole, setAppRole] = useState<"admin" | "executive" | "producer" | "department_lead">("producer");
+  const [appRole, setAppRole] = useState<AppRole>("producer");
   const [password, setPassword] = useState(() => temporaryPassword());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -4061,10 +4535,7 @@ function CreateUserModal({
           <label className="grid gap-1.5">
             <span className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">Role</span>
             <select className="field" value={appRole} onChange={(event) => setAppRole(event.target.value as typeof appRole)}>
-              <option value="admin">Admin</option>
-              <option value="executive">Executive</option>
-              <option value="producer">Producer</option>
-              <option value="department_lead">Department Lead</option>
+              {appRoleOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </label>
           <label className="grid gap-1.5">
@@ -4081,6 +4552,45 @@ function CreateUserModal({
         <div className="mt-4 flex justify-end gap-2">
           <button type="button" onClick={onClose} className="rounded border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:text-amberline">Cancel</button>
           <button type="submit" disabled={busy || disabled} className="rounded bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">Create User</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function AssignRoleModal({ user, onClose, onAssign }: { user: HammerUser; onClose: () => void; onAssign: (userId: string, appRole: AppRole) => Promise<void> }) {
+  const [appRole, setAppRole] = useState<AppRole>(appRoleForHammerRole(user.role));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await onAssign(user.id, appRole);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Could not update user role.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <form onSubmit={submit} className="w-full max-w-md rounded-lg border border-white/10 bg-studio-950 p-4 shadow-glow">
+        <SectionHeader eyebrow="Admin" title="Assign Role" />
+        <p className="mb-3 text-sm text-studio-300">{user.name}<br /><span className="text-xs text-studio-500">{user.email}</span></p>
+        <label className="grid gap-1.5">
+          <span className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">Global Role</span>
+          <select className="field" value={appRole} onChange={(event) => setAppRole(event.target.value as AppRole)}>
+            {appRoleOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        </label>
+        {error ? <p className="mt-3 rounded border border-rose-400/25 bg-rose-500/5 px-2.5 py-2 text-xs text-rose-200">{error}</p> : null}
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:text-amberline">Cancel</button>
+          <button type="submit" disabled={busy} className="rounded bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">Save Role</button>
         </div>
       </form>
     </div>
@@ -4310,6 +4820,27 @@ function canViewAllProjectTasks(role?: string) {
 
 function canManageScriptLibrary(role?: string) {
   return role === "ADMIN" || role === "PRODUCER" || role === "EXECUTIVE";
+}
+
+const appRoleOptions: { value: AppRole; label: string }[] = [
+  { value: "admin", label: "Admin" },
+  { value: "executive", label: "Executive" },
+  { value: "producer", label: "Producer" },
+  { value: "department_lead", label: "Department Lead" }
+];
+
+function hammerRoleForAppRole(role: AppRole): HammerUser["role"] {
+  if (role === "admin") return "ADMIN";
+  if (role === "executive") return "EXECUTIVE";
+  if (role === "department_lead") return "DEVELOPMENT";
+  return "PRODUCER";
+}
+
+function appRoleForHammerRole(role: HammerUser["role"]): AppRole {
+  if (role === "ADMIN") return "admin";
+  if (role === "EXECUTIVE") return "executive";
+  if (role === "PRODUCER") return "producer";
+  return "department_lead";
 }
 
 function canViewAllProjects(role?: string) {

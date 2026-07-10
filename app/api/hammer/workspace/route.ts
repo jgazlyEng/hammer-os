@@ -146,6 +146,19 @@ export async function POST(request: Request) {
           data: { projectId: stringField(body.projectId), updatedAt: new Date() }
         })) });
 
+      case "updateDocumentMetadata":
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        return NextResponse.json({ document: toDocument(await prisma.document.update({
+          where: { id: stringField(body.documentId) },
+          data: {
+            title: stringField(body.title) || undefined,
+            type: body.type ? documentTypeField(body.type) : undefined,
+            writerName: body.writerName !== undefined ? optionalString(body.writerName) ?? null : undefined,
+            source: body.source !== undefined ? optionalString(body.source) ?? null : undefined,
+            updatedAt: new Date()
+          }
+        })) });
+
       case "deleteDocument":
         return NextResponse.json({ document: toDocument(await prisma.document.update({
           where: { id: stringField(body.documentId) },
@@ -246,6 +259,21 @@ export async function POST(request: Request) {
           }
         })) }, { status: 201 });
 
+      case "updateUserRole": {
+        if (auth.user.appRole !== "admin") return NextResponse.json(forbidden(), { status: 403 });
+        const userId = stringField(body.userId);
+        if (!userId) return NextResponse.json({ error: "User is required." }, { status: 400 });
+        const nextAppRole = appRoleField(body.appRole);
+        return NextResponse.json({ user: toUser(await prisma.user.update({
+          where: { id: userId },
+          data: {
+            appRole: nextAppRole,
+            role: userRoleForAppRole(nextAppRole),
+            auditLogs: { create: audit(auth.user.id, auth.user.email, "user.role_changed", "User", userId, { appRole: nextAppRole }) }
+          }
+        })) });
+      }
+
       case "deleteUser":
         if (auth.user.appRole !== "admin") return NextResponse.json(forbidden(), { status: 403 });
         if (stringField(body.userId) === auth.user.id) return NextResponse.json({ error: "Admins cannot delete their own active session user." }, { status: 400 });
@@ -271,28 +299,19 @@ export async function POST(request: Request) {
         })) });
       }
 
+      case "createContact":
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        if (!stringField(body.name)) return NextResponse.json({ error: "Contact name is required." }, { status: 400 });
+        return NextResponse.json({ contact: toContact(await prisma.contact.create({
+          data: contactCreateData(body)
+        })) }, { status: 201 });
+
       case "importContacts":
         if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
         return NextResponse.json({ contacts: (await prisma.$transaction((Array.isArray(body.contacts) ? body.contacts : []).map((item) => {
           const contact = item as Record<string, unknown>;
           return prisma.contact.create({
-            data: {
-              name: stringField(contact.name) || "Unnamed Contact",
-              company: optionalString(contact.company),
-              type: contactTypeField(contact.type),
-              title: optionalString(contact.title),
-              email: optionalString(contact.email),
-              phone: optionalString(contact.phone),
-              location: optionalString(contact.location),
-              website: optionalString(contact.website),
-              status: contactStatusField(contact.status),
-              ownerId: optionalString(contact.ownerId),
-              tags: Array.isArray(contact.tags) ? contact.tags.filter((tag): tag is string => typeof tag === "string") : parseTags(optionalString(contact.tags)),
-              lastContacted: dateField(contact.lastContacted),
-              nextFollowUp: dateField(contact.nextFollowUp),
-              notes: optionalString(contact.notes),
-              projectIds: Array.isArray(contact.projectIds) ? contact.projectIds.filter((id): id is string => typeof id === "string") : []
-            }
+            data: contactCreateData(contact)
           });
         }))).map(toContact) });
 
@@ -655,6 +674,26 @@ function hammerRoleForAppRole(value?: string) {
   if (value === "producer") return "PRODUCER";
   if (value === "department_lead") return "DEVELOPMENT";
   return undefined;
+}
+
+function contactCreateData(contact: Record<string, unknown>): Prisma.ContactCreateInput {
+  return {
+    name: stringField(contact.name) || "Unnamed Contact",
+    company: optionalString(contact.company),
+    type: contactTypeField(contact.type),
+    title: optionalString(contact.title),
+    email: optionalString(contact.email),
+    phone: optionalString(contact.phone),
+    location: optionalString(contact.location),
+    website: optionalString(contact.website),
+    status: contactStatusField(contact.status),
+    ownerId: optionalString(contact.ownerId),
+    tags: Array.isArray(contact.tags) ? contact.tags.filter((tag): tag is string => typeof tag === "string") : parseTags(optionalString(contact.tags)),
+    lastContacted: dateField(contact.lastContacted),
+    nextFollowUp: dateField(contact.nextFollowUp),
+    notes: optionalString(contact.notes),
+    projectIds: Array.isArray(contact.projectIds) ? contact.projectIds.filter((id): id is string => typeof id === "string") : []
+  };
 }
 
 function contactTypeField(value: unknown): ContactType {
