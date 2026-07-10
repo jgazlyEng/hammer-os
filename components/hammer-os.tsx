@@ -1833,7 +1833,8 @@ function Scripts({
   const incomingDocs = filteredDocuments.filter((doc) => !doc.projectId);
   const projectDocs = filteredDocuments.filter((doc) => doc.projectId);
   const allDocs = filteredDocuments;
-  const groupedProjectDocs = projects
+  const groupingProjects = projectsForDocumentGroups(projects, projectDocs);
+  const groupedProjectDocs = groupingProjects
     .filter((project) => canManageLibrary || assignedProjectIds.has(project.id))
     .map((project) => ({
       project,
@@ -4049,7 +4050,7 @@ function canManageScriptLibrary(role?: string) {
 }
 
 function canViewAllProjects(role?: string) {
-  return role === "ADMIN" || role === "EXECUTIVE";
+  return role === "ADMIN" || role === "EXECUTIVE" || role === "PRODUCER";
 }
 
 function canAccessScriptDocument(user: ReturnType<typeof hammerUserByEmail>, document: HammerDocument) {
@@ -4069,6 +4070,19 @@ function normalizeScriptSection(section?: string): ScriptLibrarySection | undefi
 
 function projectTitleFromList(projectId: string, projects: HammerProject[]) {
   return projects.find((project) => project.id === projectId)?.title ?? projectTitle(projectId);
+}
+
+function projectsForDocumentGroups(projects: HammerProject[], docs: HammerDocument[]) {
+  const byId = new Map(projects.map((project) => [project.id, project]));
+  const missingProjectIds = Array.from(new Set(docs.map((doc) => doc.projectId).filter((projectId): projectId is string => Boolean(projectId && !byId.has(projectId)))));
+  return [
+    ...projects,
+    ...missingProjectIds.map((projectId) => ({
+      ...emptyProject,
+      id: projectId,
+      title: projectTitle(projectId)
+    }))
+  ];
 }
 
 function isValidProject(project: unknown): project is HammerProject {

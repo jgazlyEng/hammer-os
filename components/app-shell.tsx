@@ -499,7 +499,7 @@ function isScriptLibraryDocument(document: HammerDocument) {
 }
 
 function canViewAllProjects(role: string) {
-  return role === "ADMIN" || role === "EXECUTIVE";
+  return role === "ADMIN" || role === "EXECUTIVE" || role === "PRODUCER";
 }
 
 function ThemeToggle({ theme, onChange }: { theme: ThemeMode; onChange: (theme: ThemeMode) => void }) {
