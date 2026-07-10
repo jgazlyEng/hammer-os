@@ -42,6 +42,18 @@ const HAMMER_THEME_STORAGE_KEY = "hammer-os-theme";
 type ThemeMode = "dark" | "light";
 type LocalUserState = Record<string, { inactive?: boolean; deleted?: boolean }>;
 
+const emptyShellProject: HammerProject = {
+  id: "no-project",
+  title: "No Projects Yet",
+  logline: "",
+  type: "Feature",
+  genre: "",
+  status: "IDEA",
+  stage: "DEVELOPMENT",
+  ownerId: "",
+  updatedAt: ""
+};
+
 interface ShellUser {
   name: string;
   email: string;
@@ -70,12 +82,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [authMode, setAuthMode] = useState<"database" | "demo">("demo");
   const [theme, setTheme] = useState<ThemeMode>("dark");
   const currentUser = hammerUserByEmail(user?.email);
-  const allProjects = useMemo(() => [...localProjects, ...hammerProjects.filter((project) => !localProjects.some((item) => item.id === project.id))], [localProjects]);
+  const safeLocalProjects = useMemo(() => localProjects.filter(isValidProject), [localProjects]);
+  const allProjects = useMemo(() => [...safeLocalProjects, ...hammerProjects.filter((project) => !safeLocalProjects.some((item) => item.id === project.id))], [safeLocalProjects]);
   const assignedProjects = assignedProjectsForUser(currentUser.id);
   const availableProjects = canViewAllProjects(currentUser.role)
     ? allProjects
-    : uniqueProjects([...assignedProjects, ...localProjects.filter((project) => project.ownerId === currentUser.id)]);
-  const activeProject = useMemo(() => availableProjects.find((project) => project.id === projectId) ?? availableProjects[0], [availableProjects, projectId]);
+    : uniqueProjects([...assignedProjects, ...safeLocalProjects.filter((project) => project.ownerId === currentUser.id)]);
+  const activeProject = useMemo(() => availableProjects.find((project) => project.id === projectId) ?? availableProjects[0] ?? emptyShellProject, [availableProjects, projectId]);
   const allDocuments = useMemo(() => [...hammerDocuments, ...localDocuments].map((document) => (
     Object.prototype.hasOwnProperty.call(documentProjectOverrides, document.id)
       ? { ...document, projectId: documentProjectOverrides[document.id] ?? undefined }
@@ -452,6 +465,10 @@ function uniqueProjects(projects: HammerProject[]) {
     seen.add(project.id);
     return true;
   });
+}
+
+function isValidProject(project: unknown): project is HammerProject {
+  return Boolean(project && typeof project === "object" && "id" in project && "title" in project);
 }
 
 function canViewContacts(role: string) {

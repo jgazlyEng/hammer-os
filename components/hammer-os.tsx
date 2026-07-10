@@ -186,22 +186,22 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   const [localReferenceImages, setLocalReferenceImages] = useState<ProjectReferenceImage[]>([]);
   const [localTasks, setLocalTasks] = useState<HammerTask[]>([]);
   const [taskUpdates, setTaskUpdates] = useState<Record<string, Partial<Pick<HammerTask, "priority" | "status">>>>({});
-  const documents = useMemo(() => (workspaceMode === "database" ? localDocuments : [...hammerDocuments, ...localDocuments]).map((document) => (
+  const documents = useMemo(() => (workspaceMode === "database" ? localDocuments : [...hammerDocuments, ...localDocuments]).filter(isValidDocument).map((document) => (
     Object.prototype.hasOwnProperty.call(documentProjectOverrides, document.id)
       ? { ...document, projectId: documentProjectOverrides[document.id] ?? undefined }
       : document
   )), [documentProjectOverrides, localDocuments, workspaceMode]);
-  const versions = useMemo(() => (workspaceMode === "database" ? localVersions : [...hammerVersions, ...localVersions]).map((version) => versionStatuses[version.id] ? { ...version, status: versionStatuses[version.id] } : version), [localVersions, versionStatuses, workspaceMode]);
-  const tasks = useMemo(() => (workspaceMode === "database" ? localTasks : [...localTasks, ...hammerTasks]).map((task) => ({ ...task, ...taskUpdates[task.id] })), [localTasks, taskUpdates, workspaceMode]);
-  const users = workspaceMode === "database" && workspaceUsers.length ? workspaceUsers : hammerUsers;
-  const assets = workspaceMode === "database" ? workspaceAssets : hammerAssets;
+  const versions = useMemo(() => (workspaceMode === "database" ? localVersions : [...hammerVersions, ...localVersions]).filter(isValidVersion).map((version) => versionStatuses[version.id] ? { ...version, status: versionStatuses[version.id] } : version), [localVersions, versionStatuses, workspaceMode]);
+  const tasks = useMemo(() => (workspaceMode === "database" ? localTasks : [...localTasks, ...hammerTasks]).filter(isValidTask).map((task) => ({ ...task, ...taskUpdates[task.id] })), [localTasks, taskUpdates, workspaceMode]);
+  const users = (workspaceMode === "database" && workspaceUsers.length ? workspaceUsers : hammerUsers).filter(isValidUser);
+  const assets = (workspaceMode === "database" ? workspaceAssets : hammerAssets).filter(isValidAsset);
   const contacts = workspaceMode === "database" ? workspaceContacts : hammerContacts;
   const approvals = workspaceMode === "database" ? workspaceApprovals : hammerApprovals;
   const project = projects.find((item) => item.id === id) ?? projects[0] ?? emptyProject;
   const document = documents.find((item) => item.id === id) ?? documents[0] ?? emptyDocument;
   const asset = assets.find((item) => item.id === id) ?? assets[0] ?? hammerAssets[0];
   const activeProject = projects.find((item) => item.id === activeProjectId) ?? projects[0] ?? emptyProject;
-  const filteredProjects = projects.filter((item) => `${item.title} ${item.genre} ${item.status}`.toLowerCase().includes(query.toLowerCase()));
+  const filteredProjects = projects.filter(isValidProject).filter((item) => `${item.title} ${item.genre} ${item.status}`.toLowerCase().includes(query.toLowerCase()));
   const currentUser = users.find((user) => user.email.toLowerCase() === sessionUser?.email?.toLowerCase()) ?? hammerUserByEmail(sessionUser?.email);
 
   async function loadDatabaseWorkspace() {
@@ -210,7 +210,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     const data = await response.json() as HammerWorkspacePayload;
     if (data.mode !== "database") return;
     setWorkspaceMode("database");
-    setProjects(data.projects ?? []);
+    setProjects((data.projects ?? []).filter(isValidProject));
     setLocalProjects([]);
     setLocalDocuments(data.documents ?? []);
     setLocalVersions(data.versions ?? []);
@@ -3884,6 +3884,30 @@ function normalizeScriptSection(section?: string): ScriptLibrarySection | undefi
 
 function projectTitleFromList(projectId: string, projects: HammerProject[]) {
   return projects.find((project) => project.id === projectId)?.title ?? projectTitle(projectId);
+}
+
+function isValidProject(project: unknown): project is HammerProject {
+  return Boolean(project && typeof project === "object" && "id" in project && "title" in project);
+}
+
+function isValidDocument(document: unknown): document is HammerDocument {
+  return Boolean(document && typeof document === "object" && "id" in document && "title" in document);
+}
+
+function isValidVersion(version: unknown): version is HammerDocumentVersion {
+  return Boolean(version && typeof version === "object" && "id" in version && "documentId" in version);
+}
+
+function isValidTask(task: unknown): task is HammerTask {
+  return Boolean(task && typeof task === "object" && "id" in task && "title" in task);
+}
+
+function isValidUser(user: unknown): user is HammerUser {
+  return Boolean(user && typeof user === "object" && "id" in user && "email" in user);
+}
+
+function isValidAsset(asset: unknown): asset is HammerAsset {
+  return Boolean(asset && typeof asset === "object" && "id" in asset && "title" in asset);
 }
 
 function parseProjectLeadCsv(csv: string): HammerProjectLead[] {
