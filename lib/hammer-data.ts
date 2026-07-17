@@ -11,6 +11,7 @@ export type TaskStatus = "TODO" | "IN_PROGRESS" | "ON_HOLD" | "BLOCKED" | "REVIE
 export type TaskPriority = "LOW" | "MEDIUM" | "HIGH" | "URGENT";
 export type ContactType = "WRITER" | "PRODUCER" | "ARTIST" | "EXECUTIVE" | "AGENCY" | "MANAGEMENT" | "LEGAL" | "VENDOR" | "OTHER";
 export type ContactStatus = "NEW" | "ACTIVE" | "FOLLOW_UP" | "WAITING" | "DO_NOT_CONTACT" | "ARCHIVED";
+export type ContactRelationshipType = "AGENT" | "MANAGER" | "REPRESENTS" | "WORKS_WITH" | "ASSISTANT" | "LEGAL_REP" | "REFERRED_BY" | "OTHER";
 
 export const HAMMER_ACTIVE_PROJECT_STORAGE_KEY = "hammer-os-active-project-id";
 export const HAMMER_ACTIVE_PROJECT_EVENT = "hammer-os-active-project-changed";
@@ -29,6 +30,9 @@ export const HAMMER_LOCAL_USER_STATES_EVENT = "hammer-os-local-user-states-chang
 export const HAMMER_LOCAL_TASKS_STORAGE_KEY = "hammer-os-local-tasks";
 export const HAMMER_LOCAL_TASKS_EVENT = "hammer-os-local-tasks-changed";
 export const HAMMER_LOCAL_TASK_UPDATES_STORAGE_KEY = "hammer-os-local-task-updates";
+export const HAMMER_LOCAL_SCRIPT_COLLECTIONS_STORAGE_KEY = "hammer-os-local-script-collections";
+export const HAMMER_LOCAL_SCRIPT_COLLECTION_ITEMS_STORAGE_KEY = "hammer-os-local-script-collection-items";
+export const HAMMER_LOCAL_CONTACT_RELATIONSHIPS_STORAGE_KEY = "hammer-os-local-contact-relationships";
 
 export interface HammerUser {
   id: string;
@@ -169,6 +173,26 @@ export interface HammerDocumentVersion {
   extractedText: string;
 }
 
+export interface HammerScriptCollection {
+  id: string;
+  name: string;
+  description?: string;
+  ownerId?: string;
+  status: string;
+  visibility: "INTERNAL" | "PROJECT_TEAM" | "EXECUTIVE_ONLY";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface HammerScriptCollectionItem {
+  id: string;
+  collectionId: string;
+  documentId: string;
+  sortOrder: number;
+  notes?: string;
+  addedAt: string;
+}
+
 export interface HammerScene {
   id: string;
   projectId: string;
@@ -241,7 +265,7 @@ export interface HammerApproval {
 
 export interface HammerTask {
   id: string;
-  projectId: string;
+  projectId?: string;
   title: string;
   description: string;
   assignedToId: string;
@@ -282,6 +306,15 @@ export interface HammerContact {
   notes: string;
 }
 
+export interface HammerContactRelationship {
+  id: string;
+  fromContactId: string;
+  toContactId: string;
+  relationshipType: ContactRelationshipType;
+  notes?: string;
+  createdAt: string;
+}
+
 export const hammerUsers: HammerUser[] = [
   { id: "user-admin", email: "admin@hammer.local", name: "Maya Chen", googleId: "google-admin", role: "ADMIN" },
   { id: "user-exec", email: "exec@hammer.studio", name: "Ari Vale", googleId: "google-exec", role: "EXECUTIVE" },
@@ -301,6 +334,11 @@ export const hammerContacts: HammerContact[] = [
   { id: "contact-arc", name: "Arc Management", company: "Arc Management", type: "MANAGEMENT", title: "Talent Management", email: "desk@arc-management.example", phone: "(310) 555-0160", location: "Beverly Hills", status: "ACTIVE", ownerId: "user-producer", tags: ["management", "talent"], lastContacted: "2026-06-21", projectIds: ["project-hammer"], notes: "Management contact for attached action talent." },
   { id: "contact-clearance", name: "Clear Frame Legal", company: "Clear Frame Legal", type: "LEGAL", title: "Clearance Counsel", email: "clearance@clearframe.example", phone: "(818) 555-0120", location: "Burbank", status: "WAITING", ownerId: "user-admin", tags: ["legal", "clearance"], nextFollowUp: "2026-07-11", projectIds: ["project-hammer", "project-orchid"], notes: "Business docs, rights checks, and clearance review." },
   { id: "contact-warehouse", name: "Warehouse VFX", company: "Warehouse VFX", type: "VENDOR", title: "VFX Vendor", email: "bids@warehousevfx.example", phone: "(604) 555-0112", location: "Vancouver", status: "NEW", ownerId: "user-producer", tags: ["vendor", "vfx"], nextFollowUp: "2026-07-12", projectIds: ["project-hammer"], notes: "Early VFX bid and plate methodology." }
+];
+
+export const hammerContactRelationships: HammerContactRelationship[] = [
+  { id: "contact-rel-june-catalyst", fromContactId: "contact-june", toContactId: "contact-catalyst", relationshipType: "AGENT", notes: "Catalyst handles incoming submissions for June.", createdAt: "2026-07-17" },
+  { id: "contact-rel-june-arc", fromContactId: "contact-june", toContactId: "contact-arc", relationshipType: "MANAGER", notes: "Arc coordinates availability and packaging conversations.", createdAt: "2026-07-17" }
 ];
 
 export const hammerProjectMembers: HammerProjectMember[] = [
@@ -478,6 +516,17 @@ export const hammerAssetLinks: HammerAssetLink[] = [
 export const hammerComments: HammerComment[] = [
   { id: "comment-1", targetType: "DOCUMENT_VERSION", targetId: "ver-hammer-3", body: "Green draft solves the geography note, but the rooftop handoff needs a cleaner motivation beat.", visibility: "PROJECT_TEAM", status: "OPEN", createdById: "user-dev", createdAt: "2026-06-18" },
   { id: "comment-2", targetType: "ASSET", targetId: "asset-rooftop", body: "Push this reference toward less cyberpunk and more wet municipal infrastructure.", visibility: "INTERNAL", status: "OPEN", createdById: "user-producer", createdAt: "2026-06-19" }
+];
+
+export const hammerScriptCollections: HammerScriptCollection[] = [
+  { id: "collection-weekend-reads", name: "Weekend Reads", description: "Incoming scripts for producer review this week.", ownerId: "user-producer", status: "ACTIVE", visibility: "PROJECT_TEAM", createdAt: "2026-07-12", updatedAt: "2026-07-12" },
+  { id: "collection-greenlight-candidates", name: "Greenlight Candidates", description: "Materials that may need executive attention soon.", ownerId: "user-exec", status: "ACTIVE", visibility: "EXECUTIVE_ONLY", createdAt: "2026-07-10", updatedAt: "2026-07-10" }
+];
+
+export const hammerScriptCollectionItems: HammerScriptCollectionItem[] = [
+  { id: "collection-item-weekend-echo", collectionId: "collection-weekend-reads", documentId: "doc-inbox-echo", sortOrder: 1, notes: "Spec sample for first-pass read.", addedAt: "2026-07-12" },
+  { id: "collection-item-weekend-kite", collectionId: "collection-weekend-reads", documentId: "doc-inbox-kite", sortOrder: 2, notes: "Treatment may pair with family slate.", addedAt: "2026-07-12" },
+  { id: "collection-item-greenlight-hammer", collectionId: "collection-greenlight-candidates", documentId: "doc-hammer-script", sortOrder: 1, notes: "Needs final notes pass before exec read.", addedAt: "2026-07-10" }
 ];
 
 export const hammerApprovals: HammerApproval[] = [

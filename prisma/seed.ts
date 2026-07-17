@@ -172,9 +172,9 @@ async function main() {
     });
   }
 
-  const slateRows = readProjectLeadCsv();
-  for (const lead of slateRows) {
-    await prisma.projectLead.upsert({
+  const prospectRows = readProjectLeadCsv();
+  for (const lead of prospectRows) {
+    await prisma.prospect.upsert({
       where: { id: lead.id },
       update: lead,
       create: lead
