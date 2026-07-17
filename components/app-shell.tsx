@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { BarChart3, ClipboardList, ContactRound, FileClock, FolderKanban, LayoutDashboard, LogOut, Moon, Settings2, Sun, UserRound } from "lucide-react";
+import { BarChart3, ClipboardList, ContactRound, FolderKanban, Layers3, LayoutDashboard, LibraryBig, LogOut, Moon, Settings2, Sun, UserRound } from "lucide-react";
 import {
   assignedProjectsForUser,
   HAMMER_DOCUMENT_PROJECT_OVERRIDES_STORAGE_KEY,
@@ -30,8 +30,9 @@ import { cn } from "@/lib/utils";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/projects", label: "Projects", icon: FolderKanban },
-  { href: "/scripts", label: "Scripts", icon: FileClock },
+  { href: "/projects", label: "Development Slate", icon: FolderKanban },
+  { href: "/prospects", label: "Prospects", icon: LibraryBig },
+  { href: "/collections", label: "Collections", icon: Layers3 },
   { href: "/tasks", label: "Tasks", icon: ClipboardList }
 ];
 
@@ -45,7 +46,7 @@ type LocalUserState = Record<string, { inactive?: boolean; deleted?: boolean }>;
 
 const emptyShellProject: HammerProject = {
   id: "no-project",
-  title: "No Projects Yet",
+  title: "No Development Slate Items Yet",
   logline: "",
   type: "Feature",
   genre: "",
@@ -294,9 +295,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   >
                     <Icon className={cn("h-4 w-4 shrink-0", active && "text-amberline")} />
                     <span className="hidden md:inline">{item.label}</span>
-                    {item.href === "/scripts" && incomingScriptCount ? (
-                      <span className="ml-auto hidden rounded-full bg-sky-400 px-1.5 py-0.5 text-[10px] font-bold text-white md:inline-flex">{incomingScriptCount}</span>
-                    ) : null}
                     {active ? <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-amberline" /> : null}
                   </Link>
                 </div>

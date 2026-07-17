@@ -30,7 +30,7 @@ export function ProjectManager() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProjectId, setActiveProjectId] = useState("hammer");
   const [draft, setDraft] = useState<ProjectDraft>(emptyDraft);
-  const [message, setMessage] = useState("Projects sync to the database when DATABASE_URL is configured.");
+  const [message, setMessage] = useState("Development Slate syncs to the database when DATABASE_URL is configured.");
 
   useEffect(() => {
     function sync() {
@@ -108,9 +108,9 @@ export function ProjectManager() {
     <div>
       <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
-          <p className="font-display text-xs uppercase tracking-[0.24em] text-amberline">Project Slate</p>
-          <h1 className="mt-2 text-3xl font-semibold text-studio-100 md:text-4xl">Create and Manage Projects</h1>
-          <p className="mt-3 max-w-3xl text-studio-300">Add films to the local slate, switch the active project, and remove custom projects when they leave the board.</p>
+          <p className="font-display text-xs uppercase tracking-[0.24em] text-amberline">Development Slate</p>
+          <h1 className="mt-2 text-3xl font-semibold text-studio-100 md:text-4xl">Create and Manage Slate Items</h1>
+          <p className="mt-3 max-w-3xl text-studio-300">Add films to the development slate, switch the active slate item, and remove custom items when they leave the board.</p>
         </div>
         {activeProject ? (
           <div className="rounded-lg border border-white/10 bg-studio-850 px-4 py-3 font-display text-sm text-studio-300">
@@ -160,14 +160,14 @@ export function ProjectManager() {
             </Field>
             <button type="submit" className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-amberline px-4 py-3 font-semibold text-studio-950 transition hover:bg-[#f1c974]">
               <Plus className="h-4 w-4" />
-              Create Project
+              Create Slate Item
             </button>
             <p className="text-sm text-studio-300">{message}</p>
           </form>
         </Panel>
 
         <Panel>
-          <SectionHeader eyebrow="Slate" title="Projects" />
+          <SectionHeader eyebrow="Slate" title="Development Slate" />
           <div className="grid gap-3">
             {projects.map((project) => {
               const active = project.id === activeProjectId;

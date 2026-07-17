@@ -167,6 +167,7 @@ enum TaskPriority {
 }
 
 enum TaskTargetType {
+  GENERAL
   PROJECT
   PROJECT_LEAD
   DOCUMENT
@@ -197,6 +198,17 @@ enum ContactStatus {
   WAITING
   DO_NOT_CONTACT
   ARCHIVED
+}
+
+enum ContactRelationshipType {
+  AGENT
+  MANAGER
+  REPRESENTS
+  WORKS_WITH
+  ASSISTANT
+  LEGAL_REP
+  REFERRED_BY
+  OTHER
 }
 
 enum SupportingDocumentType {
@@ -318,14 +330,14 @@ model Project {
   changeRequests          ChangeRequest[]
   auditLogs               AuditLog[]
   memberships             ProjectMembership[]
-  promotedLeads           ProjectLead[]
+  promotedProspects       Prospect[]
 
   @@index([status])
   @@index([hammerStage])
   @@index([ownerId])
 }
 
-model ProjectLead {
+model Prospect {
   id                      String    @id @default(cuid())
   title                   String
   externalId              String?   @unique
@@ -405,6 +417,7 @@ model User {
   documentDiffsCreated DocumentDiff[] @relation("DocumentDiffCreator")
   assetsUploaded Asset[]           @relation("AssetUploader")
   commentsCreated Comment[]        @relation("CommentCreator")
+  scriptCollections ScriptCollection[]
   approvalsRequested HammerApproval[] @relation("ApprovalRequester")
   approvalsReviewing HammerApproval[] @relation("ApprovalReviewer")
   tasksAssigned Task[]             @relation("TaskAssignee")
@@ -450,10 +463,43 @@ model Document {
   versions         DocumentVersion[] @relation("DocumentVersions")
   diffs            DocumentDiff[]
   supportingDocuments SupportingDocument[]
+  collectionItems ScriptCollectionItem[]
 
   @@index([projectId])
   @@index([type])
   @@index([deletedAt])
+}
+
+model ScriptCollection {
+  id          String                 @id @default(cuid())
+  name        String
+  description String?                @db.Text
+  ownerId     String?
+  status      String                 @default("ACTIVE")
+  visibility  CommentVisibility      @default(PROJECT_TEAM)
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+
+  owner       User?                  @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  items       ScriptCollectionItem[]
+
+  @@index([ownerId])
+  @@index([status])
+}
+
+model ScriptCollectionItem {
+  id           String           @id @default(cuid())
+  collectionId String
+  documentId   String
+  sortOrder    Int              @default(0)
+  notes        String?          @db.Text
+  addedAt      DateTime         @default(now())
+
+  collection   ScriptCollection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  document     Document         @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([collectionId, documentId])
+  @@index([documentId])
 }
 
 model DocumentVersion {
@@ -837,12 +883,29 @@ model Contact {
   deletedAt      DateTime?
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
+  relationshipsFrom ContactRelationship[] @relation("ContactRelationshipFrom")
+  relationshipsTo   ContactRelationship[] @relation("ContactRelationshipTo")
 
   @@index([type])
   @@index([status])
   @@index([ownerId])
   @@index([nextFollowUp])
   @@index([deletedAt])
+}
+
+model ContactRelationship {
+  id               String                  @id @default(cuid())
+  fromContactId    String
+  toContactId      String
+  relationshipType ContactRelationshipType @default(OTHER)
+  notes            String?                 @db.Text
+  createdAt        DateTime                @default(now())
+
+  fromContact      Contact                 @relation("ContactRelationshipFrom", fields: [fromContactId], references: [id], onDelete: Cascade)
+  toContact        Contact                 @relation("ContactRelationshipTo", fields: [toContactId], references: [id], onDelete: Cascade)
+
+  @@unique([fromContactId, toContactId, relationshipType])
+  @@index([toContactId])
 }
 
 model AssetLink {
@@ -912,7 +975,7 @@ model HammerApproval {
 
 model Task {
   id           String          @id @default(cuid())
-  projectId    String
+  projectId    String?
   title        String
   description  String?         @db.Text
   assignedToId String?
@@ -926,7 +989,7 @@ model Task {
   createdAt    DateTime        @default(now())
   updatedAt    DateTime        @updatedAt
 
-  project      Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project      Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
   assignedTo   User?           @relation("TaskAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
   createdBy    User?           @relation("TaskCreator", fields: [createdById], references: [id], onDelete: SetNull)
 

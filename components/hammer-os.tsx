@@ -22,6 +22,9 @@ import {
   HAMMER_LOCAL_TASKS_EVENT,
   HAMMER_LOCAL_TASKS_STORAGE_KEY,
   HAMMER_LOCAL_TASK_UPDATES_STORAGE_KEY,
+  HAMMER_LOCAL_CONTACT_RELATIONSHIPS_STORAGE_KEY,
+  HAMMER_LOCAL_SCRIPT_COLLECTIONS_STORAGE_KEY,
+  HAMMER_LOCAL_SCRIPT_COLLECTION_ITEMS_STORAGE_KEY,
   HAMMER_LOCAL_USER_STATES_EVENT,
   HAMMER_LOCAL_USER_STATES_STORAGE_KEY,
   HAMMER_LOCAL_VERSION_STATUS_STORAGE_KEY,
@@ -30,12 +33,15 @@ import {
   hammerAssetLinks,
   hammerAssets,
   hammerComments,
+  hammerContactRelationships,
   hammerContacts,
   hammerDocuments,
   hammerEntities,
   hammerProjectStatuses,
   hammerProjects,
   hammerScenes,
+  hammerScriptCollectionItems,
+  hammerScriptCollections,
   hammerScriptStatuses,
   hammerTasks,
   hammerUsers,
@@ -55,13 +61,18 @@ import {
   type HammerAsset,
   type HammerDocument,
   type HammerDocumentVersion,
+  type HammerComment,
+  type HammerScriptCollection,
+  type HammerScriptCollectionItem,
   type AssetType,
   type AssetStatus,
   type DocumentType,
   type ScriptStatus,
   type ContactType,
   type ContactStatus,
-  type HammerContact
+  type HammerContact,
+  type HammerContactRelationship,
+  type ContactRelationshipType
 } from "@/lib/hammer-data";
 import { buildTextDiff } from "@/lib/hammer-diff";
 import { extractPdfText } from "@/lib/pdf-parser";
@@ -71,14 +82,16 @@ import { cn } from "@/lib/utils";
 const HAMMER_DISMISSED_BREAKDOWN_ENTITIES_STORAGE_KEY = "hammer:dismissed-breakdown-entities";
 const HAMMER_SUPPORTING_DOCUMENTS_STORAGE_KEY = "hammer:supporting-documents";
 const HAMMER_REFERENCE_IMAGES_STORAGE_KEY = "hammer:reference-images";
+const HAMMER_LOCAL_VERSION_NOTES_STORAGE_KEY = "hammer:version-notes";
+const HAMMER_LOCAL_COMMENTS_STORAGE_KEY = "hammer:comments";
 
-type HammerView = "dashboard" | "projects" | "project-new" | "project-detail" | "project-documents" | "project-assets" | "scripts" | "script-detail" | "script-versions" | "script-diff" | "script-breakdown" | "assets" | "asset-detail" | "tasks" | "contacts" | "reviews" | "executive" | "admin-users" | "account";
+type HammerView = "dashboard" | "projects" | "prospects" | "collections" | "project-new" | "project-detail" | "project-documents" | "project-assets" | "scripts" | "script-detail" | "script-versions" | "script-diff" | "script-breakdown" | "assets" | "asset-detail" | "tasks" | "contacts" | "reviews" | "executive" | "admin-users" | "account";
 type ScriptLibrarySection = "inbox" | "projects" | "all";
 type AppRole = "admin" | "executive" | "producer" | "department_lead";
 
 const emptyProject: HammerProject = {
   id: "no-project",
-  title: "No Projects Yet",
+  title: "No Development Slate Items Yet",
   logline: "",
   type: "Feature",
   genre: "",
@@ -108,6 +121,10 @@ interface HammerWorkspacePayload {
   projects?: HammerProject[];
   documents?: HammerDocument[];
   versions?: HammerDocumentVersion[];
+  comments?: HammerComment[];
+  contactRelationships?: HammerContactRelationship[];
+  scriptCollections?: HammerScriptCollection[];
+  scriptCollectionItems?: HammerScriptCollectionItem[];
   supportingDocuments?: SupportingDocument[];
   assets?: HammerAsset[];
   tasks?: HammerTask[];
@@ -173,7 +190,11 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   const [workspaceUsers, setWorkspaceUsers] = useState<HammerUser[]>([]);
   const [workspaceAssets, setWorkspaceAssets] = useState<HammerAsset[]>([]);
   const [workspaceContacts, setWorkspaceContacts] = useState<HammerContact[]>([]);
+  const [workspaceContactRelationships, setWorkspaceContactRelationships] = useState<HammerContactRelationship[]>([]);
   const [workspaceApprovals, setWorkspaceApprovals] = useState<HammerApproval[]>([]);
+  const [workspaceComments, setWorkspaceComments] = useState<HammerComment[]>([]);
+  const [workspaceScriptCollections, setWorkspaceScriptCollections] = useState<HammerScriptCollection[]>([]);
+  const [workspaceScriptCollectionItems, setWorkspaceScriptCollectionItems] = useState<HammerScriptCollectionItem[]>([]);
   const [projectLeads, setProjectLeads] = useState<HammerProjectLead[]>([]);
   const [query, setQuery] = useState("");
   const [sessionUser, setSessionUser] = useState<SessionUser | null>(null);
@@ -182,9 +203,14 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   const [localDocuments, setLocalDocuments] = useState<HammerDocument[]>([]);
   const [localVersions, setLocalVersions] = useState<HammerDocumentVersion[]>([]);
   const [versionStatuses, setVersionStatuses] = useState<Record<string, ScriptStatus>>({});
+  const [versionNotes, setVersionNotes] = useState<Record<string, string>>({});
   const [documentProjectOverrides, setDocumentProjectOverrides] = useState<Record<string, string | null>>({});
   const [supportingDocuments, setSupportingDocuments] = useState<SupportingDocument[]>([]);
   const [localReferenceImages, setLocalReferenceImages] = useState<ProjectReferenceImage[]>([]);
+  const [localComments, setLocalComments] = useState<HammerComment[]>([]);
+  const [localContactRelationships, setLocalContactRelationships] = useState<HammerContactRelationship[]>([]);
+  const [localScriptCollections, setLocalScriptCollections] = useState<HammerScriptCollection[]>([]);
+  const [localScriptCollectionItems, setLocalScriptCollectionItems] = useState<HammerScriptCollectionItem[]>([]);
   const [localTasks, setLocalTasks] = useState<HammerTask[]>([]);
   const [taskUpdates, setTaskUpdates] = useState<Record<string, Partial<Pick<HammerTask, "priority" | "status">>>>({});
   const documents = useMemo(() => (workspaceMode === "database" ? localDocuments : [...hammerDocuments, ...localDocuments]).filter(isValidDocument).map((document) => (
@@ -192,12 +218,16 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       ? { ...document, projectId: documentProjectOverrides[document.id] ?? undefined }
       : document
   )), [documentProjectOverrides, localDocuments, workspaceMode]);
-  const versions = useMemo(() => (workspaceMode === "database" ? localVersions : [...hammerVersions, ...localVersions]).filter(isValidVersion).map((version) => versionStatuses[version.id] ? { ...version, status: versionStatuses[version.id] } : version), [localVersions, versionStatuses, workspaceMode]);
+  const versions = useMemo(() => (workspaceMode === "database" ? localVersions : [...hammerVersions, ...localVersions]).filter(isValidVersion).map((version) => ({ ...version, ...(versionStatuses[version.id] ? { status: versionStatuses[version.id] } : {}), ...(Object.prototype.hasOwnProperty.call(versionNotes, version.id) ? { notes: versionNotes[version.id] } : {}) })), [localVersions, versionNotes, versionStatuses, workspaceMode]);
   const tasks = useMemo(() => (workspaceMode === "database" ? localTasks : [...localTasks, ...hammerTasks]).filter(isValidTask).map((task) => ({ ...task, ...taskUpdates[task.id] })), [localTasks, taskUpdates, workspaceMode]);
   const users = (workspaceMode === "database" && workspaceUsers.length ? workspaceUsers : hammerUsers).filter(isValidUser);
   const assets = (workspaceMode === "database" ? workspaceAssets : hammerAssets).filter(isValidAsset);
   const contacts = workspaceMode === "database" ? workspaceContacts : hammerContacts;
+  const contactRelationships = workspaceMode === "database" ? workspaceContactRelationships : [...hammerContactRelationships, ...localContactRelationships];
   const approvals = workspaceMode === "database" ? workspaceApprovals : hammerApprovals;
+  const comments = workspaceMode === "database" ? workspaceComments : [...hammerComments, ...localComments];
+  const scriptCollections = workspaceMode === "database" ? workspaceScriptCollections : [...hammerScriptCollections, ...localScriptCollections];
+  const scriptCollectionItems = workspaceMode === "database" ? workspaceScriptCollectionItems : [...hammerScriptCollectionItems, ...localScriptCollectionItems];
   const project = projects.find((item) => item.id === id) ?? projects[0] ?? emptyProject;
   const document = documents.find((item) => item.id === id) ?? documents[0] ?? emptyDocument;
   const asset = assets.find((item) => item.id === id) ?? assets[0] ?? hammerAssets[0];
@@ -220,9 +250,13 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     setLocalReferenceImages([]);
     setLocalTasks(data.tasks ?? []);
     setWorkspaceContacts(data.contacts ?? []);
+    setWorkspaceContactRelationships(data.contactRelationships ?? []);
     setProjectLeads(data.projectLeads ?? []);
     setWorkspaceUsers(data.users ?? []);
     setWorkspaceApprovals(data.approvals ?? []);
+    setWorkspaceComments(data.comments ?? []);
+    setWorkspaceScriptCollections(data.scriptCollections ?? []);
+    setWorkspaceScriptCollectionItems(data.scriptCollectionItems ?? []);
     setVersionStatuses({});
     setDocumentProjectOverrides({});
     setTaskUpdates({});
@@ -301,25 +335,40 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       const storedDocuments = window.localStorage.getItem(HAMMER_LOCAL_DOCUMENTS_STORAGE_KEY);
       const storedVersions = window.localStorage.getItem(HAMMER_LOCAL_VERSIONS_STORAGE_KEY);
       const storedStatuses = window.localStorage.getItem(HAMMER_LOCAL_VERSION_STATUS_STORAGE_KEY);
+      const storedVersionNotes = window.localStorage.getItem(HAMMER_LOCAL_VERSION_NOTES_STORAGE_KEY);
       const storedProjectOverrides = window.localStorage.getItem(HAMMER_DOCUMENT_PROJECT_OVERRIDES_STORAGE_KEY);
       const storedSupportingDocuments = window.localStorage.getItem(HAMMER_SUPPORTING_DOCUMENTS_STORAGE_KEY);
       const storedReferenceImages = window.localStorage.getItem(HAMMER_REFERENCE_IMAGES_STORAGE_KEY);
+      const storedComments = window.localStorage.getItem(HAMMER_LOCAL_COMMENTS_STORAGE_KEY);
+      const storedContactRelationships = window.localStorage.getItem(HAMMER_LOCAL_CONTACT_RELATIONSHIPS_STORAGE_KEY);
+      const storedScriptCollections = window.localStorage.getItem(HAMMER_LOCAL_SCRIPT_COLLECTIONS_STORAGE_KEY);
+      const storedScriptCollectionItems = window.localStorage.getItem(HAMMER_LOCAL_SCRIPT_COLLECTION_ITEMS_STORAGE_KEY);
       const storedTasks = window.localStorage.getItem(HAMMER_LOCAL_TASKS_STORAGE_KEY);
       const storedTaskUpdates = window.localStorage.getItem(HAMMER_LOCAL_TASK_UPDATES_STORAGE_KEY);
       if (storedDocuments) setLocalDocuments(JSON.parse(storedDocuments) as HammerDocument[]);
       if (storedVersions) setLocalVersions(JSON.parse(storedVersions) as HammerDocumentVersion[]);
       if (storedStatuses) setVersionStatuses(JSON.parse(storedStatuses) as Record<string, ScriptStatus>);
+      if (storedVersionNotes) setVersionNotes(JSON.parse(storedVersionNotes) as Record<string, string>);
       if (storedProjectOverrides) setDocumentProjectOverrides(JSON.parse(storedProjectOverrides) as Record<string, string | null>);
       if (storedSupportingDocuments) setSupportingDocuments(JSON.parse(storedSupportingDocuments) as SupportingDocument[]);
       if (storedReferenceImages) setLocalReferenceImages(JSON.parse(storedReferenceImages) as ProjectReferenceImage[]);
+      if (storedComments) setLocalComments(JSON.parse(storedComments) as HammerComment[]);
+      if (storedContactRelationships) setLocalContactRelationships(JSON.parse(storedContactRelationships) as HammerContactRelationship[]);
+      if (storedScriptCollections) setLocalScriptCollections(JSON.parse(storedScriptCollections) as HammerScriptCollection[]);
+      if (storedScriptCollectionItems) setLocalScriptCollectionItems(JSON.parse(storedScriptCollectionItems) as HammerScriptCollectionItem[]);
       if (storedTasks) setLocalTasks(JSON.parse(storedTasks) as HammerTask[]);
       if (storedTaskUpdates) setTaskUpdates(JSON.parse(storedTaskUpdates) as Record<string, Partial<Pick<HammerTask, "priority" | "status">>>);
     } catch {
       setLocalDocuments([]);
       setLocalVersions([]);
+      setVersionNotes({});
       setDocumentProjectOverrides({});
       setSupportingDocuments([]);
       setLocalReferenceImages([]);
+      setLocalComments([]);
+      setLocalContactRelationships([]);
+      setLocalScriptCollections([]);
+      setLocalScriptCollectionItems([]);
       setLocalTasks([]);
       setTaskUpdates({});
     }
@@ -444,7 +493,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     const nextLocalProjects = [promotedProject, ...localProjects];
     setLocalProjects(nextLocalProjects);
     setProjects([promotedProject, ...projects]);
-    setProjectLeads((current) => current.map((item) => item.id === leadId ? { ...item, promotedProjectId: promotedProject.id, nextActionStatus: "Promoted to Active Project" } : item));
+      setProjectLeads((current) => current.map((item) => item.id === leadId ? { ...item, promotedProjectId: promotedProject.id, nextActionStatus: "Promoted to Development Slate" } : item));
     window.localStorage.setItem(HAMMER_LOCAL_PROJECTS_STORAGE_KEY, JSON.stringify(nextLocalProjects));
     window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_PROJECTS_EVENT));
   }
@@ -527,6 +576,96 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     setVersionStatuses((current) => {
       const next = { ...current, [versionId]: status };
       window.localStorage.setItem(HAMMER_LOCAL_VERSION_STATUS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  async function updateDocumentVersionNotes(versionId: string, notes: string) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("updateDocumentVersionNotes", { versionId, notes });
+      return;
+    }
+    setVersionNotes((current) => {
+      const next = { ...current, [versionId]: notes };
+      window.localStorage.setItem(HAMMER_LOCAL_VERSION_NOTES_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  async function createComment(input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string }) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("createComment", input);
+      return;
+    }
+    const nextComment: HammerComment = {
+      id: `comment-local-${Date.now()}`,
+      targetType: input.targetType,
+      targetId: input.targetId,
+      body: input.body,
+      visibility: input.visibility ?? "PROJECT_TEAM",
+      status: "OPEN",
+      createdById: currentUser.id,
+      createdAt: new Date().toISOString().slice(0, 10)
+    };
+    setLocalComments((current) => {
+      const next = [nextComment, ...current];
+      window.localStorage.setItem(HAMMER_LOCAL_COMMENTS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  async function createScriptCollection(input: { name: string; description?: string; visibility?: HammerScriptCollection["visibility"] }) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("createScriptCollection", input);
+      return;
+    }
+    const now = new Date().toISOString().slice(0, 10);
+    const nextCollection: HammerScriptCollection = {
+      id: `collection-local-${Date.now()}`,
+      name: input.name.trim() || "Untitled Collection",
+      description: input.description?.trim() || undefined,
+      ownerId: currentUser.id,
+      status: "ACTIVE",
+      visibility: input.visibility ?? "PROJECT_TEAM",
+      createdAt: now,
+      updatedAt: now
+    };
+    setLocalScriptCollections((current) => {
+      const next = [nextCollection, ...current];
+      window.localStorage.setItem(HAMMER_LOCAL_SCRIPT_COLLECTIONS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  async function addDocumentToCollection(collectionId: string, documentId: string, notes?: string) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("addDocumentToCollection", { collectionId, documentId, notes });
+      return;
+    }
+    if (scriptCollectionItems.some((item) => item.collectionId === collectionId && item.documentId === documentId)) return;
+    const nextItem: HammerScriptCollectionItem = {
+      id: `collection-item-local-${Date.now()}`,
+      collectionId,
+      documentId,
+      sortOrder: scriptCollectionItems.filter((item) => item.collectionId === collectionId).length + 1,
+      notes: notes?.trim() || undefined,
+      addedAt: new Date().toISOString().slice(0, 10)
+    };
+    setLocalScriptCollectionItems((current) => {
+      const next = [nextItem, ...current];
+      window.localStorage.setItem(HAMMER_LOCAL_SCRIPT_COLLECTION_ITEMS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  async function removeDocumentFromCollection(collectionItemId: string) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("removeDocumentFromCollection", { collectionItemId });
+      return;
+    }
+    setLocalScriptCollectionItems((current) => {
+      const next = current.filter((item) => item.id !== collectionItemId);
+      window.localStorage.setItem(HAMMER_LOCAL_SCRIPT_COLLECTION_ITEMS_STORAGE_KEY, JSON.stringify(next));
       return next;
     });
   }
@@ -627,7 +766,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   }
 
   async function createTask(input: {
-    projectId: string;
+    projectId?: string;
     title: string;
     description: string;
     assignedToId: string;
@@ -652,7 +791,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       priority: input.priority,
       status: input.status ?? "TODO",
       targetType: input.targetType,
-      targetId: input.targetId
+      targetId: input.targetId || input.projectId || ""
     };
     const nextTasks = [nextTask, ...localTasks];
     setLocalTasks(nextTasks);
@@ -711,6 +850,40 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     }
     const nextContacts = workspaceContacts.filter((contact) => contact.id !== contactId);
     setWorkspaceContacts(nextContacts);
+  }
+
+  async function createContactRelationship(input: { fromContactId: string; toContactId: string; relationshipType: ContactRelationshipType; notes?: string }) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("createContactRelationship", input);
+      return;
+    }
+    if (input.fromContactId === input.toContactId) return;
+    const nextRelationship: HammerContactRelationship = {
+      id: `contact-rel-local-${Date.now()}`,
+      fromContactId: input.fromContactId,
+      toContactId: input.toContactId,
+      relationshipType: input.relationshipType,
+      notes: input.notes?.trim() || undefined,
+      createdAt: new Date().toISOString().slice(0, 10)
+    };
+    setLocalContactRelationships((current) => {
+      const filtered = current.filter((relationship) => !(relationship.fromContactId === input.fromContactId && relationship.toContactId === input.toContactId && relationship.relationshipType === input.relationshipType));
+      const next = [nextRelationship, ...filtered];
+      window.localStorage.setItem(HAMMER_LOCAL_CONTACT_RELATIONSHIPS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  async function deleteContactRelationship(relationshipId: string) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("deleteContactRelationship", { relationshipId });
+      return;
+    }
+    setLocalContactRelationships((current) => {
+      const next = current.filter((relationship) => relationship.id !== relationshipId);
+      window.localStorage.setItem(HAMMER_LOCAL_CONTACT_RELATIONSHIPS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
   }
 
   async function updateAccount(input: { name: string; email: string; currentPassword: string; newPassword: string }) {
@@ -820,10 +993,12 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       return <Panel><EmptyState label="Checking script access..." /></Panel>;
     }
     if (scriptAccessDenied) {
-      return <AccessDenied title="Script access required" detail="You can only open scripts attached to your active project. Producers, executives, and admins can access the full script library." />;
+      return <AccessDenied title="Script access required" detail="You can only open scripts attached to Development Slate items you can access. Producers, executives, and admins can review broader prospect materials from the slate." />;
     }
     if (view === "dashboard") return <Dashboard currentUser={currentUser} projects={projects} documents={documents} versions={versions} approvals={approvals} />;
-    if (view === "projects") return <Projects projects={filteredProjects} projectLeads={projectLeads} users={users} tasks={tasks} currentUser={currentUser} canCreateProject={canManageScriptLibrary(currentUser.role)} onCreateProject={addProject} onUpdateLead={updateProjectLead} onCreateLead={createProjectLead} onImportLeads={importProjectLeads} onPromoteLead={promoteProjectLead} onCreateTask={createTask} />;
+    if (view === "projects") return <Projects mode="development" projects={filteredProjects} projectLeads={projectLeads} users={users} tasks={tasks} currentUser={currentUser} canCreateProject={canManageScriptLibrary(currentUser.role)} onCreateProject={addProject} onUpdateLead={updateProjectLead} onCreateLead={createProjectLead} onImportLeads={importProjectLeads} onPromoteLead={promoteProjectLead} onCreateTask={createTask} />;
+    if (view === "prospects") return <Projects mode="prospects" projects={filteredProjects} projectLeads={projectLeads} users={users} tasks={tasks} currentUser={currentUser} canCreateProject={canManageScriptLibrary(currentUser.role)} onCreateProject={addProject} onUpdateLead={updateProjectLead} onCreateLead={createProjectLead} onImportLeads={importProjectLeads} onPromoteLead={promoteProjectLead} onCreateTask={createTask} />;
+    if (view === "collections") return <ScriptCollections collections={scriptCollections} items={scriptCollectionItems} documents={documents} versions={versions} projects={projects} canManage={canManageScriptLibrary(currentUser.role)} onCreateCollection={createScriptCollection} onAddDocument={addDocumentToCollection} onRemoveDocument={removeDocumentFromCollection} />;
     if (view === "project-new") {
       if (!canManageScriptLibrary(currentUser.role)) return <AccessDenied title="Project creation access required" detail="Only admins, producers, and executives can create new projects." />;
       return <ProjectEditor users={users} currentUser={currentUser} onCreate={addProject} />;
@@ -832,9 +1007,9 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     if (view === "project-detail") return <ProjectWorkspace project={project} activeTab="overview" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
     if (view === "project-documents") return <ProjectWorkspace project={project} activeTab="documents" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
     if (view === "project-assets") return <ProjectWorkspace project={project} activeTab="assets" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
-    if (view === "scripts") return <Scripts activeProjectId={projects.length ? activeProject.id : undefined} currentUser={currentUser} projects={projects} documents={documents} versions={versions} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} repositoryMode selectedSection={normalizeScriptSection(scriptSection)} />;
+    if (view === "scripts") return <LegacyRedirect title="Scripts now live inside the slate" detail="Script tracking is most useful in context. Open a Development Slate item for active project scripts and supporting documents, or use Prospects for materials the team may want to pursue." href="/projects" label="Open Development Slate" />;
     if (["script-detail", "script-versions", "script-diff", "script-breakdown"].includes(view) && !documents.some((item) => item.id === document.id)) return <EmptyScriptState />;
-    if (view === "script-detail") return <ScriptDetail documentId={document.id} documents={documents} versions={versions} supportingDocuments={supportingDocuments} onUpload={uploadDocumentVersion} onSupportingUpload={uploadSupportingDocument} onSupportingDelete={deleteSupportingDocument} onStatusChange={updateDocumentStatus} onUpdateMetadata={canManageScriptLibrary(currentUser.role) ? updateDocumentMetadata : undefined} onDelete={deleteUploadedDocument} />;
+    if (view === "script-detail") return <ScriptDetail documentId={document.id} documents={documents} versions={versions} comments={comments} currentUser={currentUser} supportingDocuments={supportingDocuments} onUpload={uploadDocumentVersion} onSupportingUpload={uploadSupportingDocument} onSupportingDelete={deleteSupportingDocument} onStatusChange={updateDocumentStatus} onUpdateVersionNotes={canManageScriptLibrary(currentUser.role) ? updateDocumentVersionNotes : undefined} onCreateComment={createComment} onUpdateMetadata={canManageScriptLibrary(currentUser.role) ? updateDocumentMetadata : undefined} onDelete={deleteUploadedDocument} />;
     if (view === "script-versions") return <ScriptVersions documentId={document.id} versions={versions} document={document} onUpload={uploadDocumentVersion} />;
     if (view === "script-diff") return <ScriptDiff documentId={document.id} versions={versions} />;
     if (view === "script-breakdown") return <ScriptBreakdown documentId={document.id} documents={documents} versions={versions} />;
@@ -843,10 +1018,10 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     if (view === "tasks") return <Tasks selectedTaskId={selectedTaskId} currentUser={currentUser} users={users} tasks={tasks} projects={projects} onCreateTask={createTask} onUpdateTask={updateTask} onDeleteTask={deleteTask} />;
     if (view === "contacts") {
       if (!canViewContacts(currentUser.role)) return <AccessDenied title="Contacts access required" detail="Only admins, producers, and executives can view the studio contact directory." />;
-      return <Contacts initialContacts={contacts} currentUser={currentUser} users={users} projects={projects} documents={documents} tasks={tasks} databaseMode={workspaceMode === "database"} onDatabaseImport={(importedContacts) => runWorkspaceAction("importContacts", { contacts: importedContacts })} onCreateContact={createContact} onUpdateContact={updateContact} onDeleteContact={deleteContact} />;
+      return <Contacts initialContacts={contacts} contactRelationships={contactRelationships} currentUser={currentUser} users={users} projects={projects} documents={documents} tasks={tasks} databaseMode={workspaceMode === "database"} onDatabaseImport={(importedContacts) => runWorkspaceAction("importContacts", { contacts: importedContacts })} onCreateContact={createContact} onUpdateContact={updateContact} onDeleteContact={deleteContact} onCreateRelationship={createContactRelationship} onDeleteRelationship={deleteContactRelationship} />;
     }
     if (view === "account") return <AccountSettings user={sessionUser} onUpdateAccount={updateAccount} />;
-    if (view === "reviews") return <LegacyRedirect title="Reviews are folded into Scripts" detail="Review work now starts from scripts awaiting review, so the queue is easier to follow." href="/scripts?section=inbox" label="Open Scripts" />;
+    if (view === "reviews") return <LegacyRedirect title="Reviews are folded into the slate" detail="Review work now starts from the relevant Development Slate item or Prospect, so the queue is easier to follow in context." href="/projects" label="Open Development Slate" />;
     if (view === "executive") {
       if (currentUser.role !== "EXECUTIVE" && currentUser.role !== "ADMIN") return <AccessDenied title="Executive access required" detail="The executive dashboard is limited to users with the Executive role." />;
       return <Executive projects={projects} documents={documents} versions={versions} tasks={tasks} assets={assets} approvals={approvals} />;
@@ -921,7 +1096,7 @@ function Dashboard({
   return (
     <div className="space-y-4">
       <Panel>
-        <SectionHeader eyebrow="Review Focus" title={focusDocument ? focusDocument.title : "No script needs attention"} action={focusDocument ? <TableLink href={`/scripts/${focusDocument.id}`}>Open Review</TableLink> : <TableLink href="/scripts">Open Library</TableLink>} />
+        <SectionHeader eyebrow="Review Focus" title={focusDocument ? focusDocument.title : "No script needs attention"} action={focusDocument ? <TableLink href={`/scripts/${focusDocument.id}`}>Open Review</TableLink> : <TableLink href="/projects">Open Development Slate</TableLink>} />
         {focusDocument ? (
           <div className="grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
             <div>
@@ -938,7 +1113,7 @@ function Dashboard({
             </div>
             <div className="flex flex-wrap gap-2">
               <Badge value={focusVersion?.status ?? "RECEIVED"} />
-              <TableLink href="/scripts">Script Library</TableLink>
+              <TableLink href={focusDocument.projectId ? `/projects/${focusDocument.projectId}/documents` : "/prospects"}>{focusDocument.projectId ? "Open Slate Item" : "Open Prospects"}</TableLink>
             </div>
           </div>
         ) : (
@@ -965,7 +1140,7 @@ function Dashboard({
         </Panel>
 
         <Panel>
-          <SectionHeader eyebrow="Intake" title="Recently Received" action={<TableLink href="/scripts">Open Library</TableLink>} />
+          <SectionHeader eyebrow="Intake" title="Recently Received" action={<TableLink href="/prospects">Open Prospects</TableLink>} />
           <div className="space-y-2">
             {recentScripts.length ? recentScripts.map((document) => {
               const version = currentVersionFor(document.id, documents, versions);
@@ -989,6 +1164,7 @@ function Dashboard({
 }
 
 function Projects({
+  mode = "development",
   projects,
   projectLeads,
   currentUser,
@@ -1002,6 +1178,7 @@ function Projects({
   onPromoteLead,
   onCreateTask
 }: {
+  mode?: "development" | "prospects";
   projects: HammerProject[];
   projectLeads: HammerProjectLead[];
   currentUser: HammerUser;
@@ -1013,15 +1190,16 @@ function Projects({
   onCreateLead?: (lead: Partial<HammerProjectLead>) => Promise<void>;
   onImportLeads?: (leads: HammerProjectLead[]) => Promise<void>;
   onPromoteLead?: (leadId: string) => Promise<void>;
-  onCreateTask?: (input: { projectId: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
+  onCreateTask?: (input: { projectId?: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
 }) {
-  const [section, setSection] = useState<"active" | "slate">("active");
+  const section = mode === "prospects" ? "slate" : "active";
   const [slateSearch, setSlateSearch] = useState("");
   const [filters, setFilters] = useState({ lane: "ALL", genre: "ALL", urgency: "ALL", rights: "ALL", nextAction: "ALL", owner: "ALL", scriptStatus: "ALL", format: "ALL" });
   const [selectedLeadId, setSelectedLeadId] = useState("");
   const [leadDraft, setLeadDraft] = useState<Partial<HammerProjectLead>>({});
   const [createProjectOpen, setCreateProjectOpen] = useState(false);
   const [addSlateOpen, setAddSlateOpen] = useState(false);
+  const [slatePage, setSlatePage] = useState(1);
   const [slateImportMessage, setSlateImportMessage] = useState("");
   const selectedLead = selectedLeadId ? projectLeads.find((lead) => lead.id === selectedLeadId) : undefined;
   const filteredLeads = projectLeads.filter((lead) => {
@@ -1042,15 +1220,24 @@ function Projects({
     picks: projectLeads.filter((lead) => lead.myPicks).length,
     promoted: projectLeads.filter((lead) => lead.promotedProjectId).length
   };
+  const slatePageSize = 100;
+  const slateTotalPages = Math.max(1, Math.ceil(filteredLeads.length / slatePageSize));
+  const normalizedSlatePage = Math.min(slatePage, slateTotalPages);
+  const pagedLeads = filteredLeads.slice((normalizedSlatePage - 1) * slatePageSize, normalizedSlatePage * slatePageSize);
 
   useEffect(() => {
     if (!selectedLead) return;
     setLeadDraft(selectedLead);
   }, [selectedLead]);
 
+  useEffect(() => {
+    setSlatePage(1);
+  }, [filters.format, filters.genre, filters.lane, filters.nextAction, filters.owner, filters.rights, filters.scriptStatus, filters.urgency, slateSearch]);
+
   async function saveLead() {
     if (!selectedLead || !onUpdateLead) return;
-    await onUpdateLead(selectedLead.id, leadDraft);
+    const normalizedPatch = normalizeLeadPatch(leadDraft);
+    await onUpdateLead(selectedLead.id, canManageScriptLibrary(currentUser.role) ? normalizedPatch : projectLeadCoreEditablePatch(normalizedPatch));
   }
 
   async function importSlateCsv(file?: File | null) {
@@ -1059,7 +1246,7 @@ function Projects({
       const text = await file.text();
       const parsed = parseProjectLeadCsv(text);
       await onImportLeads(parsed);
-      setSlateImportMessage(`Processed ${parsed.length} slate row${parsed.length === 1 ? "" : "s"}. Existing IDs were ignored.`);
+      setSlateImportMessage(`Processed ${parsed.length} prospect row${parsed.length === 1 ? "" : "s"}. Existing IDs were ignored.`);
     } catch (error) {
       setSlateImportMessage(error instanceof Error ? error.message : "Could not import slate CSV.");
     }
@@ -1073,11 +1260,7 @@ function Projects({
     <div className="space-y-4">
       <Panel>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <SectionHeader eyebrow="Projects" title={section === "active" ? "Active Projects" : "Development Slate"} action={section === "active" ? (canCreateProject ? <PrimaryButton icon={Plus} label="Create Project" onClick={() => setCreateProjectOpen(true)} /> : undefined) : <div className="flex flex-wrap gap-1.5"><PrimaryButton icon={Plus} label="Add Slate" onClick={() => setAddSlateOpen(true)} /><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline"><UploadCloud className="h-3.5 w-3.5" />Import CSV<input className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => importSlateCsv(event.target.files?.[0])} /></label></div>} />
-          <div className="inline-flex w-fit rounded-md border border-white/10 bg-white/[0.03] p-1">
-            <button type="button" onClick={() => setSection("active")} className={cn("rounded px-3 py-1.5 text-xs font-semibold text-studio-300 transition", section === "active" && "bg-amberline text-studio-950")}>Active Projects</button>
-            <button type="button" onClick={() => setSection("slate")} className={cn("rounded px-3 py-1.5 text-xs font-semibold text-studio-300 transition", section === "slate" && "bg-amberline text-studio-950")}>Development Slate</button>
-          </div>
+          <SectionHeader eyebrow={section === "active" ? "Development Slate" : "Prospects"} title={section === "active" ? "Development Slate" : "Prospects"} action={section === "active" ? (canCreateProject ? <PrimaryButton icon={Plus} label="Create Slate Item" onClick={() => setCreateProjectOpen(true)} /> : undefined) : <div className="flex flex-wrap gap-1.5"><PrimaryButton icon={Plus} label="Add Prospect" onClick={() => setAddSlateOpen(true)} /><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline"><UploadCloud className="h-3.5 w-3.5" />Import CSV<input className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => importSlateCsv(event.target.files?.[0])} /></label></div>} />
         </div>
       </Panel>
 
@@ -1090,10 +1273,10 @@ function Projects({
           <div className="space-y-4">
             <Panel className="min-h-0">
               <div className="grid gap-2 md:grid-cols-4">
-                <MetricCard label="Slate Items" value={`${slateStats.total}`} sub="All tracked opportunities" />
+                <MetricCard label="Prospects" value={`${slateStats.total}`} sub="Materials we might be interested in" />
                 <MetricCard label="Urgent" value={`${slateStats.urgent}`} sub="Needs attention" />
                 <MetricCard label="My Picks" value={`${slateStats.picks}`} sub="Producer marked" />
-                <MetricCard label="Promoted" value={`${slateStats.promoted}`} sub="Now active projects" />
+                <MetricCard label="Promoted" value={`${slateStats.promoted}`} sub="Now in development" />
               </div>
             </Panel>
             <Panel>
@@ -1114,7 +1297,7 @@ function Projects({
                 <SlateFilter label="Format" value={filters.format} options={uniqueLeadOptions(projectLeads, "format")} onChange={(value) => setFilter("format", value)} />
               </div>
               <div className="mb-2 flex items-center justify-between text-xs text-studio-400">
-                <span>{filteredLeads.length} of {projectLeads.length} slate items</span>
+                <span>{filteredLeads.length} of {projectLeads.length} prospects</span>
                 <button type="button" className="font-semibold text-amberline" onClick={() => { setSlateSearch(""); setFilters({ lane: "ALL", genre: "ALL", urgency: "ALL", rights: "ALL", nextAction: "ALL", owner: "ALL", scriptStatus: "ALL", format: "ALL" }); }}>Clear filters</button>
               </div>
               {slateImportMessage ? <p className="mb-2 text-xs text-studio-300">{slateImportMessage}</p> : null}
@@ -1134,7 +1317,7 @@ function Projects({
                     <tr><th>Title</th><th>Lane</th><th>Genre</th><th>Urgency</th><th>Rights</th><th>Owner</th><th>Next Action</th><th>Score</th></tr>
                   </thead>
                   <tbody>
-                    {filteredLeads.slice(0, 300).map((lead) => (
+                    {pagedLeads.map((lead) => (
                       <tr key={lead.id} onClick={() => setSelectedLeadId(lead.id)} className={cn("cursor-pointer text-studio-200 hover:bg-white/[0.035]", selectedLeadId === lead.id && "bg-emerald-400/10")}>
                         <td><p className="truncate font-semibold text-studio-100">{lead.title}</p><p className="mt-0.5 truncate text-xs text-studio-400">{lead.creator || lead.sourceLink || "No source listed"}</p></td>
                         <td><span className="block truncate">{lead.lane || "-"}</span></td>
@@ -1149,7 +1332,32 @@ function Projects({
                   </tbody>
                 </table>
               </div>
-              {filteredLeads.length > 300 ? <p className="mt-2 text-xs text-studio-400">Showing first 300 matches. Narrow the filters or search to keep the list focused.</p> : null}
+              {filteredLeads.length > slatePageSize ? (
+                <div className="mt-3 flex flex-col gap-2 text-xs text-studio-400 md:flex-row md:items-center md:justify-between">
+                  <span>
+                    Showing {(normalizedSlatePage - 1) * slatePageSize + 1}-{Math.min(normalizedSlatePage * slatePageSize, filteredLeads.length)} of {filteredLeads.length}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={normalizedSlatePage <= 1}
+                      onClick={() => setSlatePage((page) => Math.max(1, page - 1))}
+                      className="rounded border border-white/10 px-2 py-1 font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Previous
+                    </button>
+                    <span className="min-w-24 text-center">Page {normalizedSlatePage} of {slateTotalPages}</span>
+                    <button
+                      type="button"
+                      disabled={normalizedSlatePage >= slateTotalPages}
+                      onClick={() => setSlatePage((page) => Math.min(slateTotalPages, page + 1))}
+                      className="rounded border border-white/10 px-2 py-1 font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              ) : null}
             </Panel>
           </div>
           {selectedLead ? (
@@ -1180,19 +1388,19 @@ function Projects({
               }}
             />
           ) : null}
-          {createProjectOpen && onCreateProject ? (
-            <ProjectCreateModal
-              users={users}
-              currentUser={currentUser}
-              onClose={() => setCreateProjectOpen(false)}
-              onCreate={async (draft) => {
-                await onCreateProject(draft);
-                setCreateProjectOpen(false);
-              }}
-            />
-          ) : null}
         </>
       )}
+      {createProjectOpen && onCreateProject ? (
+        <ProjectCreateModal
+          users={users}
+          currentUser={currentUser}
+          onClose={() => setCreateProjectOpen(false)}
+          onCreate={async (draft) => {
+            await onCreateProject(draft);
+            setCreateProjectOpen(false);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1238,7 +1446,7 @@ function SlateCreateModal({ onClose, onCreate }: { onClose: () => void; onCreate
         priorityScore: draft.priorityScore === undefined ? undefined : Number(draft.priorityScore)
       });
     } catch (error) {
-      setError(error instanceof Error ? error.message : "Could not add slate item.");
+      setError(error instanceof Error ? error.message : "Could not add prospect.");
     } finally {
       setBusy(false);
     }
@@ -1248,7 +1456,7 @@ function SlateCreateModal({ onClose, onCreate }: { onClose: () => void; onCreate
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm">
       <form onSubmit={submit} className="w-full max-w-4xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl">
         <div className="flex items-start justify-between gap-3">
-          <SectionHeader eyebrow="Development Slate" title="Add Slate Item" />
+          <SectionHeader eyebrow="Prospects" title="Add Prospect" />
           <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close add slate">
             <X className="h-4 w-4" />
           </button>
@@ -1281,7 +1489,7 @@ function SlateCreateModal({ onClose, onCreate }: { onClose: () => void; onCreate
         {error ? <p className="mt-3 rounded border border-rose-400/25 bg-rose-500/5 px-2.5 py-2 text-xs text-rose-200">{error}</p> : null}
         <div className="mt-4 flex justify-end gap-2">
           <button type="button" onClick={onClose} className="rounded border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:text-amberline">Cancel</button>
-          <button type="submit" disabled={busy} className="rounded bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">Add Slate</button>
+          <button type="submit" disabled={busy} className="rounded bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">Add Prospect</button>
         </div>
       </form>
     </div>
@@ -1308,10 +1516,10 @@ function SlateLeadPanel({
   onDraftChange: React.Dispatch<React.SetStateAction<Partial<HammerProjectLead>>>;
   onSave: () => Promise<void>;
   onPromote?: (leadId: string) => Promise<void>;
-  onCreateTask?: (input: { projectId: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
+  onCreateTask?: (input: { projectId?: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
   onClose?: () => void;
 }) {
-  if (!lead) return <Panel><EmptyState label="Select a slate item to review details." /></Panel>;
+  if (!lead) return <Panel><EmptyState label="Select a prospect to review details." /></Panel>;
   const promotedProject = lead.promotedProjectId ? projects.find((project) => project.id === lead.promotedProjectId) : undefined;
   const slateTasks = tasks.filter((task) => task.targetType === "PROJECT_LEAD" && task.targetId === lead.id);
   return (
@@ -1322,11 +1530,11 @@ function SlateLeadPanel({
             {lead.lane ? <Badge value={lead.lane} subtle /> : null}
             {lead.urgencyLabel ? <Badge value={lead.urgencyLabel} subtle /> : null}
           </div>
-          <h3 className="mt-2 text-xl font-semibold text-studio-100">{lead.title}</h3>
-          <p className="mt-1 text-[13px] text-studio-300">{lead.creator || "Creator not listed"}</p>
+          <h3 className="mt-2 text-xl font-semibold text-studio-100">{draft.title || lead.title}</h3>
+          <p className="mt-1 text-[13px] text-studio-300">{draft.creator || lead.creator || "Writer not listed"}</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {promotedProject ? <TableLink href={`/projects/${promotedProject.id}`}>Open Active</TableLink> : <button type="button" onClick={() => onPromote?.(lead.id)} className="rounded-md bg-amberline px-2.5 py-1.5 text-xs font-semibold text-studio-950">Promote</button>}
+          {promotedProject ? <TableLink href={`/projects/${promotedProject.id}`}>Open Development Slate</TableLink> : <button type="button" onClick={() => onPromote?.(lead.id)} className="rounded-md bg-amberline px-2.5 py-1.5 text-xs font-semibold text-studio-950">Promote</button>}
           {onClose ? (
             <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close slate details">
               <X className="h-4 w-4" />
@@ -1335,7 +1543,32 @@ function SlateLeadPanel({
         </div>
       </div>
       <p className="mt-3 text-[13px] leading-5 text-studio-300">{lead.logline || "No logline provided."}</p>
+      <div className="mt-3 rounded-md border border-white/10 bg-white/[0.025] p-3">
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Source Materials</p>
+            <p className="mt-1 text-[13px] leading-5 text-studio-300">Scripts, PDFs, source links, and status tracking for this prospect.</p>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {lead.scriptPdf ? <TableLink href={lead.scriptPdf}>Script PDF</TableLink> : null}
+            {lead.sourceLink ? <TableLink href={lead.sourceLink}>Source Link</TableLink> : null}
+          </div>
+        </div>
+        <div className="mt-3 grid gap-2 md:grid-cols-3">
+          <SmallStat label="Script Status" value={lead.scriptStatus || "-"} />
+          <SmallStat label="Format" value={lead.format || lead.adaptationFormat || "-"} />
+          <SmallStat label="Rights" value={lead.rightsStatus || "-"} />
+        </div>
+      </div>
       <div className="mt-4 grid gap-2 md:grid-cols-2">
+        <SlateEditField label="Title" value={draft.title} onChange={(value) => onDraftChange((current) => ({ ...current, title: value }))} />
+        <SlateEditField label="Writer" value={draft.creator} onChange={(value) => onDraftChange((current) => ({ ...current, creator: value }))} />
+        <SlateEditField label="Genre" value={draft.genre} onChange={(value) => onDraftChange((current) => ({ ...current, genre: value }))} />
+        <SlateEditField label="Urgency" value={draft.urgencyLabel} onChange={(value) => onDraftChange((current) => ({ ...current, urgencyLabel: value }))} />
+        <label className="grid gap-1">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Score</span>
+          <input className="field" type="number" value={draft.priorityScore ?? ""} onChange={(event) => onDraftChange((current) => ({ ...current, priorityScore: event.target.value ? Number(event.target.value) : undefined }))} />
+        </label>
         <SlateEditField label="Owner" value={draft.owner} onChange={(value) => onDraftChange((current) => ({ ...current, owner: value }))} />
         <SlateEditField label="Next Action" value={draft.nextActionStatus} onChange={(value) => onDraftChange((current) => ({ ...current, nextActionStatus: value }))} />
         <SlateEditField label="Rights Status" value={draft.rightsStatus} onChange={(value) => onDraftChange((current) => ({ ...current, rightsStatus: value }))} />
@@ -1350,7 +1583,7 @@ function SlateLeadPanel({
       <SlateNextStepTaskCreator lead={lead} nextStep={draft.nextStep ?? ""} projects={projects} users={users} onCreateTask={onCreateTask} />
       {slateTasks.length ? (
         <div className="mt-3 rounded-md border border-white/10 bg-white/[0.025] p-2.5">
-          <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Slate Tasks</p>
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Prospect Tasks</p>
           <div className="grid gap-1.5">
             {slateTasks.slice(0, 4).map((task) => (
               <Link key={task.id} href={`/tasks?task=${task.id}`} className="rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 transition hover:border-amberline/35">
@@ -1376,10 +1609,6 @@ function SlateLeadPanel({
         <SmallStat label="Year Written" value={lead.yearWritten || "-"} />
         <SmallStat label="Source" value={lead.sourceLink ? "Available" : "Missing"} />
       </div>
-      <div className="mt-3 flex flex-wrap gap-1.5">
-        {lead.sourceLink ? <TableLink href={lead.sourceLink}>Source Link</TableLink> : null}
-        {lead.scriptPdf ? <TableLink href={lead.scriptPdf}>Script PDF</TableLink> : null}
-      </div>
       <div className="mt-4 flex justify-end">
         <PrimaryButton icon={CheckCircle2} label="Save Slate Item" onClick={onSave} />
       </div>
@@ -1396,6 +1625,27 @@ function SlateEditField({ label, value, onChange }: { label: string; value?: str
   );
 }
 
+function normalizeLeadPatch(draft: Partial<HammerProjectLead>) {
+  return {
+    ...draft,
+    title: draft.title?.trim() || undefined,
+    creator: draft.creator?.trim() || undefined,
+    genre: draft.genre?.trim() || undefined,
+    urgencyLabel: draft.urgencyLabel?.trim() || undefined,
+    priorityScore: draft.priorityScore === undefined || draft.priorityScore === null ? undefined : Number(draft.priorityScore)
+  };
+}
+
+function projectLeadCoreEditablePatch(draft: Partial<HammerProjectLead>) {
+  return {
+    title: draft.title,
+    creator: draft.creator,
+    urgencyLabel: draft.urgencyLabel,
+    genre: draft.genre,
+    priorityScore: draft.priorityScore
+  };
+}
+
 function SlateNextStepTaskCreator({
   lead,
   nextStep,
@@ -1407,7 +1657,7 @@ function SlateNextStepTaskCreator({
   nextStep: string;
   projects: HammerProject[];
   users: HammerUser[];
-  onCreateTask?: (input: { projectId: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
+  onCreateTask?: (input: { projectId?: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
 }) {
   const [assignedToId, setAssignedToId] = useState(users[0]?.id ?? "");
   const [dueDate, setDueDate] = useState(defaultDueDate());
@@ -1499,7 +1749,7 @@ function ProjectCreateModal({ users, currentUser, onClose, onCreate }: { users: 
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
       <form onSubmit={submit} className="my-6 w-full max-w-3xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-glow">
         <div className="flex items-start justify-between gap-3">
-          <SectionHeader eyebrow="Projects" title="Create Project" />
+          <SectionHeader eyebrow="Development Slate" title="Create Slate Item" />
           <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close create project">
             <X className="h-4 w-4" />
           </button>
@@ -1526,7 +1776,7 @@ function ProjectCreateModal({ users, currentUser, onClose, onCreate }: { users: 
         {message ? <p className="mt-3 rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 text-xs text-studio-300">{message}</p> : null}
         <div className="mt-4 flex justify-end gap-2">
           <button type="button" onClick={onClose} className="rounded border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:text-amberline">Cancel</button>
-          <button type="submit" disabled={busy} className="rounded bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">Create Project</button>
+          <button type="submit" disabled={busy} className="rounded bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">Create Slate Item</button>
         </div>
       </form>
     </div>
@@ -1568,7 +1818,7 @@ function ProjectEditor({ users, currentUser, onCreate }: { users: HammerUser[]; 
   return (
     <div className="grid gap-4 xl:grid-cols-[0.8fr_1.2fr]">
       <Panel>
-        <SectionHeader eyebrow="New Project" title="Create Project" />
+        <SectionHeader eyebrow="Development Slate" title="Create Slate Item" />
         <form onSubmit={submit} className="space-y-3">
           <input className="field" value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="Title" />
           <textarea className="field min-h-24" value={draft.logline} onChange={(event) => setDraft({ ...draft, logline: event.target.value })} placeholder="Logline" />
@@ -1588,12 +1838,12 @@ function ProjectEditor({ users, currentUser, onCreate }: { users: HammerUser[]; 
             </select>
           </div>
           {message ? <p className="rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 text-xs text-studio-300">{message}</p> : null}
-          <button type="submit" disabled={busy} className="w-full rounded-md bg-amberline px-3 py-2 text-[13px] font-semibold text-studio-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">Create Project</button>
+          <button type="submit" disabled={busy} className="w-full rounded-md bg-amberline px-3 py-2 text-[13px] font-semibold text-studio-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">Create Slate Item</button>
         </form>
       </Panel>
       <Panel>
-        <SectionHeader eyebrow="Access" title="Who Can Create Projects" />
-        <p className="text-[13px] leading-5 text-studio-300">Admins, producers, and executives can create projects. New projects are saved to the production database, assigned an owner, and appear in Active Projects for users with appropriate access.</p>
+        <SectionHeader eyebrow="Access" title="Who Can Create Slate Items" />
+        <p className="text-[13px] leading-5 text-studio-300">Admins, producers, and executives can create Development Slate items. New slate items are saved to the production database, assigned an owner, and appear in Development Slate for users with appropriate access.</p>
       </Panel>
     </div>
   );
@@ -1630,10 +1880,10 @@ function EmptyScriptState() {
     <Panel>
       <SectionHeader eyebrow="Scripts" title="Script Not Found" />
       <p className="max-w-2xl text-[13px] leading-5 text-studio-300">
-        This script is not available in the current workspace. Open the script library to upload or select another script.
+        This script is not available in the current workspace. Open Development Slate or Prospects to upload or select another script in context.
       </p>
-      <Link href="/scripts" className="mt-4 inline-flex rounded-md bg-amberline px-3 py-2 text-[13px] font-semibold text-studio-950 hover:bg-emerald-300">
-        Open Scripts
+      <Link href="/projects" className="mt-4 inline-flex rounded-md bg-amberline px-3 py-2 text-[13px] font-semibold text-studio-950 hover:bg-emerald-300">
+        Open Development Slate
       </Link>
     </Panel>
   );
@@ -1710,7 +1960,7 @@ function ProjectWorkspace({
   onDelete?: (documentId: string) => void;
   onAssignToProject?: (documentId: string, projectId: string) => void;
   onReferenceUpload?: (input: { projectId: string; title: string; description: string; category: AssetType; file: File }) => Promise<void>;
-  onCreateTask?: (input: { projectId: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
+  onCreateTask?: (input: { projectId?: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
 }) {
   const docs = documents.filter((doc) => doc.projectId === project.id);
   const scriptDocs = docs.filter((doc) => ["SCRIPT", "TREATMENT", "OUTLINE"].includes(doc.type));
@@ -1881,7 +2131,7 @@ function NewAssignmentButton({
   project: HammerProject;
   firstScript?: HammerDocument;
   users?: HammerUser[];
-  onCreateTask: (input: { projectId: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
+  onCreateTask: (input: { projectId?: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
 }) {
   const defaultArtistId = users.find((user) => user.role === "ARTIST")?.id ?? users[0]?.id ?? "";
   const defaultDevelopmentId = users.find((user) => user.role === "DEVELOPMENT")?.id ?? users[0]?.id ?? "";
@@ -2203,7 +2453,7 @@ function Scripts({
         />
         <div className="mb-3 flex flex-wrap items-center gap-1.5">
           <ScriptSectionLink href="/scripts?section=inbox" label="Inbox" active={effectiveSection === "inbox"} count={incomingDocs.length} disabled={!canManageLibrary} />
-          <ScriptSectionLink href="/scripts?section=projects" label="Active Projects" active={effectiveSection === "projects"} count={projectDocs.length} />
+          <ScriptSectionLink href="/scripts?section=projects" label="Development Slate" active={effectiveSection === "projects"} count={projectDocs.length} />
           {canManageLibrary ? <ScriptSectionLink href="/scripts?section=all" label="Library" active={effectiveSection === "all"} count={allDocs.length} subtle /> : null}
         </div>
         <div className="grid gap-2 md:grid-cols-[1fr_180px_220px]">
@@ -2554,26 +2804,206 @@ function DocumentRows({
   );
 }
 
+function ScriptCollections({
+  collections,
+  items,
+  documents,
+  versions,
+  projects,
+  canManage,
+  onCreateCollection,
+  onAddDocument,
+  onRemoveDocument
+}: {
+  collections: HammerScriptCollection[];
+  items: HammerScriptCollectionItem[];
+  documents: HammerDocument[];
+  versions: HammerDocumentVersion[];
+  projects: HammerProject[];
+  canManage: boolean;
+  onCreateCollection: (input: { name: string; description?: string; visibility?: HammerScriptCollection["visibility"] }) => Promise<void>;
+  onAddDocument: (collectionId: string, documentId: string, notes?: string) => Promise<void>;
+  onRemoveDocument: (collectionItemId: string) => Promise<void>;
+}) {
+  const [selectedCollectionId, setSelectedCollectionId] = useState(collections[0]?.id ?? "");
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [visibility, setVisibility] = useState<HammerScriptCollection["visibility"]>("PROJECT_TEAM");
+  const [documentId, setDocumentId] = useState("");
+  const [itemNotes, setItemNotes] = useState("");
+  const [message, setMessage] = useState("");
+  const selectedCollection = collections.find((collection) => collection.id === selectedCollectionId) ?? collections[0];
+  const collectionItems = selectedCollection ? items.filter((item) => item.collectionId === selectedCollection.id).sort((a, b) => a.sortOrder - b.sortOrder || a.addedAt.localeCompare(b.addedAt)) : [];
+  const collectionDocumentIds = new Set(collectionItems.map((item) => item.documentId));
+  const scriptDocuments = documents.filter((document) => ["SCRIPT", "TREATMENT", "OUTLINE", "NOTES", "COVERAGE", "BUSINESS_DOCUMENT"].includes(document.type));
+  const availableDocuments = scriptDocuments.filter((document) => !collectionDocumentIds.has(document.id));
+
+  useEffect(() => {
+    if (!selectedCollectionId && collections[0]) setSelectedCollectionId(collections[0].id);
+    if (selectedCollectionId && !collections.some((collection) => collection.id === selectedCollectionId)) setSelectedCollectionId(collections[0]?.id ?? "");
+  }, [collections, selectedCollectionId]);
+
+  async function submitCollection(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!name.trim()) {
+      setMessage("Collection name is required.");
+      return;
+    }
+    await onCreateCollection({ name, description, visibility });
+    setName("");
+    setDescription("");
+    setVisibility("PROJECT_TEAM");
+    setMessage("Collection created.");
+  }
+
+  async function submitDocument(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedCollection || !documentId) {
+      setMessage("Choose a collection and script first.");
+      return;
+    }
+    await onAddDocument(selectedCollection.id, documentId, itemNotes);
+    setDocumentId("");
+    setItemNotes("");
+    setMessage("Script added to collection.");
+  }
+
+  return (
+    <div className="grid gap-4 xl:grid-cols-[340px_1fr]">
+      <div className="space-y-4">
+        <Panel>
+          <SectionHeader eyebrow="Review Groups" title="Collections" />
+          <div className="data-scroll-list mt-3 grid gap-2">
+            {collections.length ? collections.map((collection) => {
+              const count = items.filter((item) => item.collectionId === collection.id).length;
+              return (
+                <button
+                  key={collection.id}
+                  type="button"
+                  onClick={() => setSelectedCollectionId(collection.id)}
+                  className={cn("rounded-md border p-3 text-left transition", selectedCollection?.id === collection.id ? "border-amberline/45 bg-amberline/10" : "border-white/10 bg-white/[0.03] hover:border-white/25")}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="font-semibold text-studio-100">{collection.name}</p>
+                    <span className="rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-[11px] text-studio-300">{count}</span>
+                  </div>
+                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-studio-400">{collection.description || "No description yet."}</p>
+                </button>
+              );
+            }) : <EmptyState label="No collections yet." />}
+          </div>
+        </Panel>
+
+        {canManage ? (
+          <Panel>
+            <SectionHeader eyebrow="New" title="Create Collection" />
+            <form onSubmit={submitCollection} className="mt-3 grid gap-2">
+              <input className="field" value={name} onChange={(event) => setName(event.target.value)} placeholder="Collection name" />
+              <textarea className="field min-h-20" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Purpose, review context, or deadline" />
+              <select className="field" value={visibility} onChange={(event) => setVisibility(event.target.value as HammerScriptCollection["visibility"])}>
+                <option value="PROJECT_TEAM">Project Team</option>
+                <option value="INTERNAL">Internal</option>
+                <option value="EXECUTIVE_ONLY">Executive Only</option>
+              </select>
+              <PrimaryButton icon={Plus} label="Create Collection" />
+            </form>
+            {message ? <p className="mt-2 text-xs text-studio-300">{message}</p> : null}
+          </Panel>
+        ) : null}
+      </div>
+
+      <div className="space-y-4">
+        <Panel>
+          <SectionHeader
+            eyebrow={selectedCollection?.visibility ? statusLabel(selectedCollection.visibility) : "Collection"}
+            title={selectedCollection?.name ?? "Select a Collection"}
+            action={selectedCollection ? <Badge value={selectedCollection.status} /> : undefined}
+          />
+          {selectedCollection ? (
+            <div className="mt-3 grid gap-3 md:grid-cols-3">
+              <SmallStat label="Scripts" value={`${collectionItems.length}`} />
+              <SmallStat label="Owner" value={selectedCollection.ownerId ? userName(selectedCollection.ownerId) : "Unassigned"} />
+              <SmallStat label="Updated" value={selectedCollection.updatedAt} />
+            </div>
+          ) : null}
+          {selectedCollection?.description ? <p className="mt-3 text-[13px] leading-6 text-studio-300">{selectedCollection.description}</p> : null}
+        </Panel>
+
+        {selectedCollection && canManage ? (
+          <Panel>
+            <SectionHeader eyebrow="Add" title="Add Script to Collection" />
+            <form onSubmit={submitDocument} className="mt-3 grid gap-2 lg:grid-cols-[1fr_1fr_auto]">
+              <select className="field" value={documentId} onChange={(event) => setDocumentId(event.target.value)}>
+                <option value="">Choose script or document</option>
+                {availableDocuments.map((document) => (
+                  <option key={document.id} value={document.id}>{document.title}</option>
+                ))}
+              </select>
+              <input className="field" value={itemNotes} onChange={(event) => setItemNotes(event.target.value)} placeholder="Optional collection note" />
+              <PrimaryButton icon={Plus} label="Add" />
+            </form>
+          </Panel>
+        ) : null}
+
+        <Panel>
+          <SectionHeader eyebrow="Review List" title="Scripts in Collection" />
+          {collectionItems.length ? (
+            <div className="data-scroll">
+              <table className="data-table min-w-[900px]">
+                <thead><tr><th>Title</th><th>Project</th><th>Status</th><th>Writer</th><th>Collection Note</th>{canManage ? <th>Action</th> : null}</tr></thead>
+                <tbody>
+                  {collectionItems.map((item) => {
+                    const document = documents.find((entry) => entry.id === item.documentId);
+                    const version = document ? currentVersionFor(document.id, documents, versions) : undefined;
+                    return (
+                      <tr key={item.id}>
+                        <td className="py-2.5">{document ? <Link className="font-semibold text-studio-100 hover:text-amberline" href={`/scripts/${document.id}`}>{document.title}</Link> : <span className="text-studio-400">Missing document</span>}</td>
+                        <td>{document?.projectId ? projectTitleFromList(document.projectId, projects) : "Inbox"}</td>
+                        <td><Badge value={version?.status ?? "DRAFT"} /></td>
+                        <td>{document?.writerName ?? (document?.createdById ? userName(document.createdById) : "Unassigned")}</td>
+                        <td className="max-w-[260px] text-studio-300">{item.notes || "-"}</td>
+                        {canManage ? <td><DangerButton label="Remove" onClick={() => onRemoveDocument(item.id)} /></td> : null}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : <EmptyState label="No scripts in this collection yet." />}
+        </Panel>
+      </div>
+    </div>
+  );
+}
+
 function ScriptDetail({
   documentId,
   documents = hammerDocuments,
   versions = hammerVersions,
+  comments = hammerComments,
+  currentUser,
   supportingDocuments = [],
   onUpload,
   onSupportingUpload,
   onSupportingDelete,
   onStatusChange,
+  onUpdateVersionNotes,
+  onCreateComment,
   onUpdateMetadata,
   onDelete
 }: {
   documentId: string;
   documents?: HammerDocument[];
   versions?: HammerDocumentVersion[];
+  comments?: HammerComment[];
+  currentUser?: HammerUser;
   supportingDocuments?: SupportingDocument[];
   onUpload?: (input: DocumentUploadInput) => Promise<void>;
   onSupportingUpload?: (input: { scriptDocumentId: string; title: string; type: SupportingDocumentType; notes: string; file: File }) => Promise<void>;
   onSupportingDelete?: (documentId: string) => void;
   onStatusChange?: (versionId: string, status: ScriptStatus) => void;
+  onUpdateVersionNotes?: (versionId: string, notes: string) => Promise<void>;
+  onCreateComment?: (input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string }) => Promise<void>;
   onUpdateMetadata?: (documentId: string, patch: Partial<Pick<HammerDocument, "title" | "type" | "writerName" | "source">>) => Promise<void>;
   onDelete?: (documentId: string) => void;
 }) {
@@ -2586,10 +3016,18 @@ function ScriptDetail({
     writerName: doc.writerName ?? "",
     source: doc.source ?? ""
   });
+  const [quickNoteDraft, setQuickNoteDraft] = useState("");
+  const [quickNoteTarget, setQuickNoteTarget] = useState<"VERSION" | "SCRIPT">("VERSION");
+  const [quickNoteVisibility, setQuickNoteVisibility] = useState<HammerComment["visibility"]>("PROJECT_TEAM");
   const [metadataMessage, setMetadataMessage] = useState("");
+  const [quickNoteMessage, setQuickNoteMessage] = useState("");
+  const [quickNoteBusy, setQuickNoteBusy] = useState(false);
   const documentVersions = versions.filter((item) => item.documentId === doc.id).sort((a, b) => b.versionNumber - a.versionNumber);
   const attachedSupportingDocuments = supportingDocuments.filter((item) => item.scriptDocumentId === doc.id);
-  const relatedComments = hammerComments.filter((comment) => comment.targetId === (version?.id ?? doc.id) || comment.targetId === doc.id);
+  const scriptComments = comments.filter((comment) => comment.targetId === doc.id);
+  const versionComments = version ? comments.filter((comment) => comment.targetId === version.id) : [];
+  const versionUploadNote = version?.notes?.trim() ?? "";
+  const visibleNotesCount = scriptComments.length + versionComments.length + (versionUploadNote ? 1 : 0);
 
   useEffect(() => {
     setMetadataDraft({
@@ -2600,6 +3038,12 @@ function ScriptDetail({
     });
     setMetadataMessage("");
   }, [doc.id, doc.source, doc.title, doc.type, doc.writerName]);
+
+  useEffect(() => {
+    setQuickNoteDraft("");
+    setQuickNoteMessage("");
+    setQuickNoteTarget(version ? "VERSION" : "SCRIPT");
+  }, [doc.id, version?.id]);
 
   async function saveMetadata() {
     if (!onUpdateMetadata) return;
@@ -2620,6 +3064,30 @@ function ScriptDetail({
     }
   }
 
+  async function saveQuickNote() {
+    if (!onCreateComment || !quickNoteDraft.trim()) {
+      setQuickNoteMessage(quickNoteDraft.trim() ? "Notes cannot be saved from this view yet." : "Write a note before saving.");
+      return;
+    }
+    setQuickNoteBusy(true);
+    setQuickNoteMessage("");
+    try {
+      await onCreateComment({
+        targetType: quickNoteTarget === "VERSION" && version ? "DOCUMENT_VERSION" : "DOCUMENT",
+        targetId: quickNoteTarget === "VERSION" && version ? version.id : doc.id,
+        projectId: doc.projectId,
+        body: quickNoteDraft.trim(),
+        visibility: quickNoteVisibility
+      });
+      setQuickNoteDraft("");
+      setQuickNoteMessage("Note saved.");
+    } catch (error) {
+      setQuickNoteMessage(error instanceof Error ? error.message : "Could not save note.");
+    } finally {
+      setQuickNoteBusy(false);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <Panel>
@@ -2637,7 +3105,7 @@ function ScriptDetail({
         <div className="mt-3 flex flex-wrap gap-1.5 border-t border-white/10 pt-3">
           {[
             ["overview", "Overview"],
-            ["notes", `Notes${relatedComments.length ? ` (${relatedComments.length})` : ""}`],
+            ["notes", `Notes${visibleNotesCount ? ` (${visibleNotesCount})` : ""}`],
             ["files", "Files"],
             ["versions", `Versions (${documentVersions.length})`],
             ["breakdown", "Breakdown"]
@@ -2671,7 +3139,48 @@ function ScriptDetail({
                   </select>
                 ) : null}
                 {doc.source ? <SmallStat label="Source" value={doc.source} /> : null}
-                <p className="text-[13px] text-studio-300">{version?.notes}</p>
+                {versionUploadNote ? (
+                  <div className="rounded border border-white/10 bg-white/[0.03] p-2.5 text-[13px] text-studio-300">
+                    <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Version Upload Note</p>
+                    <p>{versionUploadNote}</p>
+                  </div>
+                ) : null}
+                {onCreateComment ? (
+                  <label className="grid gap-1">
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Quick Note</span>
+                    <textarea className="field min-h-24" value={quickNoteDraft} onChange={(event) => setQuickNoteDraft(event.target.value)} placeholder={quickNoteTarget === "VERSION" ? "Add a note to this script version" : "Add a note to the overall script"} />
+                  </label>
+                ) : (
+                  <p className="text-[13px] text-studio-300">Open the Notes tab to review notes.</p>
+                )}
+                {onCreateComment ? (
+                  <div className="grid gap-2">
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <label className="grid gap-1">
+                        <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Attach Note To</span>
+                        <select className="field" value={quickNoteTarget} onChange={(event) => setQuickNoteTarget(event.target.value as "VERSION" | "SCRIPT")}>
+                          {version ? <option value="VERSION">Current Version v{version.versionNumber}</option> : null}
+                          <option value="SCRIPT">Overall Script</option>
+                        </select>
+                      </label>
+                      <label className="grid gap-1">
+                        <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Visibility</span>
+                        <select className="field" value={quickNoteVisibility} onChange={(event) => setQuickNoteVisibility(event.target.value as HammerComment["visibility"])}>
+                          <option value="PROJECT_TEAM">Project Team</option>
+                          <option value="INTERNAL">Internal</option>
+                          <option value="EXECUTIVE_ONLY">Executive Only</option>
+                        </select>
+                      </label>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button type="button" disabled={quickNoteBusy || !quickNoteDraft.trim()} onClick={saveQuickNote} className="inline-flex items-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">
+                        <CheckCircle2 className="h-4 w-4" />
+                        {quickNoteTarget === "VERSION" ? "Save Version Note" : "Save Script Note"}
+                      </button>
+                      {quickNoteMessage ? <p className="text-xs text-studio-300">{quickNoteMessage}</p> : null}
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </Panel>
             <Panel>
@@ -2714,7 +3223,37 @@ function ScriptDetail({
         </div>
       ) : null}
 
-      {tab === "notes" ? <CommentsPanel targetId={version?.id ?? doc.id} /> : null}
+      {tab === "notes" ? (
+        <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+          <CommentsPanel
+            eyebrow="Current Version"
+            title={version ? `Version ${version.versionNumber} Notes` : "Version Notes"}
+            targetType={version ? "DOCUMENT_VERSION" : "DOCUMENT"}
+            targetId={version?.id ?? doc.id}
+            projectId={doc.projectId}
+            versionNote={versionUploadNote}
+            comments={versionComments}
+            currentUser={currentUser}
+            onCreateComment={onCreateComment}
+            emptyLabel={version ? "No notes for this version yet." : "No version is selected."}
+            placeholder={version ? `Add a note to version ${version.versionNumber}` : "Add a version note"}
+            saveLabel="Save Version Note"
+          />
+          <CommentsPanel
+            eyebrow="Overall Script"
+            title="Script Notes"
+            targetType="DOCUMENT"
+            targetId={doc.id}
+            projectId={doc.projectId}
+            comments={scriptComments}
+            currentUser={currentUser}
+            onCreateComment={onCreateComment}
+            emptyLabel="No overall script notes yet."
+            placeholder="Add a note to the overall script"
+            saveLabel="Save Script Note"
+          />
+        </div>
+      ) : null}
 
       {tab === "files" ? (
         <Panel>
@@ -2893,12 +3432,12 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
   const doc = documents.find((item) => item.id === documentId) ?? documents[0];
   const version = currentVersionFor(doc.id, documents, versions);
   const parserProjectId = doc.projectId ?? "inbox";
-  const parsed = useMemo(() => parseScriptText(version?.extractedText ?? "", { projectId: parserProjectId, versionName: `v${version?.versionNumber ?? 1}`, fileName: version?.fileName ?? "script.txt" }), [parserProjectId, version]);
+  const [parsed, setParsed] = useState<ReturnType<typeof parseScriptText> | null>(null);
+  const [breakdownStatus, setBreakdownStatus] = useState("");
   const scenes = hammerScenes.filter((scene) => scene.documentVersionId === version?.id);
   const breakdownScenes: BreakdownScene[] = useMemo(() => (
-    scenes.length
-      ? scenes
-      : parsed.scenes.map((scene) => ({
+    parsed
+      ? parsed.scenes.map((scene) => ({
         id: scene.id,
         sceneNumber: String(scene.number),
         heading: scene.slugline,
@@ -2909,7 +3448,10 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
         documentVersionId: version?.id ?? "",
         orderIndex: scene.number
       }))
-  ), [parsed.scenes, parserProjectId, scenes, version?.id]);
+      : scenes.length
+      ? scenes
+      : []
+  ), [parsed, parserProjectId, scenes, version?.id]);
   const [selectedSceneId, setSelectedSceneId] = useState("");
   const selectedScene = breakdownScenes.find((scene) => scene.id === selectedSceneId) ?? breakdownScenes[0];
 
@@ -2920,16 +3462,47 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
     }
   }, [breakdownScenes, selectedSceneId]);
 
+  useEffect(() => {
+    setParsed(null);
+    setSelectedSceneId("");
+    setBreakdownStatus("");
+  }, [version?.id]);
+
+  function runBreakdown() {
+    const sourceText = version?.extractedText?.trim() ?? "";
+    if (!sourceText) {
+      setBreakdownStatus("No extracted script text is available. Upload a PDF, FDX, or TXT version with readable text first.");
+      return;
+    }
+    const nextParsed = parseScriptText(sourceText, {
+      projectId: parserProjectId,
+      versionName: `v${version?.versionNumber ?? 1}`,
+      fileName: version?.fileName ?? "script.txt"
+    });
+    setParsed(nextParsed);
+    setSelectedSceneId(nextParsed.scenes[0]?.id ?? "");
+    setBreakdownStatus(nextParsed.scenes.length ? `Breakdown complete. Detected ${nextParsed.scenes.length} scene${nextParsed.scenes.length === 1 ? "" : "s"}.` : "Breakdown ran, but no screenplay scene headings were detected.");
+  }
+
+  function approveBreakdown() {
+    if (!parsed && !scenes.length) {
+      setBreakdownStatus("Run breakdown before approving.");
+      return;
+    }
+    setBreakdownStatus("Breakdown approved for review. Editable database persistence is planned for the next pass.");
+  }
+
   return (
     <div className="space-y-4">
       <Panel>
-        <SectionHeader eyebrow="Deterministic Parser" title="Script Breakdown" action={<div className="flex gap-2"><GhostButton icon={Gauge} label="Run Breakdown" /><GhostButton icon={CheckCircle2} label="Approve Breakdown" /></div>} />
+        <SectionHeader eyebrow="Deterministic Parser" title="Script Breakdown" action={<div className="flex gap-2"><button type="button" onClick={runBreakdown} className="inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline"><Gauge className="h-3.5 w-3.5" />Run Breakdown</button><button type="button" onClick={approveBreakdown} className="inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline"><CheckCircle2 className="h-3.5 w-3.5" />Approve Breakdown</button></div>} />
         <div className="grid gap-3 md:grid-cols-4">
-          <SmallStat label="Detected Scenes" value={`${Math.max(scenes.length, parsed.scenes.length)}`} />
-          <SmallStat label="Characters" value={`${parsed.characters.length || hammerEntities.filter((e) => e.type === "CHARACTER").length}`} />
-          <SmallStat label="Locations" value={`${parsed.environments.length || hammerEntities.filter((e) => e.type === "LOCATION").length}`} />
-          <SmallStat label="Props / Actions" value={`${parsed.props.length + parsed.stuntBeats.length}`} />
+          <SmallStat label="Detected Scenes" value={`${breakdownScenes.length}`} />
+          <SmallStat label="Characters" value={`${parsed?.characters.length ?? 0}`} />
+          <SmallStat label="Locations" value={`${parsed?.environments.length ?? 0}`} />
+          <SmallStat label="Props / Actions" value={`${(parsed?.props.length ?? 0) + (parsed?.stuntBeats.length ?? 0)}`} />
         </div>
+        {breakdownStatus ? <p className="mt-3 rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 text-xs text-studio-300">{breakdownStatus}</p> : null}
       </Panel>
       <Panel>
         <SectionHeader eyebrow="Editable" title="Scenes" />
@@ -2979,7 +3552,7 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
           </div>
         ) : <EmptyState label="No scenes detected yet. Upload a screenplay-formatted PDF, FDX, or TXT and run breakdown." />}
       </Panel>
-      <ParsedEntityPanel parsed={parsed} projectId={parserProjectId} />
+      {parsed ? <ParsedEntityPanel parsed={parsed} projectId={parserProjectId} /> : <Panel><SectionHeader eyebrow="Editable" title="Characters, Locations, Props, Actions" /><EmptyState label="Run breakdown to detect characters, locations, props, and action moments." /></Panel>}
     </div>
   );
 }
@@ -3158,32 +3731,41 @@ function Tasks({
   users?: HammerUser[];
   tasks?: HammerTask[];
   projects?: HammerProject[];
-  onCreateTask?: (input: { projectId: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
+  onCreateTask?: (input: { projectId?: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
   onUpdateTask?: (taskId: string, patch: Partial<Pick<HammerTask, "priority" | "status">>) => void;
   onDeleteTask?: (taskId: string) => void;
 }) {
   const canViewAllTasks = canViewAllProjectTasks(currentUser?.role);
   const canDeleteTasks = currentUser?.role === "ADMIN";
   const tasks = allTasks.filter((task) => (!projectId || task.projectId === projectId) && (canViewAllTasks || task.assignedToId === currentUser?.id));
+  const generalTasks = tasks.filter((task) => !task.projectId && task.targetType === "GENERAL");
   const slateTasks = tasks.filter((task) => task.targetType === "PROJECT_LEAD");
-  const projectTasks = tasks.filter((task) => task.targetType !== "PROJECT_LEAD");
+  const projectTasks = tasks.filter((task) => task.projectId && task.targetType !== "PROJECT_LEAD");
   const projectName = projectId ? projectTitle(projectId) : undefined;
   return (
     <div className="grid gap-4">
       <Panel>
-        <SectionHeader eyebrow={projectName ? `Showing ${projectName}` : "Project Work"} title={compact ? "Tasks" : canViewAllTasks ? "Project Tasks" : "My Project Tasks"} action={onCreateTask ? <NewTaskDialog projects={projects} users={users} onCreateTask={onCreateTask} /> : undefined} />
-        {projectTasks.length ? (
-          <TaskRows tasks={projectTasks} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} onUpdateTask={onUpdateTask} onDeleteTask={canDeleteTasks ? onDeleteTask : undefined} />
+        <SectionHeader eyebrow="Flexible Tracking" title={compact ? "Tasks" : canViewAllTasks ? "General Tasks" : "My General Tasks"} action={onCreateTask ? <NewTaskDialog projects={projects} users={users} onCreateTask={onCreateTask} /> : undefined} />
+        {generalTasks.length ? (
+          <TaskRows tasks={generalTasks} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} showContext onUpdateTask={onUpdateTask} onDeleteTask={canDeleteTasks ? onDeleteTask : undefined} />
         ) : (
-          <EmptyState label={projectName ? (canViewAllTasks ? `No project tasks for ${projectName}. Create one when there is a next step.` : `No project tasks assigned to you for ${projectName}.`) : "No project tasks match this view."} />
+          <EmptyState label={canViewAllTasks ? "No general tasks yet. Create one for follow-ups that are not tied to a slate item or prospect." : "No general tasks assigned to you."} />
         )}
       </Panel>
       <Panel>
-        <SectionHeader eyebrow="Development Slate" title={canViewAllTasks ? "Slate Tasks" : "My Slate Tasks"} />
-        {slateTasks.length ? (
-          <TaskRows tasks={slateTasks} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} onUpdateTask={onUpdateTask} onDeleteTask={canDeleteTasks ? onDeleteTask : undefined} />
+        <SectionHeader eyebrow={projectName ? `Showing ${projectName}` : "Development Slate"} title={compact ? "Slate Tasks" : canViewAllTasks ? "Development Slate Tasks" : "My Development Slate Tasks"} />
+        {projectTasks.length ? (
+          <TaskRows tasks={projectTasks} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} showContext onUpdateTask={onUpdateTask} onDeleteTask={canDeleteTasks ? onDeleteTask : undefined} />
         ) : (
-          <EmptyState label={projectName ? (canViewAllTasks ? `No slate tasks for ${projectName}.` : `No slate tasks assigned to you for ${projectName}.`) : "No slate tasks match this view."} />
+          <EmptyState label={projectName ? (canViewAllTasks ? `No Development Slate tasks for ${projectName}. Create one when there is a next step.` : `No Development Slate tasks assigned to you for ${projectName}.`) : "No Development Slate tasks match this view."} />
+        )}
+      </Panel>
+      <Panel>
+        <SectionHeader eyebrow="Prospects" title={canViewAllTasks ? "Prospect Tasks" : "My Prospect Tasks"} />
+        {slateTasks.length ? (
+          <TaskRows tasks={slateTasks} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} showContext onUpdateTask={onUpdateTask} onDeleteTask={canDeleteTasks ? onDeleteTask : undefined} />
+        ) : (
+          <EmptyState label={projectName ? (canViewAllTasks ? `No prospect tasks for ${projectName}.` : `No prospect tasks assigned to you for ${projectName}.`) : "No prospect tasks match this view."} />
         )}
       </Panel>
     </div>
@@ -3197,9 +3779,10 @@ function NewTaskDialog({
 }: {
   projects: HammerProject[];
   users?: HammerUser[];
-  onCreateTask: (input: { projectId: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
+  onCreateTask: (input: { projectId?: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [scope, setScope] = useState<"GENERAL" | "PROJECT">("GENERAL");
   const [projectId, setProjectId] = useState(projects[0]?.id ?? "");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -3209,17 +3792,17 @@ function NewTaskDialog({
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!projectId || !title.trim()) return;
+    if (!title.trim() || (scope === "PROJECT" && !projectId)) return;
     onCreateTask({
-      projectId,
+      projectId: scope === "PROJECT" ? projectId : undefined,
       title,
       description,
       assignedToId,
       dueDate: defaultDueDate(),
       priority,
       status,
-      targetType: "PROJECT",
-      targetId: projectId
+      targetType: scope,
+      targetId: scope === "PROJECT" ? projectId : ""
     });
     setTitle("");
     setDescription("");
@@ -3236,9 +3819,21 @@ function NewTaskDialog({
           <form onSubmit={submit} className="w-full max-w-xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-glow">
             <SectionHeader eyebrow="Task" title="New Task" />
             <div className="grid gap-3">
-              <select className="field" value={projectId} onChange={(event) => setProjectId(event.target.value)}>
-                {projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
-              </select>
+              <label className="grid gap-1">
+                <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Task Area</span>
+                <select className="field" value={scope} onChange={(event) => setScope(event.target.value as "GENERAL" | "PROJECT")}>
+                  <option value="GENERAL">General Task</option>
+                  <option value="PROJECT">Development Slate Task</option>
+                </select>
+              </label>
+              {scope === "PROJECT" ? (
+                <label className="grid gap-1">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Development Slate Item</span>
+                  <select className="field" value={projectId} onChange={(event) => setProjectId(event.target.value)}>
+                    {projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
+                  </select>
+                </label>
+              ) : null}
               <input className="field" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Name of task" />
               <textarea className="field min-h-24" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Description of task" />
               <div className="grid gap-3 md:grid-cols-3">
@@ -3266,9 +3861,11 @@ function NewTaskDialog({
 
 const contactTypes: ContactType[] = ["WRITER", "PRODUCER", "ARTIST", "EXECUTIVE", "AGENCY", "MANAGEMENT", "LEGAL", "VENDOR", "OTHER"];
 const contactStatuses: ContactStatus[] = ["NEW", "ACTIVE", "FOLLOW_UP", "WAITING", "DO_NOT_CONTACT", "ARCHIVED"];
+const contactRelationshipTypes: ContactRelationshipType[] = ["AGENT", "MANAGER", "REPRESENTS", "WORKS_WITH", "ASSISTANT", "LEGAL_REP", "REFERRED_BY", "OTHER"];
 
 function Contacts({
   initialContacts = hammerContacts,
+  contactRelationships = hammerContactRelationships,
   currentUser,
   users = hammerUsers,
   projects = hammerProjects,
@@ -3278,9 +3875,12 @@ function Contacts({
   onDatabaseImport,
   onCreateContact,
   onUpdateContact,
-  onDeleteContact
+  onDeleteContact,
+  onCreateRelationship,
+  onDeleteRelationship
 }: {
   initialContacts?: HammerContact[];
+  contactRelationships?: HammerContactRelationship[];
   currentUser: HammerUser;
   users?: HammerUser[];
   projects?: HammerProject[];
@@ -3291,6 +3891,8 @@ function Contacts({
   onCreateContact?: (contact: Omit<HammerContact, "id">) => Promise<void>;
   onUpdateContact?: (contactId: string, patch: Partial<Pick<HammerContact, "status" | "ownerId" | "tags" | "lastContacted" | "nextFollowUp" | "projectIds" | "notes">>) => Promise<void>;
   onDeleteContact?: (contactId: string) => Promise<void>;
+  onCreateRelationship?: (input: { fromContactId: string; toContactId: string; relationshipType: ContactRelationshipType; notes?: string }) => Promise<void>;
+  onDeleteRelationship?: (relationshipId: string) => Promise<void>;
 }) {
   const [search, setSearch] = useState("");
   const [type, setType] = useState<ContactType | "ALL">("ALL");
@@ -3301,6 +3903,7 @@ function Contacts({
   const [createOpen, setCreateOpen] = useState(false);
   const [importMessage, setImportMessage] = useState("");
   const [draft, setDraft] = useState({ status: "ACTIVE" as ContactStatus, ownerId: "", tags: "", lastContacted: "", nextFollowUp: "", projectIds: [] as string[], notes: "" });
+  const [relationshipDraft, setRelationshipDraft] = useState({ toContactId: "", relationshipType: "AGENT" as ContactRelationshipType, notes: "" });
   const contacts = useMemo(() => {
     if (databaseMode) return initialContacts;
     const localById = new Map(localContacts.map((contact) => [contact.id, contact]));
@@ -3320,6 +3923,7 @@ function Contacts({
   const relationshipProjects = selectedContact ? projects.filter((project) => draft.projectIds.includes(project.id)) : [];
   const relationshipScripts = selectedContact ? documents.filter((document) => document.contactId === selectedContact.id || document.source === selectedContact.company || document.writerName === selectedContact.name) : [];
   const relationshipTasks = selectedContact ? tasks.filter((task) => task.targetType === "CONTACT" && task.targetId === selectedContact.id) : [];
+  const linkedContacts = selectedContact ? contactRelationships.filter((relationship) => relationship.fromContactId === selectedContact.id || relationship.toContactId === selectedContact.id) : [];
   const followUpContacts = contacts.filter((contact) => contact.nextFollowUp && (contact.status ?? "ACTIVE") !== "ARCHIVED").sort((a, b) => (a.nextFollowUp ?? "").localeCompare(b.nextFollowUp ?? "")).slice(0, 5);
 
   useEffect(() => {
@@ -3399,6 +4003,19 @@ function Contacts({
     setImportMessage("Contact relationship updated.");
   }
 
+  async function addContactRelationship(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedContact || !relationshipDraft.toContactId || !onCreateRelationship) return;
+    await onCreateRelationship({
+      fromContactId: selectedContact.id,
+      toContactId: relationshipDraft.toContactId,
+      relationshipType: relationshipDraft.relationshipType,
+      notes: relationshipDraft.notes
+    });
+    setRelationshipDraft({ toContactId: "", relationshipType: "AGENT", notes: "" });
+    setImportMessage("Contact link added.");
+  }
+
   async function createManualContact(input: Omit<HammerContact, "id">) {
     if (databaseMode) {
       await onCreateContact?.(input);
@@ -3455,7 +4072,7 @@ function Contacts({
             <div className="data-scroll">
               <table className="data-table min-w-[940px]">
                 <thead className="text-[11px] uppercase tracking-[0.12em] text-studio-400">
-                  <tr><th className="py-2">Name</th><th>Type</th><th>Company</th><th>Email</th><th>Phone</th><th>Projects</th><th>Notes</th></tr>
+                  <tr><th className="py-2">Name</th><th>Type</th><th>Company</th><th>Email</th><th>Phone</th><th>Development Slate</th><th>Notes</th></tr>
                 </thead>
                 <tbody className="divide-y divide-white/10">
                   {filteredContacts.map((contact) => (
@@ -3525,7 +4142,7 @@ function Contacts({
                 </label>
                 <div className="mt-3">
                   <div className="mb-1 flex items-center justify-between gap-2">
-                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Assigned Projects</span>
+                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Assigned Development Slate</span>
                     <span className="text-[11px] text-studio-500">{draft.projectIds.length} selected</span>
                   </div>
                   <div className="grid max-h-40 gap-1 overflow-auto rounded-md border border-white/10 bg-white/[0.025] p-2 md:grid-cols-2">
@@ -3560,8 +4177,41 @@ function Contacts({
                   </button>
                 </div>
               </div>
+              <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
+                <SectionHeader eyebrow="Contact Network" title="Linked Contacts" />
+                <form onSubmit={addContactRelationship} className="mt-3 grid gap-2 lg:grid-cols-[1fr_150px_1fr_auto]">
+                  <select className="field" value={relationshipDraft.toContactId} onChange={(event) => setRelationshipDraft((current) => ({ ...current, toContactId: event.target.value }))}>
+                    <option value="">Choose contact</option>
+                    {contacts.filter((contact) => contact.id !== selectedContact.id).map((contact) => (
+                      <option key={contact.id} value={contact.id}>{contact.name} / {contact.company}</option>
+                    ))}
+                  </select>
+                  <select className="field" value={relationshipDraft.relationshipType} onChange={(event) => setRelationshipDraft((current) => ({ ...current, relationshipType: event.target.value as ContactRelationshipType }))}>
+                    {contactRelationshipTypes.map((relationshipType) => <option key={relationshipType} value={relationshipType}>{statusLabel(relationshipType)}</option>)}
+                  </select>
+                  <input className="field" value={relationshipDraft.notes} onChange={(event) => setRelationshipDraft((current) => ({ ...current, notes: event.target.value }))} placeholder="Optional relationship note" />
+                  <PrimaryButton icon={Plus} label="Link" />
+                </form>
+                <div className="mt-3 grid gap-2">
+                  {linkedContacts.length ? linkedContacts.map((relationship) => {
+                    const isOutbound = relationship.fromContactId === selectedContact.id;
+                    const otherContactId = isOutbound ? relationship.toContactId : relationship.fromContactId;
+                    const otherContact = contacts.find((contact) => contact.id === otherContactId);
+                    return (
+                      <div key={relationship.id} className="flex flex-col gap-2 rounded border border-white/10 bg-white/[0.025] p-2.5 md:flex-row md:items-center md:justify-between">
+                        <div>
+                          <p className="text-[13px] font-semibold text-studio-100">{otherContact?.name ?? "Missing contact"}</p>
+                          <p className="mt-0.5 text-xs text-studio-400">{isOutbound ? statusLabel(relationship.relationshipType) : `Linked as ${statusLabel(relationship.relationshipType)}`} / {otherContact?.company ?? "Unknown company"}</p>
+                          {relationship.notes ? <p className="mt-1 text-xs text-studio-300">{relationship.notes}</p> : null}
+                        </div>
+                        {onDeleteRelationship ? <DangerButton label="Remove" onClick={() => onDeleteRelationship(relationship.id)} /> : null}
+                      </div>
+                    );
+                  }) : <EmptyState label="No linked contacts yet. Add agents, managers, assistants, reps, or referral relationships here." />}
+                </div>
+              </div>
               <div className="grid gap-3 lg:grid-cols-3">
-                <RelationshipList title="Projects" empty="No linked projects." items={relationshipProjects.map((project) => ({ id: project.id, title: project.title, detail: statusLabel(project.status), href: `/projects/${project.id}` }))} />
+                <RelationshipList title="Development Slate" empty="No linked slate items." items={relationshipProjects.map((project) => ({ id: project.id, title: project.title, detail: statusLabel(project.status), href: `/projects/${project.id}` }))} />
                 <RelationshipList title="Scripts" empty="No linked scripts." items={relationshipScripts.map((document) => ({ id: document.id, title: document.title, detail: document.writerName ?? document.source ?? statusLabel(document.type), href: `/scripts/${document.id}` }))} />
                 <RelationshipList title="Follow-Ups" empty="No contact tasks yet." items={relationshipTasks.map((task) => ({ id: task.id, title: task.title, detail: `${statusLabel(task.status)} / ${task.dueDate || "No due date"}`, href: `/tasks?task=${task.id}` }))} />
               </div>
@@ -3723,7 +4373,7 @@ function ContactCreateModal({
         </label>
         <div className="mt-3">
           <div className="mb-1 flex items-center justify-between gap-2">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Assigned Projects</span>
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Assigned Development Slate</span>
             <span className="text-[11px] text-studio-500">{draft.projectIds.length} selected</span>
           </div>
           <div className="grid max-h-40 gap-1 overflow-auto rounded-md border border-white/10 bg-white/[0.025] p-2 md:grid-cols-2">
@@ -3901,7 +4551,7 @@ function Executive({
       id: task.id,
       label: "Blocked or Urgent Task",
       title: task.title,
-      detail: `${projectTitle(task.projectId)} / ${userName(task.assignedToId)} / due ${task.dueDate}`,
+      detail: `${taskContextLabel(task)} / ${userName(task.assignedToId)} / due ${task.dueDate}`,
       href: `/tasks?task=${encodeURIComponent(task.id)}`,
       status: task.priority
     })),
@@ -3960,7 +4610,7 @@ function Executive({
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="text-[13px] font-semibold text-studio-100">{task.title}</p>
-                    <p className="mt-1 text-xs text-studio-400">{projectTitle(task.projectId)} / {userName(task.assignedToId)} / due {task.dueDate}</p>
+                    <p className="mt-1 text-xs text-studio-400">{taskContextLabel(task)} / {userName(task.assignedToId)} / due {task.dueDate}</p>
                   </div>
                   <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
                     <Badge value={task.priority} />
@@ -3994,10 +4644,10 @@ function Executive({
           <div>
             <p className="font-display text-[10px] uppercase tracking-[0.16em] text-studio-400">Full Slate</p>
             <h3 className="mt-1 text-base font-semibold text-studio-100">Need the full project-by-project read?</h3>
-            <p className="mt-1 text-[13px] text-studio-300">Open Projects for the complete active project list, or switch to the Development Slate for incoming opportunities.</p>
+            <p className="mt-1 text-[13px] text-studio-300">Open Development Slate for the complete list of owned projects, or Prospects for materials we might be interested in.</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <TableLink href="/projects">Open Projects</TableLink>
+            <TableLink href="/projects">Open Development Slate</TableLink>
             <TableLink href="/tasks">Open Tasks</TableLink>
           </div>
         </div>
@@ -4337,7 +4987,7 @@ function AdminUsers({
   return (
     <div className="space-y-4">
       <Panel>
-        <SectionHeader eyebrow="Projects" title="Create Project" />
+        <SectionHeader eyebrow="Development Slate" title="Create Slate Item" />
         <form onSubmit={submitProject} className="grid gap-3 lg:grid-cols-[1fr_220px]">
           <div className="space-y-3">
             <input className="field" disabled={!canCreateProject} value={projectDraft.title} onChange={(event) => setProjectDraft({ ...projectDraft, title: event.target.value })} placeholder="Project title" />
@@ -4357,14 +5007,14 @@ function AdminUsers({
             <select className="field" disabled={!canCreateProject} value={projectDraft.ownerId} onChange={(event) => setProjectDraft({ ...projectDraft, ownerId: event.target.value })}>
               {visibleUsers.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
             </select>
-            <PrimaryButton icon={Plus} label="Create Project" />
+            <PrimaryButton icon={Plus} label="Create Slate Item" />
             {!canCreateProject ? <p className="text-xs text-studio-400">Project creation is available to Admins.</p> : null}
           </div>
         </form>
       </Panel>
 
       <Panel>
-        <SectionHeader eyebrow="Projects" title="Project Status" />
+        <SectionHeader eyebrow="Development Slate" title="Slate Status" />
         <div className="data-scroll">
           <table className="data-table min-w-[720px]">
             <thead className="text-xs uppercase tracking-[0.16em] text-studio-400"><tr><th className="py-2">Project</th><th>Current Status</th><th>Status Control</th><th>Updated</th><th>Admin</th></tr></thead>
@@ -4608,13 +5258,22 @@ function ProjectTable({ projects }: { projects: HammerProject[] }) {
   return <div className="data-scroll"><table className="data-table min-w-[620px]"><thead><tr><th>Project</th><th>Status</th><th>Owner</th><th>Updated</th></tr></thead><tbody>{projects.map((project) => <tr key={project.id} className="transition hover:bg-white/[0.035]"><td><Link className="block font-semibold text-studio-100" href={`/projects/${project.id}`}>{project.title}<p className="mt-0.5 text-xs font-normal text-studio-400">{project.genre}</p></Link></td><td><Link className="block" href={`/projects/${project.id}`}><Badge value={project.status} /></Link></td><td><Link className="block text-studio-300" href={`/projects/${project.id}`}>{userName(project.ownerId)}</Link></td><td><Link className="block text-studio-300" href={`/projects/${project.id}`}>{project.updatedAt}</Link></td></tr>)}</tbody></table></div>;
 }
 
-function TaskRows({ tasks, selectedTaskId, showAssignee = false, onUpdateTask, onDeleteTask }: { tasks: HammerTask[]; selectedTaskId?: string; showAssignee?: boolean; onUpdateTask?: (taskId: string, patch: Partial<Pick<HammerTask, "priority" | "status">>) => void; onDeleteTask?: (taskId: string) => void }) {
-  const gridClass = showAssignee ? "md:grid-cols-[1fr_130px_120px_110px_100px_72px]" : "md:grid-cols-[1fr_120px_110px_100px_72px]";
+function taskContextLabel(task: HammerTask) {
+  if (task.targetType === "GENERAL" || !task.projectId) return "General";
+  if (task.targetType === "PROJECT_LEAD") return "Prospect";
+  return projectTitle(task.projectId);
+}
+
+function TaskRows({ tasks, selectedTaskId, showAssignee = false, showContext = false, onUpdateTask, onDeleteTask }: { tasks: HammerTask[]; selectedTaskId?: string; showAssignee?: boolean; showContext?: boolean; onUpdateTask?: (taskId: string, patch: Partial<Pick<HammerTask, "priority" | "status">>) => void; onDeleteTask?: (taskId: string) => void }) {
+  const gridClass = showAssignee
+    ? showContext ? "md:grid-cols-[1fr_130px_120px_120px_110px_100px_72px]" : "md:grid-cols-[1fr_130px_120px_110px_100px_72px]"
+    : showContext ? "md:grid-cols-[1fr_120px_120px_110px_100px_72px]" : "md:grid-cols-[1fr_120px_110px_100px_72px]";
   return (
     <div className="data-scroll-list grid gap-2">
       <div className={cn("hidden px-2.5 text-[11px] uppercase tracking-[0.12em] text-studio-400 md:grid", gridClass)}>
         <span>Task</span>
         {showAssignee ? <span>Assignee</span> : null}
+        {showContext ? <span>Area</span> : null}
         <span>Priority</span>
         <span>Progress</span>
         <span>Due</span>
@@ -4634,6 +5293,7 @@ function TaskRows({ tasks, selectedTaskId, showAssignee = false, onUpdateTask, o
             <p className="mt-0.5 text-xs text-studio-300">{task.description}</p>
           </div>
           {showAssignee ? <p className="text-xs font-semibold text-studio-300">{userName(task.assignedToId)}</p> : null}
+          {showContext ? <p className="text-xs text-studio-300">{taskContextLabel(task)}</p> : null}
           {onUpdateTask ? (
             <TaskInlineSelect label="Priority" value={task.priority} options={["LOW", "MEDIUM", "HIGH", "URGENT"]} onChange={(value) => onUpdateTask(task.id, { priority: value as TaskPriority })} />
           ) : <Badge value={task.priority} />}
@@ -4702,9 +5362,98 @@ function EntityPanel({ projectId }: { projectId: string }) {
   return <Panel><SectionHeader eyebrow="Editable" title="Characters, Locations, Props, Actions" />{entities.map((entity) => <div key={entity.id} className="mb-2 grid gap-3 rounded-lg border border-white/10 bg-white/[0.03] p-3 md:grid-cols-[160px_1fr]"><input className="field" defaultValue={entity.name} /><input className="field" defaultValue={`${entity.type}: ${entity.description}`} /></div>)}</Panel>;
 }
 
-function CommentsPanel({ targetId }: { targetId: string }) {
-  const comments = hammerComments.filter((comment) => comment.targetId === targetId);
-  return <Panel><SectionHeader eyebrow="Notes" title="Comments" />{comments.length ? comments.map((comment) => <div key={comment.id} className="mb-2 rounded border border-white/10 bg-white/[0.03] p-2.5 text-[13px] text-studio-300"><p>{comment.body}</p><p className="mt-1.5 text-[11px] text-studio-500">{userName(comment.createdById)} / {comment.visibility}</p></div>) : <EmptyState label="No comments yet." />}<textarea className="field mt-2.5 min-h-16" placeholder="Add a comment" /></Panel>;
+function CommentsPanel({
+  eyebrow = "Notes",
+  title = "Notes",
+  targetId,
+  targetIds,
+  targetType = "DOCUMENT_VERSION",
+  projectId,
+  versionNote,
+  comments = hammerComments,
+  currentUser,
+  onCreateComment,
+  emptyLabel = "No notes yet.",
+  placeholder = "Add a note",
+  saveLabel = "Save Note"
+}: {
+  eyebrow?: string;
+  title?: string;
+  targetId: string;
+  targetIds?: string[];
+  targetType?: string;
+  projectId?: string;
+  versionNote?: string;
+  comments?: HammerComment[];
+  currentUser?: HammerUser;
+  onCreateComment?: (input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string }) => Promise<void>;
+  emptyLabel?: string;
+  placeholder?: string;
+  saveLabel?: string;
+}) {
+  const [body, setBody] = useState("");
+  const [visibility, setVisibility] = useState<HammerComment["visibility"]>("PROJECT_TEAM");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const visibleTargetIds = targetIds?.length ? targetIds : [targetId];
+  const targetComments = comments
+    .filter((comment) => visibleTargetIds.includes(comment.targetId))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  async function saveNote() {
+    if (!onCreateComment || !body.trim()) {
+      setMessage(body.trim() ? "Notes cannot be saved from this view yet." : "Write a note before saving.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      await onCreateComment({ targetType, targetId, projectId, body: body.trim(), visibility });
+      setBody("");
+      setMessage("Note saved.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not save note.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Panel>
+      <SectionHeader eyebrow={eyebrow} title={title} />
+      <div className="space-y-2">
+        {versionNote?.trim() ? (
+          <div className="rounded border border-emerald-400/20 bg-emerald-400/5 p-2.5 text-[13px] text-studio-200">
+            <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-emerald-300">Version Upload Note</p>
+            <p>{versionNote}</p>
+          </div>
+        ) : null}
+        {targetComments.length ? targetComments.map((comment) => (
+          <div key={comment.id} className="rounded border border-white/10 bg-white/[0.03] p-2.5 text-[13px] text-studio-300">
+            <p>{comment.body}</p>
+            <p className="mt-1.5 text-[11px] text-studio-500">{userName(comment.createdById)} / {comment.visibility} / {comment.createdAt}</p>
+          </div>
+        )) : versionNote?.trim() ? null : <EmptyState label={emptyLabel} />}
+      </div>
+      <div className="mt-3 grid gap-2">
+        <textarea className="field min-h-24" value={body} onChange={(event) => setBody(event.target.value)} placeholder={placeholder} />
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <select className="field sm:w-52" value={visibility} onChange={(event) => setVisibility(event.target.value as HammerComment["visibility"])}>
+            <option value="PROJECT_TEAM">Project Team</option>
+            <option value="INTERNAL">Internal</option>
+            <option value="EXECUTIVE_ONLY">Executive Only</option>
+          </select>
+          <div className="flex items-center gap-2">
+            {message ? <p className="text-xs text-studio-300">{message}</p> : null}
+            <button type="button" disabled={busy || !currentUser} onClick={saveNote} className="inline-flex items-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">
+              <CheckCircle2 className="h-4 w-4" />
+              {saveLabel}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Panel>
+  );
 }
 
 function SmallStat({ label, value }: { label: string; value: string }) {
@@ -4815,11 +5564,11 @@ function countBy(values: string[]) {
 }
 
 function canViewAllProjectTasks(role?: string) {
-  return role === "ADMIN" || role === "PRODUCER" || role === "EXECUTIVE";
+  return isManagerRole(role);
 }
 
 function canManageScriptLibrary(role?: string) {
-  return role === "ADMIN" || role === "PRODUCER" || role === "EXECUTIVE";
+  return isManagerRole(role);
 }
 
 const appRoleOptions: { value: AppRole; label: string }[] = [
@@ -4844,7 +5593,7 @@ function appRoleForHammerRole(role: HammerUser["role"]): AppRole {
 }
 
 function canViewAllProjects(role?: string) {
-  return role === "ADMIN" || role === "EXECUTIVE" || role === "PRODUCER";
+  return isManagerRole(role);
 }
 
 function canAccessScriptDocument(user: ReturnType<typeof hammerUserByEmail>, document: HammerDocument) {
@@ -4854,7 +5603,12 @@ function canAccessScriptDocument(user: ReturnType<typeof hammerUserByEmail>, doc
 }
 
 function canViewContacts(role?: string) {
-  return role === "ADMIN" || role === "PRODUCER" || role === "EXECUTIVE";
+  return isManagerRole(role);
+}
+
+function isManagerRole(role?: string) {
+  const normalizedRole = role?.toUpperCase();
+  return normalizedRole === "ADMIN" || normalizedRole === "PRODUCER" || normalizedRole === "EXECUTIVE" || normalizedRole === "EXEC";
 }
 
 function normalizeScriptSection(section?: string): ScriptLibrarySection | undefined {
@@ -5210,12 +5964,14 @@ const demoReferenceImages: ProjectReferenceImage[] = [
 function titleForView(view: HammerView, context: { project: HammerProject; document: typeof hammerDocuments[number]; asset: typeof hammerAssets[number] }) {
   const titles: Record<HammerView, string> = {
     dashboard: "My Dashboard",
-    projects: "Projects",
+    projects: "Development Slate",
+    prospects: "Prospects",
+    collections: "Collections",
     "project-new": "New Project",
     "project-detail": context.project.title,
     "project-documents": context.project.title,
     "project-assets": context.project.title,
-    scripts: "Script Library",
+    scripts: "Scripts in Context",
     "script-detail": context.document.title,
     "script-versions": "Version History",
     "script-diff": "Version Diff",
@@ -5240,7 +5996,7 @@ type BreadcrumbItem = {
 function PageBreadcrumbs({ view, project, document, asset, accessDenied = false }: { view: HammerView; project: HammerProject; document: typeof hammerDocuments[number]; asset: typeof hammerAssets[number]; accessDenied?: boolean }) {
   const router = useRouter();
   const [hasPageHistory, setHasPageHistory] = useState(false);
-  const breadcrumbs = accessDenied ? [{ label: "Scripts", href: "/scripts" }, { label: "Access Required" }] : breadcrumbsForView(view, { project, document, asset });
+  const breadcrumbs = accessDenied ? [{ label: "Development Slate", href: "/projects" }, { label: "Access Required" }] : breadcrumbsForView(view, { project, document, asset });
   const backHref = backHrefForView(view, { project, document, asset });
 
   useEffect(() => {
@@ -5290,10 +6046,13 @@ function PageBreadcrumbs({ view, project, document, asset, accessDenied = false 
 }
 
 function breadcrumbsForView(view: HammerView, context: { project: HammerProject; document: typeof hammerDocuments[number]; asset: typeof hammerAssets[number] }): BreadcrumbItem[] {
-  const scriptTrail = [{ label: "Scripts", href: "/scripts" }, { label: context.document.title, href: `/scripts/${context.document.id}` }];
-  const projectTrail = [{ label: "Projects", href: "/projects" }, { label: context.project.title, href: `/projects/${context.project.id}` }];
+  const scriptTrail = context.document.projectId
+    ? [{ label: "Development Slate", href: "/projects" }, { label: projectTitle(context.document.projectId), href: `/projects/${context.document.projectId}/documents` }, { label: context.document.title, href: `/scripts/${context.document.id}` }]
+    : [{ label: "Prospects", href: "/prospects" }, { label: context.document.title, href: `/scripts/${context.document.id}` }];
+  const projectTrail = [{ label: "Development Slate", href: "/projects" }, { label: context.project.title, href: `/projects/${context.project.id}` }];
 
   if (view === "script-detail") return scriptTrail;
+  if (view === "collections") return [{ label: "Collections" }];
   if (view === "script-versions") return [...scriptTrail, { label: "Versions" }];
   if (view === "script-diff") return [...scriptTrail, { label: "Diff" }];
   if (view === "script-breakdown") return [...scriptTrail, { label: "Breakdown" }];
@@ -5310,6 +6069,7 @@ function breadcrumbsForView(view: HammerView, context: { project: HammerProject;
 function backHrefForView(view: HammerView, context: { project: HammerProject; document: typeof hammerDocuments[number]; asset: typeof hammerAssets[number] }) {
   if (["script-versions", "script-diff", "script-breakdown"].includes(view)) return `/scripts/${context.document.id}`;
   if (view === "script-detail") return "/scripts";
+  if (view === "collections") return "/dashboard";
   if (["project-documents", "project-assets"].includes(view)) return `/projects/${context.project.id}`;
   if (view === "project-detail") return "/projects";
   if (view === "asset-detail") return "/assets";

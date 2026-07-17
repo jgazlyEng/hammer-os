@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import type { AssetStatus, AssetType, ContactStatus, ContactType, DocumentType, DocumentVersionStatus, Prisma, ProjectLead, ProjectStatus, ProjectStage, SupportingDocumentType, TaskPriority, TaskStatus, TaskTargetType, UserRole } from "@prisma/client";
+import type { AssetStatus, AssetType, CommentTargetType, CommentVisibility, ContactRelationshipType, ContactStatus, ContactType, DocumentType, DocumentVersionStatus, Prisma, ProjectStatus, ProjectStage, Prospect, SupportingDocumentType, TaskPriority, TaskStatus, TaskTargetType, UserRole } from "@prisma/client";
 import { forbidden, hashPassword, isDatabaseConfigured, requireUser, verifyPassword } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
@@ -18,17 +18,27 @@ export async function GET(request: Request) {
     const projectWhere = canViewAllProjects(auth.user.appRole) ? { deletedAt: null } : { deletedAt: null, memberships: { some: { userId: auth.user.id } } };
     const documentWhere = canSeeLibrary ? { deletedAt: null } : { deletedAt: null, projectId: { in: projectIds } };
 
-    const [projects, projectLeads, documents, versions, supportingDocuments, assets, tasks, contacts, users, approvals] = await Promise.all([
+    const [projects, projectLeads, documents, versions, supportingDocuments, assets, tasks, contacts, contactRelationships, users, approvals, comments, scriptCollections, scriptCollectionItems] = await Promise.all([
       prisma.project.findMany({ where: projectWhere, orderBy: { updatedAt: "desc" } }),
-      prisma.projectLead.findMany({ where: { deletedAt: null }, orderBy: [{ promotedProjectId: "asc" }, { updatedAt: "desc" }] }),
+      prisma.prospect.findMany({ where: { deletedAt: null }, orderBy: [{ promotedProjectId: "asc" }, { updatedAt: "desc" }] }),
       prisma.document.findMany({ where: documentWhere, orderBy: { updatedAt: "desc" } }),
       prisma.documentVersion.findMany({ where: { document: documentWhere }, orderBy: { createdAt: "desc" } }),
       prisma.supportingDocument.findMany({ where: { deletedAt: null, scriptDocument: documentWhere }, orderBy: { createdAt: "desc" } }),
       prisma.asset.findMany({ where: canSeeLibrary ? { deletedAt: null } : { deletedAt: null, projectId: { in: projectIds } }, orderBy: { updatedAt: "desc" } }),
       prisma.task.findMany({ where: canViewAllTasks(auth.user.appRole) ? { deletedAt: null } : { deletedAt: null, assignedToId: auth.user.id }, orderBy: { updatedAt: "desc" } }),
       prisma.contact.findMany({ where: { deletedAt: null }, orderBy: { updatedAt: "desc" } }),
+      prisma.contactRelationship.findMany({ orderBy: { createdAt: "desc" } }),
       prisma.user.findMany({ orderBy: { name: "asc" } }),
-      prisma.hammerApproval.findMany({ where: canSeeLibrary ? undefined : { projectId: { in: projectIds } }, orderBy: { createdAt: "desc" } })
+      prisma.hammerApproval.findMany({ where: canSeeLibrary ? undefined : { projectId: { in: projectIds } }, orderBy: { createdAt: "desc" } }),
+      prisma.comment.findMany({ where: canSeeLibrary ? undefined : { projectId: { in: projectIds } }, orderBy: { createdAt: "desc" } }),
+      prisma.scriptCollection.findMany({
+        where: canSeeLibrary ? undefined : { items: { some: { document: documentWhere } } },
+        orderBy: { updatedAt: "desc" }
+      }),
+      prisma.scriptCollectionItem.findMany({
+        where: canSeeLibrary ? undefined : { document: documentWhere },
+        orderBy: [{ sortOrder: "asc" }, { addedAt: "desc" }]
+      })
     ]);
 
     return NextResponse.json({
@@ -41,8 +51,12 @@ export async function GET(request: Request) {
       assets: assets.map(toAsset),
       tasks: tasks.map(toTask),
       contacts: contacts.map(toContact),
+      contactRelationships: contactRelationships.map(toContactRelationship),
       users: users.map(toUser),
-      approvals: approvals.map(toApproval)
+      approvals: approvals.map(toApproval),
+      comments: comments.map(toComment),
+      scriptCollections: scriptCollections.map(toScriptCollection),
+      scriptCollectionItems: scriptCollectionItems.map(toScriptCollectionItem)
     });
   } catch (error) {
     return NextResponse.json({ error: "Database unavailable.", detail: error instanceof Error ? error.message : undefined }, { status: 503 });
@@ -82,51 +96,51 @@ export async function POST(request: Request) {
         })) });
 
       case "updateProjectLead":
-        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
-        return NextResponse.json({ projectLead: toProjectLead(await prisma.projectLead.update({
+        if (!canManageLibrary(auth.user.appRole) && !canUpdateProjectLeadBasicFields(body)) return NextResponse.json(forbidden(), { status: 403 });
+        return NextResponse.json({ projectLead: toProjectLead(await prisma.prospect.update({
           where: { id: stringField(body.leadId) },
-          data: projectLeadPatch(body)
+          data: canManageLibrary(auth.user.appRole) ? projectLeadPatch(body) : projectLeadBasicPatch(body)
         })) });
 
       case "createProjectLead":
         if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
-        return NextResponse.json({ projectLead: toProjectLead(await prisma.projectLead.create({
+        return NextResponse.json({ projectLead: toProjectLead(await prisma.prospect.create({
           data: projectLeadCreate(body)
         })) }, { status: 201 });
 
       case "importProjectLeads": {
         if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
         const leads = Array.isArray(body.leads) ? body.leads as Record<string, unknown>[] : [];
-        const existingIds = new Set((await prisma.projectLead.findMany({
+        const existingIds = new Set((await prisma.prospect.findMany({
           select: { id: true, externalId: true }
         })).flatMap((lead) => [lead.id, lead.externalId].filter((value): value is string => Boolean(value))));
         const newLeads = leads
           .map((lead) => projectLeadCreate(lead))
           .filter((lead) => !(lead.id && existingIds.has(lead.id)) && !(lead.externalId && existingIds.has(lead.externalId)));
         if (!newLeads.length) return NextResponse.json({ projectLeads: [], skipped: leads.length });
-        const created = await prisma.$transaction(newLeads.map((lead) => prisma.projectLead.create({ data: lead })));
+        const created = await prisma.$transaction(newLeads.map((lead) => prisma.prospect.create({ data: lead })));
         return NextResponse.json({ projectLeads: created.map(toProjectLead), skipped: leads.length - created.length });
       }
 
       case "promoteProjectLead": {
         if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
-        const lead = await prisma.projectLead.findUnique({ where: { id: stringField(body.leadId) } });
-        if (!lead) return NextResponse.json({ error: "Slate item not found." }, { status: 404 });
+        const lead = await prisma.prospect.findUnique({ where: { id: stringField(body.leadId) } });
+        if (!lead) return NextResponse.json({ error: "Prospect not found." }, { status: 404 });
         if (lead.promotedProjectId) return NextResponse.json({ project: toProject(await prisma.project.findUniqueOrThrow({ where: { id: lead.promotedProjectId } })), projectLead: toProjectLead(lead) });
         const project = await prisma.project.create({
           data: {
             title: lead.title,
-            logline: lead.logline || "Promoted from development slate.",
+            logline: lead.logline || "Promoted from prospects.",
             type: lead.format || lead.adaptationFormat || "Feature",
             genre: lead.genre || "Unassigned",
             status: "IDEA",
             hammerStage: "DEVELOPMENT",
             ownerId: auth.user.id,
             stage: "DEVELOPMENT",
-            auditLogs: { create: audit(auth.user.id, auth.user.email, "project_lead.promoted", "ProjectLead", lead.id, { title: lead.title }) }
+            auditLogs: { create: audit(auth.user.id, auth.user.email, "prospect.promoted", "Prospect", lead.id, { title: lead.title }) }
           }
         });
-        const projectLead = await prisma.projectLead.update({ where: { id: lead.id }, data: { promotedProjectId: project.id, nextActionStatus: "Promoted to Active Project" } });
+        const projectLead = await prisma.prospect.update({ where: { id: lead.id }, data: { promotedProjectId: project.id, nextActionStatus: "Promoted to Development Slate" } });
         return NextResponse.json({ project: toProject(project), projectLead: toProjectLead(projectLead) });
       }
 
@@ -134,10 +148,62 @@ export async function POST(request: Request) {
         return NextResponse.json(await uploadDocumentVersion(auth.user.id, body));
 
       case "updateDocumentStatus":
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
         return NextResponse.json({ version: toVersion(await prisma.documentVersion.update({
           where: { id: stringField(body.versionId) },
           data: { status: scriptStatusField(body.status) }
         })) });
+
+      case "updateDocumentVersionNotes":
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        return NextResponse.json({ version: toVersion(await prisma.documentVersion.update({
+          where: { id: stringField(body.versionId) },
+          data: { notes: stringField(body.notes) }
+        })) });
+
+      case "createComment":
+        return NextResponse.json({ comment: toComment(await prisma.comment.create({
+          data: {
+            projectId: optionalString(body.projectId),
+            targetType: commentTargetTypeField(body.targetType),
+            targetId: stringField(body.targetId),
+            body: stringField(body.body),
+            visibility: commentVisibilityField(body.visibility),
+            createdById: auth.user.id
+          }
+        })) }, { status: 201 });
+
+      case "createScriptCollection":
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        return NextResponse.json({ scriptCollection: toScriptCollection(await prisma.scriptCollection.create({
+          data: {
+            name: stringField(body.name) || "Untitled Collection",
+            description: optionalString(body.description),
+            visibility: commentVisibilityField(body.visibility),
+            ownerId: auth.user.id
+          }
+        })) }, { status: 201 });
+
+      case "addDocumentToCollection": {
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        const collectionId = stringField(body.collectionId);
+        const currentCount = await prisma.scriptCollectionItem.count({ where: { collectionId } });
+        return NextResponse.json({ scriptCollectionItem: toScriptCollectionItem(await prisma.scriptCollectionItem.upsert({
+          where: { collectionId_documentId: { collectionId, documentId: stringField(body.documentId) } },
+          update: { notes: body.notes !== undefined ? optionalString(body.notes) : undefined },
+          create: {
+            collectionId,
+            documentId: stringField(body.documentId),
+            sortOrder: currentCount + 1,
+            notes: optionalString(body.notes)
+          }
+        })) });
+      }
+
+      case "removeDocumentFromCollection":
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        await prisma.scriptCollectionItem.delete({ where: { id: stringField(body.collectionItemId) } });
+        return NextResponse.json({ ok: true });
 
       case "assignDocumentToProject":
         if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
@@ -160,6 +226,7 @@ export async function POST(request: Request) {
         })) });
 
       case "deleteDocument":
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
         return NextResponse.json({ document: toDocument(await prisma.document.update({
           where: { id: stringField(body.documentId) },
           data: { deletedAt: new Date() }
@@ -208,7 +275,7 @@ export async function POST(request: Request) {
       case "createTask":
         return NextResponse.json({ task: toTask(await prisma.task.create({
           data: {
-            projectId: stringField(body.projectId),
+            projectId: optionalString(body.projectId),
             title: stringField(body.title) || "Untitled assignment",
             description: optionalString(body.description),
             assignedToId: optionalString(body.assignedToId),
@@ -268,8 +335,7 @@ export async function POST(request: Request) {
           where: { id: userId },
           data: {
             appRole: nextAppRole,
-            role: userRoleForAppRole(nextAppRole),
-            auditLogs: { create: audit(auth.user.id, auth.user.email, "user.role_changed", "User", userId, { appRole: nextAppRole }) }
+            role: userRoleForAppRole(nextAppRole)
           }
         })) });
       }
@@ -337,6 +403,30 @@ export async function POST(request: Request) {
           data: { deletedAt: new Date() }
         })) });
 
+      case "createContactRelationship":
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        return NextResponse.json({ contactRelationship: toContactRelationship(await prisma.contactRelationship.upsert({
+          where: {
+            fromContactId_toContactId_relationshipType: {
+              fromContactId: stringField(body.fromContactId),
+              toContactId: stringField(body.toContactId),
+              relationshipType: contactRelationshipTypeField(body.relationshipType)
+            }
+          },
+          update: { notes: body.notes !== undefined ? optionalString(body.notes) : undefined },
+          create: {
+            fromContactId: stringField(body.fromContactId),
+            toContactId: stringField(body.toContactId),
+            relationshipType: contactRelationshipTypeField(body.relationshipType),
+            notes: optionalString(body.notes)
+          }
+        })) });
+
+      case "deleteContactRelationship":
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        await prisma.contactRelationship.delete({ where: { id: stringField(body.relationshipId) } });
+        return NextResponse.json({ ok: true });
+
       default:
         return NextResponse.json({ error: "Unknown GreenLight action." }, { status: 400 });
     }
@@ -395,7 +485,7 @@ function toProject(project: { id: string; title: string; logline: string | null;
   return { id: project.id, title: project.title, logline: project.logline ?? "", type: project.type ?? "Feature", genre: project.genre ?? "", status: project.status, stage: project.hammerStage, ownerId: project.ownerId ?? "", updatedAt: dateString(project.updatedAt) };
 }
 
-function toProjectLead(lead: ProjectLead) {
+function toProjectLead(lead: Prospect) {
   return {
     id: lead.id,
     title: lead.title,
@@ -463,8 +553,8 @@ function toAsset(asset: { id: string; projectId: string; title: string; descript
   return { id: asset.id, projectId: asset.projectId, title: asset.title, description: asset.description ?? "", assetType: asset.assetType, fileName: asset.fileName, fileType: asset.fileType, fileSize: asset.fileSize, storagePath: asset.storagePath, thumbnailPath: asset.thumbnailPath ?? undefined, status: asset.status, uploadedById: asset.uploadedById ?? "", imageUrl: asset.dataUrl ?? undefined };
 }
 
-function toTask(task: { id: string; projectId: string; title: string; description: string | null; assignedToId: string | null; createdById: string | null; dueDate: Date | null; priority: TaskPriority; status: TaskStatus; targetType: TaskTargetType | null; targetId: string | null }) {
-  return { id: task.id, projectId: task.projectId, title: task.title, description: task.description ?? "", assignedToId: task.assignedToId ?? "", createdById: task.createdById ?? "", dueDate: task.dueDate ? dateString(task.dueDate) : "", priority: task.priority, status: task.status, targetType: task.targetType ?? "PROJECT", targetId: task.targetId ?? task.projectId };
+function toTask(task: { id: string; projectId: string | null; title: string; description: string | null; assignedToId: string | null; createdById: string | null; dueDate: Date | null; priority: TaskPriority; status: TaskStatus; targetType: TaskTargetType | null; targetId: string | null }) {
+  return { id: task.id, projectId: task.projectId ?? "", title: task.title, description: task.description ?? "", assignedToId: task.assignedToId ?? "", createdById: task.createdById ?? "", dueDate: task.dueDate ? dateString(task.dueDate) : "", priority: task.priority, status: task.status, targetType: task.targetType ?? "GENERAL", targetId: task.targetId ?? task.projectId ?? "" };
 }
 
 function toContact(contact: { id: string; name: string; company: string | null; type: ContactType; title: string | null; email: string | null; phone: string | null; location: string | null; website: string | null; status: ContactStatus; ownerId: string | null; tags: string[]; lastContacted: Date | null; nextFollowUp: Date | null; projectIds: string[]; notes: string | null }) {
@@ -488,24 +578,49 @@ function toContact(contact: { id: string; name: string; company: string | null; 
   };
 }
 
+function toContactRelationship(relationship: { id: string; fromContactId: string; toContactId: string; relationshipType: ContactRelationshipType; notes: string | null; createdAt: Date }) {
+  return { id: relationship.id, fromContactId: relationship.fromContactId, toContactId: relationship.toContactId, relationshipType: relationship.relationshipType, notes: relationship.notes ?? undefined, createdAt: dateString(relationship.createdAt) };
+}
+
 function toApproval(approval: { id: string; projectId: string | null; targetType: string; targetId: string; requestedById: string | null; reviewerId: string | null; status: string; decisionNotes: string | null; createdAt: Date; decidedAt: Date | null }) {
   return { id: approval.id, projectId: approval.projectId ?? "", targetType: approval.targetType, targetId: approval.targetId, requestedById: approval.requestedById ?? "", reviewerId: approval.reviewerId ?? "", status: approval.status, decisionNotes: approval.decisionNotes ?? undefined, createdAt: dateString(approval.createdAt), decidedAt: approval.decidedAt ? dateString(approval.decidedAt) : undefined };
 }
 
+function toComment(comment: { id: string; targetType: CommentTargetType; targetId: string; body: string; visibility: CommentVisibility; status: string; createdById: string | null; createdAt: Date }) {
+  return { id: comment.id, targetType: comment.targetType, targetId: comment.targetId, body: comment.body, visibility: comment.visibility, status: comment.status, createdById: comment.createdById ?? "", createdAt: dateString(comment.createdAt) };
+}
+
+function toScriptCollection(collection: { id: string; name: string; description: string | null; ownerId: string | null; status: string; visibility: CommentVisibility; createdAt: Date; updatedAt: Date }) {
+  return { id: collection.id, name: collection.name, description: collection.description ?? undefined, ownerId: collection.ownerId ?? undefined, status: collection.status, visibility: collection.visibility, createdAt: dateString(collection.createdAt), updatedAt: dateString(collection.updatedAt) };
+}
+
+function toScriptCollectionItem(item: { id: string; collectionId: string; documentId: string; sortOrder: number; notes: string | null; addedAt: Date }) {
+  return { id: item.id, collectionId: item.collectionId, documentId: item.documentId, sortOrder: item.sortOrder, notes: item.notes ?? undefined, addedAt: dateString(item.addedAt) };
+}
+
 function canManageLibrary(role: string) {
-  return role === "admin" || role === "producer" || role === "executive";
+  const normalizedRole = role.toLowerCase();
+  return normalizedRole === "admin" || normalizedRole === "producer" || normalizedRole === "executive" || normalizedRole === "exec";
+}
+
+function canUpdateProjectLeadBasicFields(body: ActionBody) {
+  const allowed = new Set(["action", "leadId", "title", "creator", "urgencyLabel", "genre", "priorityScore"]);
+  return Object.keys(body).every((key) => allowed.has(key));
 }
 
 function canViewAllProjects(role: string) {
-  return role === "admin" || role === "executive" || role === "producer";
+  const normalizedRole = role.toLowerCase();
+  return normalizedRole === "admin" || normalizedRole === "executive" || normalizedRole === "exec" || normalizedRole === "producer";
 }
 
 function canViewAllTasks(role: string) {
-  return role === "admin" || role === "producer" || role === "executive";
+  const normalizedRole = role.toLowerCase();
+  return normalizedRole === "admin" || normalizedRole === "producer" || normalizedRole === "executive" || normalizedRole === "exec";
 }
 
 function canManageProject(role: string, projectRoles: Record<string, string>, projectId: string) {
-  return role === "admin" || projectRoles[projectId] === "owner" || projectRoles[projectId] === "producer";
+  const normalizedRole = role.toLowerCase();
+  return normalizedRole === "admin" || projectRoles[projectId] === "owner" || projectRoles[projectId] === "producer";
 }
 
 function audit(actorUserId: string, actor: string, action: string, entityType: string, entityId?: string, detailJson?: unknown) {
@@ -525,6 +640,24 @@ function optionalString(value: unknown) {
   return string || undefined;
 }
 
+function contactRelationshipTypeField(value: unknown): ContactRelationshipType {
+  const relationshipType = stringField(value).toUpperCase();
+  if (["AGENT", "MANAGER", "REPRESENTS", "WORKS_WITH", "ASSISTANT", "LEGAL_REP", "REFERRED_BY", "OTHER"].includes(relationshipType)) return relationshipType as ContactRelationshipType;
+  return "OTHER";
+}
+
+function commentTargetTypeField(value: unknown): CommentTargetType {
+  const targetType = stringField(value).toUpperCase();
+  if (["PROJECT", "DOCUMENT", "DOCUMENT_VERSION", "SCENE", "ENTITY", "ASSET", "TASK", "APPROVAL"].includes(targetType)) return targetType as CommentTargetType;
+  return "DOCUMENT_VERSION";
+}
+
+function commentVisibilityField(value: unknown): CommentVisibility {
+  const visibility = stringField(value).toUpperCase();
+  if (visibility === "INTERNAL" || visibility === "PROJECT_TEAM" || visibility === "EXECUTIVE_ONLY") return visibility;
+  return "PROJECT_TEAM";
+}
+
 function numberField(value: unknown) {
   const number = Number(value);
   return Number.isFinite(number) ? number : 0;
@@ -536,7 +669,7 @@ function optionalNumber(value: unknown) {
   return Number.isFinite(number) ? number : undefined;
 }
 
-function projectLeadPatch(body: ActionBody): Prisma.ProjectLeadUpdateInput {
+function projectLeadPatch(body: ActionBody): Prisma.ProspectUpdateInput {
   return {
     title: body.title !== undefined ? stringField(body.title) || "Untitled Slate Item" : undefined,
     logline: body.logline !== undefined ? optionalString(body.logline) : undefined,
@@ -559,7 +692,17 @@ function projectLeadPatch(body: ActionBody): Prisma.ProjectLeadUpdateInput {
   };
 }
 
-function projectLeadCreate(body: Record<string, unknown>): Prisma.ProjectLeadCreateInput {
+function projectLeadBasicPatch(body: ActionBody): Prisma.ProspectUpdateInput {
+  return {
+    title: body.title !== undefined ? stringField(body.title) || "Untitled Slate Item" : undefined,
+    creator: body.creator !== undefined ? optionalString(body.creator) : undefined,
+    urgencyLabel: body.urgencyLabel !== undefined ? optionalString(body.urgencyLabel) : undefined,
+    genre: body.genre !== undefined ? optionalString(body.genre) : undefined,
+    priorityScore: body.priorityScore !== undefined ? optionalNumber(body.priorityScore) : undefined
+  };
+}
+
+function projectLeadCreate(body: Record<string, unknown>): Prisma.ProspectCreateInput {
   const externalId = optionalString(body.externalId);
   return {
     id: optionalString(body.id) ?? externalId ?? undefined,
@@ -655,7 +798,7 @@ const taskStatuses: TaskStatus[] = ["TODO", "IN_PROGRESS", "ON_HOLD", "BLOCKED",
 function taskTargetField(value: unknown): TaskTargetType {
   return taskTargets.includes(value as TaskTargetType) ? value as TaskTargetType : "PROJECT";
 }
-const taskTargets: TaskTargetType[] = ["PROJECT", "PROJECT_LEAD", "DOCUMENT", "DOCUMENT_VERSION", "SCENE", "ENTITY", "ASSET", "APPROVAL"];
+const taskTargets: TaskTargetType[] = ["GENERAL", "PROJECT", "PROJECT_LEAD", "DOCUMENT", "DOCUMENT_VERSION", "SCENE", "ENTITY", "ASSET", "APPROVAL", "CONTACT"];
 
 function appRoleField(value: unknown) {
   return value === "admin" || value === "executive" || value === "producer" || value === "department_lead" ? value : "producer";
