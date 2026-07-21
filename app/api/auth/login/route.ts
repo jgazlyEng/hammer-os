@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { authenticateWithPassword, createSessionCookie, SESSION_COOKIE_NAME, shouldUseSecureCookies } from "@/lib/auth";
+import { authenticateWithPassword, createSessionCookie, SESSION_COOKIE_NAME, SESSION_MAX_AGE_SECONDS, shouldUseSecureCookies } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -23,7 +23,7 @@ export async function POST(request: Request) {
     sameSite: "lax",
     secure: shouldUseSecureCookies(),
     path: "/",
-    maxAge: 60 * 60 * 12
+    maxAge: SESSION_MAX_AGE_SECONDS
   });
 
   return response;

@@ -16,6 +16,7 @@ export interface AuthenticatedUser {
 type UserWithMemberships = Prisma.UserGetPayload<{ include: { memberships: true } }>;
 
 export const SESSION_COOKIE_NAME = "hammer_session";
+export const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
 
 const demoUser: AuthenticatedUser = {
   id: "demo-admin",
@@ -239,5 +240,5 @@ function sessionSecret() {
 }
 
 function sessionTtlMs() {
-  return 1000 * 60 * 60 * 12;
+  return SESSION_MAX_AGE_SECONDS * 1000;
 }

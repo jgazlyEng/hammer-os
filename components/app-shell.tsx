@@ -42,6 +42,7 @@ const adminNavItem = { href: "/admin/users", label: "Admin", icon: Settings2 };
 const accountNavItem = { href: "/account", label: "Account", icon: UserRound };
 const HAMMER_THEME_STORAGE_KEY = "hammer-os-theme";
 type ThemeMode = "dark" | "light";
+type AuthMode = "loading" | "database" | "demo";
 type LocalUserState = Record<string, { inactive?: boolean; deleted?: boolean }>;
 
 const emptyShellProject: HammerProject = {
@@ -92,31 +93,33 @@ function hammerRoleForShellRole(role?: string): HammerUser["role"] | undefined {
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const [projectId, setProjectId] = useState(hammerProjects[0]?.id ?? "");
+  const [projectId, setProjectId] = useState("");
   const [projectPreferenceLoaded, setProjectPreferenceLoaded] = useState(false);
   const [localProjects, setLocalProjects] = useState<HammerProject[]>([]);
   const [localDocuments, setLocalDocuments] = useState<HammerDocument[]>([]);
   const [documentProjectOverrides, setDocumentProjectOverrides] = useState<Record<string, string | null>>({});
   const [localUserStates, setLocalUserStates] = useState<LocalUserState>({});
   const [user, setUser] = useState<ShellUser | null>(null);
-  const [authMode, setAuthMode] = useState<"database" | "demo">("demo");
+  const [authMode, setAuthMode] = useState<AuthMode>("loading");
   const [theme, setTheme] = useState<ThemeMode>("dark");
-  const currentUser = shellUserToHammerUser(user);
+  const currentUser = useMemo(() => user ? shellUserToHammerUser(user) : null, [user]);
   const safeLocalProjects = useMemo(() => localProjects.filter(isValidProject), [localProjects]);
-  const allProjects = useMemo(() => [...safeLocalProjects, ...hammerProjects.filter((project) => !safeLocalProjects.some((item) => item.id === project.id))], [safeLocalProjects]);
-  const assignedProjects = assignedProjectsForUser(currentUser.id);
-  const availableProjects = canViewAllProjects(currentUser.role)
-    ? allProjects
-    : uniqueProjects([...assignedProjects, ...safeLocalProjects.filter((project) => project.ownerId === currentUser.id)]);
+  const allProjects = useMemo(() => authMode === "demo" ? [...safeLocalProjects, ...hammerProjects.filter((project) => !safeLocalProjects.some((item) => item.id === project.id))] : [], [authMode, safeLocalProjects]);
+  const assignedProjects = useMemo(() => currentUser ? assignedProjectsForUser(currentUser.id) : [], [currentUser]);
+  const availableProjects = useMemo(() => {
+    if (!currentUser) return [];
+    if (canViewAllProjects(currentUser.role)) return allProjects;
+    return uniqueProjects([...assignedProjects, ...safeLocalProjects.filter((project) => project.ownerId === currentUser.id)]);
+  }, [allProjects, assignedProjects, currentUser, safeLocalProjects]);
   const activeProject = useMemo(() => availableProjects.find((project) => project.id === projectId) ?? availableProjects[0] ?? emptyShellProject, [availableProjects, projectId]);
-  const allDocuments = useMemo(() => [...hammerDocuments, ...localDocuments].map((document) => (
+  const allDocuments = useMemo(() => authMode === "demo" ? [...hammerDocuments, ...localDocuments].map((document) => (
     Object.prototype.hasOwnProperty.call(documentProjectOverrides, document.id)
       ? { ...document, projectId: documentProjectOverrides[document.id] ?? undefined }
       : document
-  )), [documentProjectOverrides, localDocuments]);
+  )) : [], [authMode, documentProjectOverrides, localDocuments]);
   const incomingScriptCount = allDocuments.filter((document) => isScriptLibraryDocument(document) && !document.projectId).length;
   const availableDemoUsers = hammerUsers.filter((demoUser) => !localUserStates[demoUser.id]?.inactive && !localUserStates[demoUser.id]?.deleted);
-  const showProjectContext = pathname.startsWith("/projects/") && !pathname.startsWith("/projects/new");
+  const showProjectContext = authMode === "demo" && pathname.startsWith("/projects/") && !pathname.startsWith("/projects/new");
 
   useEffect(() => {
     async function loadSession() {
@@ -130,6 +133,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         setAuthMode(mode);
       } catch {
         setUser(null);
+        setAuthMode("database");
       }
     }
 
@@ -137,6 +141,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    if (authMode !== "demo") return;
+
     function loadLocalUserStates() {
       try {
         const storedUserStates = window.localStorage.getItem(HAMMER_LOCAL_USER_STATES_STORAGE_KEY);
@@ -153,9 +159,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       window.removeEventListener(HAMMER_LOCAL_USER_STATES_EVENT, loadLocalUserStates);
       window.removeEventListener("storage", loadLocalUserStates);
     };
-  }, []);
+  }, [authMode]);
 
   useEffect(() => {
+    if (authMode !== "demo") return;
+
     function loadLocalDocuments() {
       try {
         const storedDocuments = window.localStorage.getItem(HAMMER_LOCAL_DOCUMENTS_STORAGE_KEY);
@@ -175,7 +183,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       window.removeEventListener(HAMMER_LOCAL_DOCUMENTS_EVENT, loadLocalDocuments);
       window.removeEventListener("storage", loadLocalDocuments);
     };
-  }, []);
+  }, [authMode]);
 
   useEffect(() => {
     const storedTheme = window.localStorage.getItem(HAMMER_THEME_STORAGE_KEY);
@@ -192,6 +200,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   useEffect(() => {
+    if (authMode !== "demo") return;
+
     function loadLocalProjects() {
       try {
         const storedProjects = window.localStorage.getItem(HAMMER_LOCAL_PROJECTS_STORAGE_KEY);
@@ -208,9 +218,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       window.removeEventListener(HAMMER_LOCAL_PROJECTS_EVENT, loadLocalProjects);
       window.removeEventListener("storage", loadLocalProjects);
     };
-  }, []);
+  }, [authMode]);
 
   useEffect(() => {
+    if (authMode !== "demo") return;
+
     function handleDemoUserChange(event: Event) {
       const email = (event as CustomEvent<{ email?: string }>).detail?.email;
       const demoUser = hammerUsers.find((item) => item.email === email);
@@ -219,38 +231,42 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
     window.addEventListener(HAMMER_DEMO_USER_EVENT, handleDemoUserChange);
     return () => window.removeEventListener(HAMMER_DEMO_USER_EVENT, handleDemoUserChange);
-  }, []);
+  }, [authMode]);
 
   useEffect(() => {
+    if (authMode !== "demo") return;
     const routeProjectId = pathname.match(/^\/projects\/([^/]+)/)?.[1];
     if (routeProjectId && availableProjects.some((project) => project.id === routeProjectId) && routeProjectId !== projectId) {
       setProjectId(routeProjectId);
     }
-  }, [availableProjects, pathname, projectId]);
+  }, [authMode, availableProjects, pathname, projectId]);
 
   useEffect(() => {
+    if (authMode !== "demo") return;
     if (projectPreferenceLoaded || pathname.startsWith("/projects/")) return;
     const storedProjectId = window.localStorage.getItem(HAMMER_ACTIVE_PROJECT_STORAGE_KEY);
     if (storedProjectId && availableProjects.some((project) => project.id === storedProjectId)) {
       setProjectId(storedProjectId);
     }
     setProjectPreferenceLoaded(true);
-  }, [availableProjects, pathname, projectPreferenceLoaded]);
+  }, [authMode, availableProjects, pathname, projectPreferenceLoaded]);
 
   useEffect(() => {
+    if (authMode !== "demo") return;
     if (activeProject && activeProject.id !== projectId && !availableProjects.some((project) => project.id === projectId)) {
       setProjectId(activeProject.id);
     }
-  }, [activeProject, availableProjects, projectId]);
+  }, [authMode, activeProject, availableProjects, projectId]);
 
   useEffect(() => {
+    if (authMode !== "demo") return;
     if (!projectId || !availableProjects.some((project) => project.id === projectId)) return;
     const routeProjectId = pathname.match(/^\/projects\/([^/]+)/)?.[1];
     if (routeProjectId && routeProjectId !== projectId) return;
     if (!routeProjectId && !projectPreferenceLoaded) return;
     window.localStorage.setItem(HAMMER_ACTIVE_PROJECT_STORAGE_KEY, projectId);
     window.dispatchEvent(new CustomEvent(HAMMER_ACTIVE_PROJECT_EVENT, { detail: { projectId } }));
-  }, [availableProjects, pathname, projectId, projectPreferenceLoaded]);
+  }, [authMode, availableProjects, pathname, projectId, projectPreferenceLoaded]);
 
   function changeProject(nextProjectId: string) {
     setProjectId(nextProjectId);
@@ -278,8 +294,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <nav className="mt-4 space-y-0.5">
             {[
               ...navItems,
-              ...(currentUser.role === "EXECUTIVE" || currentUser.role === "ADMIN" ? [executiveNavItem] : []),
-              ...(canViewContacts(currentUser.role) ? [contactsNavItem] : []),
+              ...(currentUser?.role === "EXECUTIVE" || currentUser?.role === "ADMIN" ? [executiveNavItem] : []),
+              ...(currentUser && canViewContacts(currentUser.role) ? [contactsNavItem] : []),
             ].map((item) => {
               const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
               const Icon = item.icon;
@@ -303,7 +319,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </nav>
 
           <div className="mt-auto space-y-3">
-            {currentUser.role === "ADMIN" ? (
+            {currentUser?.role === "ADMIN" ? (
               <nav className="border-t border-white/10 pt-3">
                 {(() => {
                 const active = pathname === adminNavItem.href || pathname.startsWith(`${adminNavItem.href}/`);
@@ -325,7 +341,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 })()}
               </nav>
             ) : null}
-            <nav className={cn(currentUser.role === "ADMIN" ? "" : "border-t border-white/10 pt-3")}>
+            <nav className={cn(currentUser?.role === "ADMIN" ? "" : "border-t border-white/10 pt-3")}>
               {(() => {
                 const active = pathname === accountNavItem.href || pathname.startsWith(`${accountNavItem.href}/`);
                 const Icon = accountNavItem.icon;
@@ -366,13 +382,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   );
 }
 
-function WorkspaceTopBar({ user, mode }: { user: ShellUser | null; mode: "database" | "demo" }) {
+function WorkspaceTopBar({ user, mode }: { user: ShellUser | null; mode: AuthMode }) {
   return (
     <div className="mb-4 flex items-center justify-end border-b border-white/10 pb-3">
       <div className="hidden items-center gap-2 text-right md:flex">
         <div>
-          <p className="text-[13px] font-semibold text-studio-100">{user?.name ?? "Demo Admin"}</p>
-          <p className="font-display text-[10px] uppercase tracking-[0.12em] text-studio-400">{mode === "demo" ? "Demo" : user?.appRole ?? "Signed out"}</p>
+          <p className="text-[13px] font-semibold text-studio-100">{user?.name ?? (mode === "loading" ? "Loading" : "Signed out")}</p>
+          <p className="font-display text-[10px] uppercase tracking-[0.12em] text-studio-400">{mode === "loading" ? "Workspace" : mode === "demo" ? "Demo" : user?.appRole ?? "Signed out"}</p>
         </div>
         <div className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300">
           <UserRound className="h-4 w-4" />
@@ -393,7 +409,7 @@ function ProjectTopBar({
   projects: HammerProject[];
   onChange: (projectId: string) => void;
   user: ShellUser | null;
-  mode: "database" | "demo";
+  mode: AuthMode;
 }) {
   return (
     <div className="mb-4 flex flex-col gap-3 border-b border-white/10 pb-3 lg:flex-row lg:items-center lg:justify-between">
@@ -418,8 +434,8 @@ function ProjectTopBar({
       </div>
       <div className="hidden items-center gap-2 text-right md:flex">
         <div>
-          <p className="text-[13px] font-semibold text-studio-100">{user?.name ?? "Demo Admin"}</p>
-          <p className="font-display text-[10px] uppercase tracking-[0.12em] text-studio-400">{mode === "demo" ? "Demo" : user?.appRole ?? "Signed out"}</p>
+          <p className="text-[13px] font-semibold text-studio-100">{user?.name ?? (mode === "loading" ? "Loading" : "Signed out")}</p>
+          <p className="font-display text-[10px] uppercase tracking-[0.12em] text-studio-400">{mode === "loading" ? "Workspace" : mode === "demo" ? "Demo" : user?.appRole ?? "Signed out"}</p>
         </div>
         <div className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300">
           <UserRound className="h-4 w-4" />
@@ -515,7 +531,7 @@ function ThemeToggle({ theme, onChange }: { theme: ThemeMode; onChange: (theme: 
   );
 }
 
-function SessionPanel({ user, mode, demoUsers, onDemoUserChange }: { user: ShellUser | null; mode: "database" | "demo"; demoUsers: HammerUser[]; onDemoUserChange: (user: ShellUser) => void }) {
+function SessionPanel({ user, mode, demoUsers, onDemoUserChange }: { user: ShellUser | null; mode: AuthMode; demoUsers: HammerUser[]; onDemoUserChange: (user: ShellUser) => void }) {
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => null);
     window.location.href = "/login";
@@ -532,8 +548,8 @@ function SessionPanel({ user, mode, demoUsers, onDemoUserChange }: { user: Shell
 
   return (
     <div className="rounded-md border border-white/10 bg-white/[0.025] p-2.5">
-      <p className="truncate text-[13px] font-semibold text-studio-100">{user?.name ?? "Demo Admin"}</p>
-      <p className="mt-1 truncate text-[11px] text-studio-400">{mode === "demo" ? user?.appRole ?? "Demo session" : user?.email ?? "Signed out"}</p>
+      <p className="truncate text-[13px] font-semibold text-studio-100">{user?.name ?? (mode === "loading" ? "Loading" : "Signed out")}</p>
+      <p className="mt-1 truncate text-[11px] text-studio-400">{mode === "loading" ? "Preparing workspace" : mode === "demo" ? user?.appRole ?? "Demo session" : user?.email ?? "Signed out"}</p>
       {mode === "demo" ? (
         <select
           aria-label="Demo user"
@@ -550,7 +566,7 @@ function SessionPanel({ user, mode, demoUsers, onDemoUserChange }: { user: Shell
         </select>
       ) : null}
       <div className="mt-2">
-        <button type="button" onClick={logout} className="inline-flex w-full items-center justify-center gap-1.5 rounded border border-white/10 px-2 py-1.5 text-[11px] font-semibold text-studio-300 hover:text-ember">
+        <button type="button" onClick={logout} disabled={mode === "loading"} className="inline-flex w-full items-center justify-center gap-1.5 rounded border border-white/10 px-2 py-1.5 text-[11px] font-semibold text-studio-300 hover:text-ember disabled:cursor-not-allowed disabled:opacity-50">
           <LogOut className="h-3.5 w-3.5" />
           Exit
         </button>

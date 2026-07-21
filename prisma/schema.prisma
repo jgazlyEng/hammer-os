@@ -287,6 +287,11 @@ enum ExtractionStatus {
   failed
 }
 
+enum SlateCollectionItemType {
+  PROJECT
+  PROSPECT
+}
+
 model Project {
   id                      String          @id @default(cuid())
   title                   String
@@ -331,6 +336,7 @@ model Project {
   auditLogs               AuditLog[]
   memberships             ProjectMembership[]
   promotedProspects       Prospect[]
+  collectionItems         SlateCollectionItem[]
 
   @@index([status])
   @@index([hammerStage])
@@ -386,6 +392,7 @@ model Prospect {
   updatedAt               DateTime  @updatedAt
 
   promotedProject         Project?  @relation(fields: [promotedProjectId], references: [id], onDelete: SetNull)
+  collectionItems         SlateCollectionItem[]
 
   @@index([lane])
   @@index([genre])
@@ -418,6 +425,7 @@ model User {
   assetsUploaded Asset[]           @relation("AssetUploader")
   commentsCreated Comment[]        @relation("CommentCreator")
   scriptCollections ScriptCollection[]
+  slateCollections  SlateCollection[]
   approvalsRequested HammerApproval[] @relation("ApprovalRequester")
   approvalsReviewing HammerApproval[] @relation("ApprovalReviewer")
   tasksAssigned Task[]             @relation("TaskAssignee")
@@ -500,6 +508,44 @@ model ScriptCollectionItem {
 
   @@unique([collectionId, documentId])
   @@index([documentId])
+}
+
+model SlateCollection {
+  id          String                 @id @default(cuid())
+  name        String
+  description String?                @db.Text
+  ownerId     String?
+  status      String                 @default("ACTIVE")
+  visibility  CommentVisibility      @default(PROJECT_TEAM)
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+
+  owner       User?                  @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  items       SlateCollectionItem[]
+
+  @@index([ownerId])
+  @@index([status])
+}
+
+model SlateCollectionItem {
+  id           String                  @id @default(cuid())
+  collectionId String
+  itemType     SlateCollectionItemType
+  projectId    String?
+  prospectId   String?
+  sortOrder    Int                     @default(0)
+  notes        String?                 @db.Text
+  addedAt      DateTime                @default(now())
+
+  collection   SlateCollection         @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  project      Project?                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  prospect     Prospect?               @relation(fields: [prospectId], references: [id], onDelete: Cascade)
+
+  @@unique([collectionId, itemType, projectId])
+  @@unique([collectionId, itemType, prospectId])
+  @@index([projectId])
+  @@index([prospectId])
+  @@index([itemType])
 }
 
 model DocumentVersion {
