@@ -32,6 +32,8 @@ export const HAMMER_LOCAL_TASKS_EVENT = "hammer-os-local-tasks-changed";
 export const HAMMER_LOCAL_TASK_UPDATES_STORAGE_KEY = "hammer-os-local-task-updates";
 export const HAMMER_LOCAL_SCRIPT_COLLECTIONS_STORAGE_KEY = "hammer-os-local-script-collections";
 export const HAMMER_LOCAL_SCRIPT_COLLECTION_ITEMS_STORAGE_KEY = "hammer-os-local-script-collection-items";
+export const HAMMER_LOCAL_SLATE_COLLECTIONS_STORAGE_KEY = "hammer-os-local-slate-collections";
+export const HAMMER_LOCAL_SLATE_COLLECTION_ITEMS_STORAGE_KEY = "hammer-os-local-slate-collection-items";
 export const HAMMER_LOCAL_CONTACT_RELATIONSHIPS_STORAGE_KEY = "hammer-os-local-contact-relationships";
 
 export interface HammerUser {
@@ -188,6 +190,30 @@ export interface HammerScriptCollectionItem {
   id: string;
   collectionId: string;
   documentId: string;
+  sortOrder: number;
+  notes?: string;
+  addedAt: string;
+}
+
+export type SlateCollectionItemType = "PROJECT" | "PROSPECT";
+
+export interface HammerSlateCollection {
+  id: string;
+  name: string;
+  description?: string;
+  ownerId?: string;
+  status: string;
+  visibility: "INTERNAL" | "PROJECT_TEAM" | "EXECUTIVE_ONLY";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface HammerSlateCollectionItem {
+  id: string;
+  collectionId: string;
+  itemType: SlateCollectionItemType;
+  projectId?: string;
+  prospectId?: string;
   sortOrder: number;
   notes?: string;
   addedAt: string;
@@ -527,6 +553,17 @@ export const hammerScriptCollectionItems: HammerScriptCollectionItem[] = [
   { id: "collection-item-weekend-echo", collectionId: "collection-weekend-reads", documentId: "doc-inbox-echo", sortOrder: 1, notes: "Spec sample for first-pass read.", addedAt: "2026-07-12" },
   { id: "collection-item-weekend-kite", collectionId: "collection-weekend-reads", documentId: "doc-inbox-kite", sortOrder: 2, notes: "Treatment may pair with family slate.", addedAt: "2026-07-12" },
   { id: "collection-item-greenlight-hammer", collectionId: "collection-greenlight-candidates", documentId: "doc-hammer-script", sortOrder: 1, notes: "Needs final notes pass before exec read.", addedAt: "2026-07-10" }
+];
+
+export const hammerSlateCollections: HammerSlateCollection[] = [
+  { id: "slate-collection-weekly-review", name: "Weekly Review Packet", description: "Projects and prospects for the next studio development meeting.", ownerId: "user-producer", status: "ACTIVE", visibility: "PROJECT_TEAM", createdAt: "2026-07-20", updatedAt: "2026-07-20" },
+  { id: "slate-collection-exec-priority", name: "Executive Priority Reads", description: "Items that need executive attention before the next greenlight check-in.", ownerId: "user-exec", status: "ACTIVE", visibility: "EXECUTIVE_ONLY", createdAt: "2026-07-18", updatedAt: "2026-07-18" }
+];
+
+export const hammerSlateCollectionItems: HammerSlateCollectionItem[] = [
+  { id: "slate-collection-item-weekly-hammer", collectionId: "slate-collection-weekly-review", itemType: "PROJECT", projectId: "project-hammer", sortOrder: 1, notes: "Review current script state and previz readiness.", addedAt: "2026-07-20" },
+  { id: "slate-collection-item-weekly-prospect", collectionId: "slate-collection-weekly-review", itemType: "PROSPECT", prospectId: "lead-demo-1", sortOrder: 2, notes: "Discuss whether this should move into active development.", addedAt: "2026-07-20" },
+  { id: "slate-collection-item-exec-orchid", collectionId: "slate-collection-exec-priority", itemType: "PROJECT", projectId: "project-orchid", sortOrder: 1, notes: "Needs decision on next draft path.", addedAt: "2026-07-18" }
 ];
 
 export const hammerApprovals: HammerApproval[] = [

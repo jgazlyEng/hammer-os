@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import type { AssetStatus, AssetType, CommentTargetType, CommentVisibility, ContactRelationshipType, ContactStatus, ContactType, DocumentType, DocumentVersionStatus, Prisma, ProjectStatus, ProjectStage, Prospect, SupportingDocumentType, TaskPriority, TaskStatus, TaskTargetType, UserRole } from "@prisma/client";
+import type { AssetStatus, AssetType, CommentTargetType, CommentVisibility, ContactRelationshipType, ContactStatus, ContactType, DocumentType, DocumentVersionStatus, Prisma, ProjectStatus, ProjectStage, Prospect, SlateCollectionItemType, SupportingDocumentType, TaskPriority, TaskStatus, TaskTargetType, UserRole } from "@prisma/client";
 import { forbidden, hashPassword, isDatabaseConfigured, requireUser, verifyPassword } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
@@ -18,7 +18,7 @@ export async function GET(request: Request) {
     const projectWhere = canViewAllProjects(auth.user.appRole) ? { deletedAt: null } : { deletedAt: null, memberships: { some: { userId: auth.user.id } } };
     const documentWhere = canSeeLibrary ? { deletedAt: null } : { deletedAt: null, projectId: { in: projectIds } };
 
-    const [projects, projectLeads, documents, versions, supportingDocuments, assets, tasks, contacts, contactRelationships, users, approvals, comments, scriptCollections, scriptCollectionItems] = await Promise.all([
+    const [projects, projectLeads, documents, versions, supportingDocuments, assets, tasks, contacts, contactRelationships, users, approvals, comments, scriptCollections, scriptCollectionItems, slateCollections, slateCollectionItems] = await Promise.all([
       prisma.project.findMany({ where: projectWhere, orderBy: { updatedAt: "desc" } }),
       prisma.prospect.findMany({ where: { deletedAt: null }, orderBy: [{ promotedProjectId: "asc" }, { updatedAt: "desc" }] }),
       prisma.document.findMany({ where: documentWhere, orderBy: { updatedAt: "desc" } }),
@@ -38,6 +38,28 @@ export async function GET(request: Request) {
       prisma.scriptCollectionItem.findMany({
         where: canSeeLibrary ? undefined : { document: documentWhere },
         orderBy: [{ sortOrder: "asc" }, { addedAt: "desc" }]
+      }),
+      prisma.slateCollection.findMany({
+        where: canSeeLibrary ? undefined : {
+          items: {
+            some: {
+              OR: [
+                { project: projectWhere },
+                { prospectId: { not: null } }
+              ]
+            }
+          }
+        },
+        orderBy: { updatedAt: "desc" }
+      }),
+      prisma.slateCollectionItem.findMany({
+        where: canSeeLibrary ? undefined : {
+          OR: [
+            { project: projectWhere },
+            { prospectId: { not: null } }
+          ]
+        },
+        orderBy: [{ sortOrder: "asc" }, { addedAt: "desc" }]
       })
     ]);
 
@@ -56,7 +78,9 @@ export async function GET(request: Request) {
       approvals: approvals.map(toApproval),
       comments: comments.map(toComment),
       scriptCollections: scriptCollections.map(toScriptCollection),
-      scriptCollectionItems: scriptCollectionItems.map(toScriptCollectionItem)
+      scriptCollectionItems: scriptCollectionItems.map(toScriptCollectionItem),
+      slateCollections: slateCollections.map(toSlateCollection),
+      slateCollectionItems: slateCollectionItems.map(toSlateCollectionItem)
     });
   } catch (error) {
     return NextResponse.json({ error: "Database unavailable.", detail: error instanceof Error ? error.message : undefined }, { status: 503 });
@@ -205,6 +229,47 @@ export async function POST(request: Request) {
         await prisma.scriptCollectionItem.delete({ where: { id: stringField(body.collectionItemId) } });
         return NextResponse.json({ ok: true });
 
+      case "createSlateCollection":
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        return NextResponse.json({ slateCollection: toSlateCollection(await prisma.slateCollection.create({
+          data: {
+            name: stringField(body.name) || "Untitled Collection",
+            description: optionalString(body.description),
+            visibility: commentVisibilityField(body.visibility),
+            ownerId: auth.user.id
+          }
+        })) }, { status: 201 });
+
+      case "addSlateItemToCollection": {
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        const collectionId = stringField(body.collectionId);
+        const itemType = slateCollectionItemTypeField(body.itemType);
+        const itemId = stringField(body.itemId);
+        if (!itemId) return NextResponse.json({ error: "Collection item is required." }, { status: 400 });
+        const existing = await prisma.slateCollectionItem.findFirst({
+          where: itemType === "PROJECT"
+            ? { collectionId, itemType, projectId: itemId }
+            : { collectionId, itemType, prospectId: itemId }
+        });
+        if (existing) return NextResponse.json({ slateCollectionItem: toSlateCollectionItem(existing) });
+        const currentCount = await prisma.slateCollectionItem.count({ where: { collectionId } });
+        return NextResponse.json({ slateCollectionItem: toSlateCollectionItem(await prisma.slateCollectionItem.create({
+          data: {
+            collectionId,
+            itemType,
+            projectId: itemType === "PROJECT" ? itemId : undefined,
+            prospectId: itemType === "PROSPECT" ? itemId : undefined,
+            sortOrder: currentCount + 1,
+            notes: optionalString(body.notes)
+          }
+        })) });
+      }
+
+      case "removeSlateItemFromCollection":
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        await prisma.slateCollectionItem.delete({ where: { id: stringField(body.collectionItemId) } });
+        return NextResponse.json({ ok: true });
+
       case "assignDocumentToProject":
         if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
         return NextResponse.json({ document: toDocument(await prisma.document.update({
@@ -213,7 +278,7 @@ export async function POST(request: Request) {
         })) });
 
       case "updateDocumentMetadata":
-        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        if (!await canManageDocumentMetadata(auth.user.appRole, auth.user.projectRoles, stringField(body.documentId))) return NextResponse.json(forbidden(), { status: 403 });
         return NextResponse.json({ document: toDocument(await prisma.document.update({
           where: { id: stringField(body.documentId) },
           data: {
@@ -386,6 +451,14 @@ export async function POST(request: Request) {
         return NextResponse.json({ contact: toContact(await prisma.contact.update({
           where: { id: stringField(body.contactId) },
           data: {
+            name: body.name !== undefined ? stringField(body.name) || "Unnamed Contact" : undefined,
+            company: body.company !== undefined ? optionalString(body.company) : undefined,
+            type: body.type !== undefined ? contactTypeField(body.type) : undefined,
+            title: body.title !== undefined ? optionalString(body.title) : undefined,
+            email: body.email !== undefined ? optionalString(body.email) : undefined,
+            phone: body.phone !== undefined ? optionalString(body.phone) : undefined,
+            location: body.location !== undefined ? optionalString(body.location) : undefined,
+            website: body.website !== undefined ? optionalString(body.website) : undefined,
             status: body.status ? contactStatusField(body.status) : undefined,
             ownerId: body.ownerId !== undefined ? optionalString(body.ownerId) : undefined,
             tags: body.tags !== undefined ? (Array.isArray(body.tags) ? body.tags.filter((tag): tag is string => typeof tag === "string") : parseTags(optionalString(body.tags))) : undefined,
@@ -598,9 +671,24 @@ function toScriptCollectionItem(item: { id: string; collectionId: string; docume
   return { id: item.id, collectionId: item.collectionId, documentId: item.documentId, sortOrder: item.sortOrder, notes: item.notes ?? undefined, addedAt: dateString(item.addedAt) };
 }
 
+function toSlateCollection(collection: { id: string; name: string; description: string | null; ownerId: string | null; status: string; visibility: CommentVisibility; createdAt: Date; updatedAt: Date }) {
+  return { id: collection.id, name: collection.name, description: collection.description ?? undefined, ownerId: collection.ownerId ?? undefined, status: collection.status, visibility: collection.visibility, createdAt: dateString(collection.createdAt), updatedAt: dateString(collection.updatedAt) };
+}
+
+function toSlateCollectionItem(item: { id: string; collectionId: string; itemType: SlateCollectionItemType; projectId: string | null; prospectId: string | null; sortOrder: number; notes: string | null; addedAt: Date }) {
+  return { id: item.id, collectionId: item.collectionId, itemType: item.itemType, projectId: item.projectId ?? undefined, prospectId: item.prospectId ?? undefined, sortOrder: item.sortOrder, notes: item.notes ?? undefined, addedAt: dateString(item.addedAt) };
+}
+
 function canManageLibrary(role: string) {
   const normalizedRole = role.toLowerCase();
   return normalizedRole === "admin" || normalizedRole === "producer" || normalizedRole === "executive" || normalizedRole === "exec";
+}
+
+async function canManageDocumentMetadata(role: string, projectRoles: Record<string, string>, documentId: string) {
+  if (canManageLibrary(role)) return true;
+  const document = await prisma.document.findUnique({ where: { id: documentId }, select: { projectId: true, deletedAt: true } });
+  if (!document || document.deletedAt || !document.projectId) return false;
+  return Boolean(projectRoles[document.projectId]);
 }
 
 function canUpdateProjectLeadBasicFields(body: ActionBody) {
@@ -799,6 +887,11 @@ function taskTargetField(value: unknown): TaskTargetType {
   return taskTargets.includes(value as TaskTargetType) ? value as TaskTargetType : "PROJECT";
 }
 const taskTargets: TaskTargetType[] = ["GENERAL", "PROJECT", "PROJECT_LEAD", "DOCUMENT", "DOCUMENT_VERSION", "SCENE", "ENTITY", "ASSET", "APPROVAL", "CONTACT"];
+
+function slateCollectionItemTypeField(value: unknown): SlateCollectionItemType {
+  return slateCollectionItemTypes.includes(value as SlateCollectionItemType) ? value as SlateCollectionItemType : "PROJECT";
+}
+const slateCollectionItemTypes: SlateCollectionItemType[] = ["PROJECT", "PROSPECT"];
 
 function appRoleField(value: unknown) {
   return value === "admin" || value === "executive" || value === "producer" || value === "department_lead" ? value : "producer";
