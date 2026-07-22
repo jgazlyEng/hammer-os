@@ -346,7 +346,7 @@ model Project {
 model Prospect {
   id                      String    @id @default(cuid())
   title                   String
-  externalId              String?   @unique
+  externalId              String?
   logline                 String?   @db.Text
   genre                   String?
   lane                    String?
@@ -372,6 +372,7 @@ model Prospect {
   studioFitScore          Float?
   nextActionStatus        String?
   owner                   String?
+  ownerIds                String[]  @default([])
   nextStep                String?   @db.Text
   lastUpdated             String?
   notes                   String?   @db.Text
@@ -393,8 +394,10 @@ model Prospect {
 
   promotedProject         Project?  @relation(fields: [promotedProjectId], references: [id], onDelete: SetNull)
   collectionItems         SlateCollectionItem[]
+  assets                  ProspectAsset[]
 
   @@index([lane])
+  @@index([externalId])
   @@index([genre])
   @@index([urgencyLabel])
   @@index([rightsStatus])
@@ -421,6 +424,7 @@ model User {
   documentsCreated Document[]      @relation("DocumentCreator")
   documentVersionsUploaded DocumentVersion[] @relation("DocumentVersionUploader")
   supportingDocumentsUploaded SupportingDocument[] @relation("SupportingDocumentUploader")
+  prospectAssetsUploaded ProspectAsset[] @relation("ProspectAssetUploader")
   documentDiffsCreated DocumentDiff[] @relation("DocumentDiffCreator")
   assetsUploaded Asset[]           @relation("AssetUploader")
   commentsCreated Comment[]        @relation("CommentCreator")
@@ -557,10 +561,12 @@ model DocumentVersion {
   fileType           String
   fileSize           Int
   storagePath        String
+  dataUrl            String?               @db.Text
   extractedText      String?               @db.Text
   uploadedById       String?
   createdAt          DateTime              @default(now())
   notes              String?               @db.Text
+  markdownNotes      String?               @db.Text
 
   document           Document              @relation("DocumentVersions", fields: [documentId], references: [id], onDelete: Cascade)
   currentForDocument Document?             @relation("CurrentDocumentVersion")
@@ -605,6 +611,7 @@ model SupportingDocument {
   fileType         String
   fileSize         Int
   storagePath      String
+  dataUrl          String?                @db.Text
   extractedText    String?                @db.Text
   uploadedById     String?
   deletedAt        DateTime?
@@ -617,6 +624,29 @@ model SupportingDocument {
 
   @@index([scriptDocumentId])
   @@index([projectId])
+  @@index([deletedAt])
+}
+
+model ProspectAsset {
+  id           String    @id @default(cuid())
+  prospectId   String
+  title        String
+  description  String?   @db.Text
+  fileName     String
+  fileType     String
+  fileSize     Int
+  storagePath  String
+  dataUrl      String?   @db.Text
+  uploadedById String?
+  deletedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  prospect     Prospect  @relation(fields: [prospectId], references: [id], onDelete: Cascade)
+  uploadedBy   User?     @relation("ProspectAssetUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([prospectId])
+  @@index([uploadedById])
   @@index([deletedAt])
 }
 

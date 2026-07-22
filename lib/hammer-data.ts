@@ -86,6 +86,7 @@ export interface HammerProjectLead {
   studioFitScore?: number;
   nextActionStatus?: string;
   owner?: string;
+  ownerIds?: string[];
   nextStep?: string;
   lastUpdated?: string;
   notes?: string;
@@ -169,9 +170,11 @@ export interface HammerDocumentVersion {
   fileType: string;
   fileSize: number;
   storagePath: string;
+  dataUrl?: string;
   uploadedById: string;
   createdAt: string;
   notes: string;
+  markdownNotes?: string;
   extractedText: string;
 }
 
