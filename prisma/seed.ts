@@ -26,9 +26,10 @@ function readProjectLeadCsv() {
   return rows.slice(1).map((row, index) => {
     const record = Object.fromEntries(headers.map((header, cellIndex) => [header, row[cellIndex]?.trim() ?? ""]));
     const externalId = record.projectid || undefined;
+    const title = record.title || "Untitled Slate Item";
     return {
-      id: externalId || `lead-${index + 1}`,
-      title: record.title || "Untitled Slate Item",
+      id: buildProspectImportId(title, externalId, index),
+      title,
       externalId,
       logline: optional(record.logline),
       genre: optional(record.genre),
@@ -118,6 +119,15 @@ function numeric(value?: string) {
   if (!value?.trim()) return undefined;
   const parsed = Number(value.replace(/,/g, ""));
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function buildProspectImportId(title: string, externalId: string | undefined, index: number) {
+  const slug = `${externalId || "prospect"}-${title}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 80);
+  return `lead-${slug || "item"}-${index + 1}`;
 }
 
 function dateAtNoon(value?: string | null) {

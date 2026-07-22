@@ -18,9 +18,10 @@ export async function GET(request: Request) {
     const projectWhere = canViewAllProjects(auth.user.appRole) ? { deletedAt: null } : { deletedAt: null, memberships: { some: { userId: auth.user.id } } };
     const documentWhere = canSeeLibrary ? { deletedAt: null } : { deletedAt: null, projectId: { in: projectIds } };
 
-    const [projects, projectLeads, documents, versions, supportingDocuments, assets, tasks, contacts, contactRelationships, users, approvals, comments, scriptCollections, scriptCollectionItems, slateCollections, slateCollectionItems] = await Promise.all([
+    const [projects, projectLeads, prospectAssets, documents, versions, supportingDocuments, assets, tasks, contacts, contactRelationships, users, approvals, comments, scriptCollections, scriptCollectionItems, slateCollections, slateCollectionItems] = await Promise.all([
       prisma.project.findMany({ where: projectWhere, orderBy: { updatedAt: "desc" } }),
       prisma.prospect.findMany({ where: { deletedAt: null }, orderBy: [{ promotedProjectId: "asc" }, { updatedAt: "desc" }] }),
+      prisma.prospectAsset.findMany({ where: { deletedAt: null, prospect: { deletedAt: null } }, orderBy: { createdAt: "desc" } }),
       prisma.document.findMany({ where: documentWhere, orderBy: { updatedAt: "desc" } }),
       prisma.documentVersion.findMany({ where: { document: documentWhere }, orderBy: { createdAt: "desc" } }),
       prisma.supportingDocument.findMany({ where: { deletedAt: null, scriptDocument: documentWhere }, orderBy: { createdAt: "desc" } }),
@@ -67,6 +68,7 @@ export async function GET(request: Request) {
       mode: "database",
       projects: projects.map(toProject),
       projectLeads: projectLeads.map(toProjectLead),
+      prospectAssets: prospectAssets.map(toProspectAsset),
       documents: documents.map(toDocument),
       versions: versions.map(toVersion),
       supportingDocuments: supportingDocuments.map(toSupportingDocument),
@@ -136,11 +138,11 @@ export async function POST(request: Request) {
         if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
         const leads = Array.isArray(body.leads) ? body.leads as Record<string, unknown>[] : [];
         const existingIds = new Set((await prisma.prospect.findMany({
-          select: { id: true, externalId: true }
-        })).flatMap((lead) => [lead.id, lead.externalId].filter((value): value is string => Boolean(value))));
+          select: { id: true }
+        })).map((lead) => lead.id));
         const newLeads = leads
           .map((lead) => projectLeadCreate(lead))
-          .filter((lead) => !(lead.id && existingIds.has(lead.id)) && !(lead.externalId && existingIds.has(lead.externalId)));
+          .filter((lead) => !(lead.id && existingIds.has(lead.id)));
         if (!newLeads.length) return NextResponse.json({ projectLeads: [], skipped: leads.length });
         const created = await prisma.$transaction(newLeads.map((lead) => prisma.prospect.create({ data: lead })));
         return NextResponse.json({ projectLeads: created.map(toProjectLead), skipped: leads.length - created.length });
@@ -179,10 +181,17 @@ export async function POST(request: Request) {
         })) });
 
       case "updateDocumentVersionNotes":
-        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        if (!await canManageDocumentVersionNotes(auth.user.appRole, auth.user.projectRoles, stringField(body.versionId))) return NextResponse.json(forbidden(), { status: 403 });
         return NextResponse.json({ version: toVersion(await prisma.documentVersion.update({
           where: { id: stringField(body.versionId) },
           data: { notes: stringField(body.notes) }
+        })) });
+
+      case "updateDocumentVersionMarkdown":
+        if (!await canManageDocumentVersionNotes(auth.user.appRole, auth.user.projectRoles, stringField(body.versionId))) return NextResponse.json(forbidden(), { status: 403 });
+        return NextResponse.json({ version: toVersion(await prisma.documentVersion.update({
+          where: { id: stringField(body.versionId) },
+          data: { markdownNotes: optionalString(body.markdownNotes) ?? null }
         })) });
 
       case "createComment":
@@ -309,6 +318,7 @@ export async function POST(request: Request) {
             fileType: stringField(body.fileType) || "application/octet-stream",
             fileSize: numberField(body.fileSize),
             storagePath: stringField(body.storagePath),
+            dataUrl: optionalString(body.dataUrl),
             extractedText: optionalString(body.extractedText),
             uploadedById: auth.user.id
           }
@@ -317,6 +327,29 @@ export async function POST(request: Request) {
       case "deleteSupportingDocument":
         return NextResponse.json({ supportingDocument: toSupportingDocument(await prisma.supportingDocument.update({
           where: { id: stringField(body.documentId) },
+          data: { deletedAt: new Date() }
+        })) });
+
+      case "uploadProspectAsset":
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        return NextResponse.json({ prospectAsset: toProspectAsset(await prisma.prospectAsset.create({
+          data: {
+            prospectId: stringField(body.prospectId),
+            title: stringField(body.title) || stringField(body.fileName) || "Prospect Asset",
+            description: optionalString(body.description),
+            fileName: stringField(body.fileName),
+            fileType: stringField(body.fileType) || "application/octet-stream",
+            fileSize: numberField(body.fileSize),
+            storagePath: stringField(body.storagePath),
+            dataUrl: optionalString(body.dataUrl),
+            uploadedById: auth.user.id
+          }
+        })) });
+
+      case "deleteProspectAsset":
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        return NextResponse.json({ prospectAsset: toProspectAsset(await prisma.prospectAsset.update({
+          where: { id: stringField(body.assetId) },
           data: { deletedAt: new Date() }
         })) });
 
@@ -533,12 +566,14 @@ async function uploadDocumentVersion(userId: string, body: ActionBody) {
       versionNumber: nextVersionNumber,
       status: scriptStatusField(body.status),
       fileName: stringField(body.fileName),
-      fileType: stringField(body.fileType) || "application/octet-stream",
-      fileSize: numberField(body.fileSize),
-      storagePath: stringField(body.storagePath),
-      extractedText: optionalString(body.extractedText),
+            fileType: stringField(body.fileType) || "application/octet-stream",
+            fileSize: numberField(body.fileSize),
+            storagePath: stringField(body.storagePath),
+            dataUrl: optionalString(body.dataUrl),
+            extractedText: optionalString(body.extractedText),
       uploadedById: userId,
-      notes: optionalString(body.notes)
+      notes: optionalString(body.notes),
+      markdownNotes: optionalString(body.markdownNotes)
     }
   });
   const updatedDocument = await prisma.document.update({
@@ -588,6 +623,7 @@ function toProjectLead(lead: Prospect) {
     studioFitScore: lead.studioFitScore ?? undefined,
     nextActionStatus: lead.nextActionStatus ?? undefined,
     owner: lead.owner ?? undefined,
+    ownerIds: lead.ownerIds,
     nextStep: lead.nextStep ?? undefined,
     lastUpdated: lead.lastUpdated ?? undefined,
     notes: lead.notes ?? undefined,
@@ -614,12 +650,16 @@ function toDocument(document: { id: string; projectId: string | null; title: str
   return { id: document.id, projectId: document.projectId ?? undefined, title: document.title, type: document.type, currentVersionId: document.currentVersionId ?? "", createdById: document.createdById ?? "", updatedAt: dateString(document.updatedAt), writerName: document.writerName ?? undefined, source: document.source ?? undefined, contactId: document.contactId ?? undefined, submittedAt: document.submittedAt ? dateString(document.submittedAt) : undefined };
 }
 
-function toVersion(version: { id: string; documentId: string; versionNumber: number; status: DocumentVersionStatus; fileName: string; fileType: string; fileSize: number; storagePath: string; uploadedById: string | null; createdAt: Date; notes: string | null; extractedText: string | null }) {
-  return { id: version.id, documentId: version.documentId, versionNumber: version.versionNumber, status: version.status, fileName: version.fileName, fileType: version.fileType, fileSize: version.fileSize, storagePath: version.storagePath, uploadedById: version.uploadedById ?? "", createdAt: dateString(version.createdAt), notes: version.notes ?? "", extractedText: version.extractedText ?? "" };
+function toVersion(version: { id: string; documentId: string; versionNumber: number; status: DocumentVersionStatus; fileName: string; fileType: string; fileSize: number; storagePath: string; dataUrl?: string | null; uploadedById: string | null; createdAt: Date; notes: string | null; markdownNotes?: string | null; extractedText: string | null }) {
+  return { id: version.id, documentId: version.documentId, versionNumber: version.versionNumber, status: version.status, fileName: version.fileName, fileType: version.fileType, fileSize: version.fileSize, storagePath: version.storagePath, dataUrl: version.dataUrl ?? undefined, uploadedById: version.uploadedById ?? "", createdAt: dateString(version.createdAt), notes: version.notes ?? "", markdownNotes: version.markdownNotes ?? undefined, extractedText: version.extractedText ?? "" };
 }
 
-function toSupportingDocument(document: { id: string; scriptDocumentId: string; title: string; type: SupportingDocumentType; notes: string | null; fileName: string; fileType: string; fileSize: number; storagePath: string; extractedText: string | null; uploadedById: string | null; createdAt: Date }) {
-  return { id: document.id, scriptDocumentId: document.scriptDocumentId, title: document.title, type: document.type, notes: document.notes ?? undefined, fileName: document.fileName, fileType: document.fileType, fileSize: document.fileSize, storagePath: document.storagePath, extractedText: document.extractedText ?? "", uploadedById: document.uploadedById ?? "", uploadedAt: dateString(document.createdAt) };
+function toSupportingDocument(document: { id: string; scriptDocumentId: string; title: string; type: SupportingDocumentType; notes: string | null; fileName: string; fileType: string; fileSize: number; storagePath: string; dataUrl?: string | null; extractedText: string | null; uploadedById: string | null; createdAt: Date }) {
+  return { id: document.id, scriptDocumentId: document.scriptDocumentId, title: document.title, type: document.type, notes: document.notes ?? undefined, fileName: document.fileName, fileType: document.fileType, fileSize: document.fileSize, storagePath: document.storagePath, dataUrl: document.dataUrl ?? undefined, extractedText: document.extractedText ?? "", uploadedById: document.uploadedById ?? "", uploadedAt: dateString(document.createdAt) };
+}
+
+function toProspectAsset(asset: { id: string; prospectId: string; title: string; description: string | null; fileName: string; fileType: string; fileSize: number; storagePath: string; dataUrl: string | null; uploadedById: string | null; createdAt: Date }) {
+  return { id: asset.id, prospectId: asset.prospectId, title: asset.title, description: asset.description ?? "", fileName: asset.fileName, fileType: asset.fileType, fileSize: asset.fileSize, storagePath: asset.storagePath, dataUrl: asset.dataUrl ?? undefined, uploadedById: asset.uploadedById ?? "", uploadedAt: dateString(asset.createdAt) };
 }
 
 function toAsset(asset: { id: string; projectId: string; title: string; description: string | null; assetType: AssetType; fileName: string; fileType: string; fileSize: number; storagePath: string; thumbnailPath: string | null; status: AssetStatus; uploadedById: string | null; dataUrl?: string | null }) {
@@ -691,6 +731,14 @@ async function canManageDocumentMetadata(role: string, projectRoles: Record<stri
   return Boolean(projectRoles[document.projectId]);
 }
 
+async function canManageDocumentVersionNotes(role: string, projectRoles: Record<string, string>, versionId: string) {
+  if (canManageLibrary(role)) return true;
+  const version = await prisma.documentVersion.findUnique({ where: { id: versionId }, select: { document: { select: { projectId: true, deletedAt: true } } } });
+  const document = version?.document;
+  if (!document || document.deletedAt || !document.projectId) return false;
+  return Boolean(projectRoles[document.projectId]);
+}
+
 function canUpdateProjectLeadBasicFields(body: ActionBody) {
   const allowed = new Set(["action", "leadId", "title", "creator", "urgencyLabel", "genre", "priorityScore"]);
   return Object.keys(body).every((key) => allowed.has(key));
@@ -726,6 +774,11 @@ function stringField(value: unknown) {
 function optionalString(value: unknown) {
   const string = stringField(value);
   return string || undefined;
+}
+
+function stringArrayField(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return Array.from(new Set(value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean)));
 }
 
 function contactRelationshipTypeField(value: unknown): ContactRelationshipType {
@@ -770,6 +823,7 @@ function projectLeadPatch(body: ActionBody): Prisma.ProspectUpdateInput {
     contactRep: body.contactRep !== undefined ? optionalString(body.contactRep) : undefined,
     nextActionStatus: body.nextActionStatus !== undefined ? optionalString(body.nextActionStatus) : undefined,
     owner: body.owner !== undefined ? optionalString(body.owner) : undefined,
+    ownerIds: body.ownerIds !== undefined ? stringArrayField(body.ownerIds) : undefined,
     nextStep: body.nextStep !== undefined ? optionalString(body.nextStep) : undefined,
     lastUpdated: body.lastUpdated !== undefined ? optionalString(body.lastUpdated) : undefined,
     notes: body.notes !== undefined ? optionalString(body.notes) : undefined,
@@ -793,7 +847,7 @@ function projectLeadBasicPatch(body: ActionBody): Prisma.ProspectUpdateInput {
 function projectLeadCreate(body: Record<string, unknown>): Prisma.ProspectCreateInput {
   const externalId = optionalString(body.externalId);
   return {
-    id: optionalString(body.id) ?? externalId ?? undefined,
+    id: optionalString(body.id) ?? undefined,
     title: stringField(body.title) || "Untitled Slate Item",
     externalId,
     logline: optionalString(body.logline),
@@ -821,6 +875,7 @@ function projectLeadCreate(body: Record<string, unknown>): Prisma.ProspectCreate
     studioFitScore: optionalNumber(body.studioFitScore),
     nextActionStatus: optionalString(body.nextActionStatus),
     owner: optionalString(body.owner),
+    ownerIds: stringArrayField(body.ownerIds),
     nextStep: optionalString(body.nextStep),
     lastUpdated: optionalString(body.lastUpdated),
     notes: optionalString(body.notes),
