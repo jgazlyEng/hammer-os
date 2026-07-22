@@ -26,8 +26,20 @@ const demoUser: AuthenticatedUser = {
   projectRoles: {}
 };
 
-export function isDatabaseConfigured() {
+function isPostgresUrlConfigured() {
   return Boolean(process.env.DATABASE_URL?.startsWith("postgresql://") || process.env.DATABASE_URL?.startsWith("postgres://"));
+}
+
+function getConfiguredDataMode() {
+  return (process.env.GREENLIGHT_DATA_MODE ?? process.env.HAMMER_DATA_MODE ?? "").trim().toLowerCase();
+}
+
+export function isDatabaseConfigured() {
+  const dataMode = getConfiguredDataMode();
+  if (dataMode === "demo" || dataMode === "local") return false;
+  if (dataMode === "database" || dataMode === "production") return isPostgresUrlConfigured();
+  if (process.env.NODE_ENV === "development") return false;
+  return isPostgresUrlConfigured();
 }
 
 export function getDemoUser() {
