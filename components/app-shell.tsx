@@ -132,8 +132,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         setUser(storedDemoUser ? toShellUser(storedDemoUser) : data.user ?? data.demoUser ?? null);
         setAuthMode(mode);
       } catch {
-        setUser(null);
-        setAuthMode("database");
+        setUser(toShellUser(hammerUsers[0]));
+        setAuthMode("demo");
       }
     }
 

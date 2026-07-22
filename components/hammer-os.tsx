@@ -333,7 +333,8 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
         if (mode === "database") await loadDatabaseWorkspace();
         setWorkspaceLoaded(true);
       } catch {
-        setSessionUser(null);
+        setWorkspaceMode("demo");
+        setSessionUser(toSessionUser(hammerUsers[0]));
         setWorkspaceLoaded(true);
       } finally {
         setSessionLoaded(true);
@@ -1919,7 +1920,7 @@ function ProspectAssetsPanel({
       setDescription("");
       setFile(null);
       event.currentTarget.reset();
-      setMessage("Asset uploaded.");
+      setMessage("File uploaded and associated to this prospect.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not upload asset.");
     } finally {
@@ -1931,22 +1932,22 @@ function ProspectAssetsPanel({
     <div className="mt-3 rounded-md border border-white/10 bg-white/[0.025] p-3">
       <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Prospect Assets</p>
-          <p className="mt-1 text-[13px] leading-5 text-studio-300">Attach scripts, treatments, decks, notes, and reference images directly to this prospect.</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Scripts & Materials</p>
+          <p className="mt-1 text-[13px] leading-5 text-studio-300">Upload scripts, treatments, decks, notes, and reference images directly to this prospect.</p>
         </div>
         <Badge value={`${assets.length} file${assets.length === 1 ? "" : "s"}`} subtle />
       </div>
       {canManage && onUpload ? (
         <form onSubmit={submit} className="mt-3 grid gap-2">
           <div className="grid gap-2 md:grid-cols-[1fr_1fr]">
-            <input className="field" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Asset title" />
+            <input className="field" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Script or material title" />
             <input className="field" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Short description" />
           </div>
           <div className="grid gap-2 md:grid-cols-[1fr_auto]">
             <input className="field file:mr-3 file:rounded file:border-0 file:bg-amberline file:px-2.5 file:py-1 file:text-xs file:font-semibold file:text-studio-950" type="file" accept=".pdf,.doc,.docx,.txt,.md,image/*" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
             <button type="submit" disabled={busy} className="inline-flex items-center justify-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-xs font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">
               <UploadCloud className="h-3.5 w-3.5" />
-              Upload Asset
+              Upload Script / File
             </button>
           </div>
           {message ? <p className="text-xs text-studio-300">{message}</p> : null}
@@ -1975,7 +1976,7 @@ function ProspectAssetsPanel({
               ) : null}
             </div>
           </div>
-        )) : <EmptyState label="No prospect assets uploaded yet." />}
+        )) : <EmptyState label="No scripts or materials uploaded for this prospect yet." />}
       </div>
     </div>
   );

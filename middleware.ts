@@ -29,6 +29,12 @@ export const config = {
 };
 
 function isPostgresConfigured() {
+  const dataMode = (process.env.GREENLIGHT_DATA_MODE ?? process.env.HAMMER_DATA_MODE ?? "").trim().toLowerCase();
+  if (dataMode === "demo" || dataMode === "local") return false;
+  if (dataMode === "database" || dataMode === "production") {
+    return Boolean(process.env.DATABASE_URL?.startsWith("postgresql://") || process.env.DATABASE_URL?.startsWith("postgres://"));
+  }
+  if (process.env.NODE_ENV === "development") return false;
   return Boolean(process.env.DATABASE_URL?.startsWith("postgresql://") || process.env.DATABASE_URL?.startsWith("postgres://"));
 }
 
