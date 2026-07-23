@@ -41,6 +41,7 @@ const executiveNavItem = { href: "/executive", label: "Executive", icon: BarChar
 const reportsNavItem = { href: "/reports", label: "Reports", icon: FileBarChart2 };
 const adminNavItem = { href: "/admin/users", label: "Admin", icon: Settings2 };
 const accountNavItem = { href: "/account", label: "Account", icon: UserRound };
+const GREENLIGHT_APP_VERSION = "1.21";
 const HAMMER_THEME_STORAGE_KEY = "hammer-os-theme";
 type ThemeMode = "dark" | "light";
 type AuthMode = "loading" | "database" | "demo";
@@ -321,6 +322,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </nav>
 
           <div className="mt-auto space-y-3">
+            <div className="hidden border-t border-white/10 pt-3 md:flex">
+              <span className="rounded border border-white/10 bg-white/[0.035] px-2 py-1 font-display text-[10px] uppercase tracking-[0.12em] text-studio-400">
+                v{GREENLIGHT_APP_VERSION}
+              </span>
+            </div>
             {currentUser?.role === "ADMIN" ? (
               <nav className="border-t border-white/10 pt-3">
                 {(() => {
