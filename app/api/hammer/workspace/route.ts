@@ -121,6 +121,23 @@ export async function POST(request: Request) {
           data: { status: projectStatusField(body.status), auditLogs: { create: audit(auth.user.id, auth.user.email, "project.status_changed", "Project", stringField(body.projectId), { status: body.status }) } }
         })) });
 
+      case "updateProject":
+        if (!canManageLibrary(auth.user.appRole) && !canManageProject(auth.user.appRole, auth.user.projectRoles, stringField(body.projectId))) return NextResponse.json(forbidden(), { status: 403 });
+        return NextResponse.json({ project: toProject(await prisma.project.update({
+          where: { id: stringField(body.projectId) },
+          data: {
+            title: body.title !== undefined ? stringField(body.title) || "Untitled Studio Project" : undefined,
+            logline: body.logline !== undefined ? optionalString(body.logline) ?? "" : undefined,
+            type: body.type !== undefined ? optionalString(body.type) ?? "Feature" : undefined,
+            genre: body.genre !== undefined ? optionalString(body.genre) ?? "" : undefined,
+            status: body.status !== undefined ? projectStatusField(body.status) : undefined,
+            hammerStage: body.stage !== undefined ? projectStageField(body.stage) : undefined,
+            stage: body.stage !== undefined ? projectStageField(body.stage) : undefined,
+            ownerId: body.ownerId !== undefined ? optionalString(body.ownerId) ?? null : undefined,
+            auditLogs: { create: audit(auth.user.id, auth.user.email, "project.updated", "Project", stringField(body.projectId), { fields: Object.keys(body).filter((key) => key !== "action" && key !== "projectId") }) }
+          }
+        })) });
+
       case "updateProjectLead":
         if (!canManageLibrary(auth.user.appRole) && !canUpdateProjectLeadBasicFields(body)) return NextResponse.json(forbidden(), { status: 403 });
         return NextResponse.json({ projectLead: toProjectLead(await prisma.prospect.update({
@@ -137,15 +154,28 @@ export async function POST(request: Request) {
       case "importProjectLeads": {
         if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
         const leads = Array.isArray(body.leads) ? body.leads as Record<string, unknown>[] : [];
-        const existingIds = new Set((await prisma.prospect.findMany({
-          select: { id: true }
-        })).map((lead) => lead.id));
-        const newLeads = leads
-          .map((lead) => projectLeadCreate(lead))
-          .filter((lead) => !(lead.id && existingIds.has(lead.id)));
-        if (!newLeads.length) return NextResponse.json({ projectLeads: [], skipped: leads.length });
-        const created = await prisma.$transaction(newLeads.map((lead) => prisma.prospect.create({ data: lead })));
-        return NextResponse.json({ projectLeads: created.map(toProjectLead), skipped: leads.length - created.length });
+        const users = await prisma.user.findMany({ select: { id: true, name: true, email: true } });
+        const preparedLeads = leads.map((lead) => projectLeadCreate({ ...lead, ownerIds: resolveProspectOwnerIds(lead, users) }));
+        const preparedIds = preparedLeads.map((lead) => lead.id).filter((id): id is string => Boolean(id));
+        const existingLeads = await prisma.prospect.findMany({
+          where: { id: { in: preparedIds } },
+          select: { id: true, deletedAt: true }
+        });
+        const existingById = new Map(existingLeads.map((lead) => [lead.id, lead]));
+        const newLeads = preparedLeads.filter((lead) => !(lead.id && existingById.has(lead.id)));
+        const restoreLeads = preparedLeads.filter((lead) => lead.id && existingById.get(lead.id)?.deletedAt);
+        if (!newLeads.length && !restoreLeads.length) return NextResponse.json({ projectLeads: [], skipped: leads.length, restored: 0 });
+        const changed = await prisma.$transaction([
+          ...newLeads.map((lead) => prisma.prospect.create({ data: lead })),
+          ...restoreLeads.map((lead) => {
+            const { id, ...data } = lead;
+            return prisma.prospect.update({
+              where: { id: id as string },
+              data: { ...data, deletedAt: null }
+            });
+          })
+        ]);
+        return NextResponse.json({ projectLeads: changed.map(toProjectLead), skipped: leads.length - changed.length, restored: restoreLeads.length });
       }
 
       case "promoteProjectLead": {
@@ -313,6 +343,7 @@ export async function POST(request: Request) {
             projectId: optionalString(body.projectId),
             title: stringField(body.title) || stringField(body.fileName) || "Supporting Document",
             type: supportingTypeField(body.type),
+            source: optionalString(body.source),
             notes: optionalString(body.notes),
             fileName: stringField(body.fileName),
             fileType: stringField(body.fileType) || "application/octet-stream",
@@ -337,6 +368,7 @@ export async function POST(request: Request) {
             prospectId: stringField(body.prospectId),
             title: stringField(body.title) || stringField(body.fileName) || "Prospect Asset",
             description: optionalString(body.description),
+            source: optionalString(body.source),
             fileName: stringField(body.fileName),
             fileType: stringField(body.fileType) || "application/octet-stream",
             fileSize: numberField(body.fileSize),
@@ -359,6 +391,7 @@ export async function POST(request: Request) {
             projectId: stringField(body.projectId),
             title: stringField(body.title) || stringField(body.fileName) || "Reference Image",
             description: optionalString(body.description),
+            source: optionalString(body.source),
             assetType: assetTypeField(body.category),
             fileName: stringField(body.fileName),
             fileType: stringField(body.fileType) || "image/*",
@@ -390,8 +423,15 @@ export async function POST(request: Request) {
         return NextResponse.json({ task: toTask(await prisma.task.update({
           where: { id: stringField(body.taskId) },
           data: {
+            projectId: body.projectId !== undefined ? optionalString(body.projectId) ?? null : undefined,
+            title: body.title !== undefined ? stringField(body.title) || "Untitled assignment" : undefined,
+            description: body.description !== undefined ? optionalString(body.description) ?? null : undefined,
+            assignedToId: body.assignedToId !== undefined ? optionalString(body.assignedToId) ?? null : undefined,
+            dueDate: body.dueDate !== undefined ? dateField(body.dueDate) ?? null : undefined,
             priority: body.priority ? priorityField(body.priority) : undefined,
-            status: body.status ? taskStatusField(body.status) : undefined
+            status: body.status ? taskStatusField(body.status) : undefined,
+            targetType: body.targetType !== undefined ? taskTargetField(body.targetType) : undefined,
+            targetId: body.targetId !== undefined ? optionalString(body.targetId) ?? null : undefined
           }
         })) });
 
@@ -583,6 +623,7 @@ async function uploadDocumentVersion(userId: string, body: ActionBody) {
       title: stringField(body.title) || document.title,
       type: documentTypeField(body.type),
       writerName: optionalString(body.writerName) ?? document.writerName,
+      source: body.source !== undefined ? optionalString(body.source) ?? null : document.source,
       updatedAt: now
     }
   });
@@ -654,16 +695,16 @@ function toVersion(version: { id: string; documentId: string; versionNumber: num
   return { id: version.id, documentId: version.documentId, versionNumber: version.versionNumber, status: version.status, fileName: version.fileName, fileType: version.fileType, fileSize: version.fileSize, storagePath: version.storagePath, dataUrl: version.dataUrl ?? undefined, uploadedById: version.uploadedById ?? "", createdAt: dateString(version.createdAt), notes: version.notes ?? "", markdownNotes: version.markdownNotes ?? undefined, extractedText: version.extractedText ?? "" };
 }
 
-function toSupportingDocument(document: { id: string; scriptDocumentId: string; title: string; type: SupportingDocumentType; notes: string | null; fileName: string; fileType: string; fileSize: number; storagePath: string; dataUrl?: string | null; extractedText: string | null; uploadedById: string | null; createdAt: Date }) {
-  return { id: document.id, scriptDocumentId: document.scriptDocumentId, title: document.title, type: document.type, notes: document.notes ?? undefined, fileName: document.fileName, fileType: document.fileType, fileSize: document.fileSize, storagePath: document.storagePath, dataUrl: document.dataUrl ?? undefined, extractedText: document.extractedText ?? "", uploadedById: document.uploadedById ?? "", uploadedAt: dateString(document.createdAt) };
+function toSupportingDocument(document: { id: string; scriptDocumentId: string; title: string; type: SupportingDocumentType; source?: string | null; notes: string | null; fileName: string; fileType: string; fileSize: number; storagePath: string; dataUrl?: string | null; extractedText: string | null; uploadedById: string | null; createdAt: Date }) {
+  return { id: document.id, scriptDocumentId: document.scriptDocumentId, title: document.title, type: document.type, source: document.source ?? undefined, notes: document.notes ?? undefined, fileName: document.fileName, fileType: document.fileType, fileSize: document.fileSize, storagePath: document.storagePath, dataUrl: document.dataUrl ?? undefined, extractedText: document.extractedText ?? "", uploadedById: document.uploadedById ?? "", uploadedAt: dateString(document.createdAt) };
 }
 
-function toProspectAsset(asset: { id: string; prospectId: string; title: string; description: string | null; fileName: string; fileType: string; fileSize: number; storagePath: string; dataUrl: string | null; uploadedById: string | null; createdAt: Date }) {
-  return { id: asset.id, prospectId: asset.prospectId, title: asset.title, description: asset.description ?? "", fileName: asset.fileName, fileType: asset.fileType, fileSize: asset.fileSize, storagePath: asset.storagePath, dataUrl: asset.dataUrl ?? undefined, uploadedById: asset.uploadedById ?? "", uploadedAt: dateString(asset.createdAt) };
+function toProspectAsset(asset: { id: string; prospectId: string; title: string; description: string | null; source?: string | null; fileName: string; fileType: string; fileSize: number; storagePath: string; dataUrl: string | null; uploadedById: string | null; createdAt: Date }) {
+  return { id: asset.id, prospectId: asset.prospectId, title: asset.title, description: asset.description ?? "", source: asset.source ?? undefined, fileName: asset.fileName, fileType: asset.fileType, fileSize: asset.fileSize, storagePath: asset.storagePath, dataUrl: asset.dataUrl ?? undefined, uploadedById: asset.uploadedById ?? "", uploadedAt: dateString(asset.createdAt) };
 }
 
-function toAsset(asset: { id: string; projectId: string; title: string; description: string | null; assetType: AssetType; fileName: string; fileType: string; fileSize: number; storagePath: string; thumbnailPath: string | null; status: AssetStatus; uploadedById: string | null; dataUrl?: string | null }) {
-  return { id: asset.id, projectId: asset.projectId, title: asset.title, description: asset.description ?? "", assetType: asset.assetType, fileName: asset.fileName, fileType: asset.fileType, fileSize: asset.fileSize, storagePath: asset.storagePath, thumbnailPath: asset.thumbnailPath ?? undefined, status: asset.status, uploadedById: asset.uploadedById ?? "", imageUrl: asset.dataUrl ?? undefined };
+function toAsset(asset: { id: string; projectId: string; title: string; description: string | null; source?: string | null; assetType: AssetType; fileName: string; fileType: string; fileSize: number; storagePath: string; thumbnailPath: string | null; status: AssetStatus; uploadedById: string | null; dataUrl?: string | null }) {
+  return { id: asset.id, projectId: asset.projectId, title: asset.title, description: asset.description ?? "", source: asset.source ?? undefined, assetType: asset.assetType, fileName: asset.fileName, fileType: asset.fileType, fileSize: asset.fileSize, storagePath: asset.storagePath, thumbnailPath: asset.thumbnailPath ?? undefined, status: asset.status, uploadedById: asset.uploadedById ?? "", imageUrl: asset.dataUrl ?? undefined };
 }
 
 function toTask(task: { id: string; projectId: string | null; title: string; description: string | null; assignedToId: string | null; createdById: string | null; dueDate: Date | null; priority: TaskPriority; status: TaskStatus; targetType: TaskTargetType | null; targetId: string | null }) {
@@ -740,7 +781,7 @@ async function canManageDocumentVersionNotes(role: string, projectRoles: Record<
 }
 
 function canUpdateProjectLeadBasicFields(body: ActionBody) {
-  const allowed = new Set(["action", "leadId", "title", "creator", "urgencyLabel", "genre", "priorityScore"]);
+  const allowed = new Set(["action", "leadId", "title", "logline", "creator", "urgencyLabel", "genre", "priorityScore", "ownerIds"]);
   return Object.keys(body).every((key) => allowed.has(key));
 }
 
@@ -779,6 +820,21 @@ function optionalString(value: unknown) {
 function stringArrayField(value: unknown) {
   if (!Array.isArray(value)) return [];
   return Array.from(new Set(value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean)));
+}
+
+function resolveProspectOwnerIds(lead: Record<string, unknown>, users: Array<{ id: string; name: string; email: string }>) {
+  const submittedOwnerIds = stringArrayField(lead.ownerIds);
+  const validUserIds = new Set(users.map((user) => user.id));
+  const resolvedOwnerIds = submittedOwnerIds.filter((ownerId) => validUserIds.has(ownerId));
+  const owner = optionalString(lead.owner);
+  if (owner) {
+    const ownerTokens = owner.split(/[;,/]+/).map((token) => token.trim().toLowerCase()).filter(Boolean);
+    users.forEach((user) => {
+      const userTokens = [user.id, user.name, user.email].map((value) => value.toLowerCase());
+      if (ownerTokens.some((token) => userTokens.includes(token))) resolvedOwnerIds.push(user.id);
+    });
+  }
+  return Array.from(new Set(resolvedOwnerIds));
 }
 
 function contactRelationshipTypeField(value: unknown): ContactRelationshipType {
@@ -822,7 +878,7 @@ function projectLeadPatch(body: ActionBody): Prisma.ProspectUpdateInput {
     rightsStatus: body.rightsStatus !== undefined ? optionalString(body.rightsStatus) : undefined,
     contactRep: body.contactRep !== undefined ? optionalString(body.contactRep) : undefined,
     nextActionStatus: body.nextActionStatus !== undefined ? optionalString(body.nextActionStatus) : undefined,
-    owner: body.owner !== undefined ? optionalString(body.owner) : undefined,
+    owner: body.ownerIds !== undefined ? null : body.owner !== undefined ? optionalString(body.owner) : undefined,
     ownerIds: body.ownerIds !== undefined ? stringArrayField(body.ownerIds) : undefined,
     nextStep: body.nextStep !== undefined ? optionalString(body.nextStep) : undefined,
     lastUpdated: body.lastUpdated !== undefined ? optionalString(body.lastUpdated) : undefined,
@@ -837,15 +893,19 @@ function projectLeadPatch(body: ActionBody): Prisma.ProspectUpdateInput {
 function projectLeadBasicPatch(body: ActionBody): Prisma.ProspectUpdateInput {
   return {
     title: body.title !== undefined ? stringField(body.title) || "Untitled Slate Item" : undefined,
+    logline: body.logline !== undefined ? optionalString(body.logline) : undefined,
     creator: body.creator !== undefined ? optionalString(body.creator) : undefined,
     urgencyLabel: body.urgencyLabel !== undefined ? optionalString(body.urgencyLabel) : undefined,
     genre: body.genre !== undefined ? optionalString(body.genre) : undefined,
-    priorityScore: body.priorityScore !== undefined ? optionalNumber(body.priorityScore) : undefined
+    priorityScore: body.priorityScore !== undefined ? optionalNumber(body.priorityScore) : undefined,
+    owner: body.ownerIds !== undefined ? null : undefined,
+    ownerIds: body.ownerIds !== undefined ? stringArrayField(body.ownerIds) : undefined
   };
 }
 
 function projectLeadCreate(body: Record<string, unknown>): Prisma.ProspectCreateInput {
   const externalId = optionalString(body.externalId);
+  const ownerIds = stringArrayField(body.ownerIds);
   return {
     id: optionalString(body.id) ?? undefined,
     title: stringField(body.title) || "Untitled Slate Item",
@@ -874,8 +934,8 @@ function projectLeadCreate(body: Record<string, unknown>): Prisma.ProspectCreate
     rightsOpportunityScore: optionalNumber(body.rightsOpportunityScore),
     studioFitScore: optionalNumber(body.studioFitScore),
     nextActionStatus: optionalString(body.nextActionStatus),
-    owner: optionalString(body.owner),
-    ownerIds: stringArrayField(body.ownerIds),
+    owner: ownerIds.length ? undefined : optionalString(body.owner),
+    ownerIds,
     nextStep: optionalString(body.nextStep),
     lastUpdated: optionalString(body.lastUpdated),
     notes: optionalString(body.notes),

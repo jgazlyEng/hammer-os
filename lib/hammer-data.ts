@@ -247,6 +247,7 @@ export interface HammerAsset {
   projectId: string;
   title: string;
   description: string;
+  source?: string;
   assetType: AssetType;
   fileName: string;
   fileType: string;

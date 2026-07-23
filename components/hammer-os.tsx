@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, ArrowUpDown, CheckCircle2, Download, FileDiff, FileText, Gauge, ImagePlus, MessageSquare, PackageCheck, Plus, Search, ShieldCheck, Trash2, UploadCloud, UsersRound, X } from "lucide-react";
+import { ArrowLeft, ArrowUpDown, CheckCircle2, Download, FileDiff, FileText, Gauge, ImagePlus, MessageSquare, PackageCheck, Pencil, Plus, Search, ShieldCheck, Trash2, UploadCloud, UsersRound, X } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { EmptyState, MetricCard, Panel, SectionHeader } from "@/components/ui";
 import {
@@ -90,11 +90,13 @@ const HAMMER_DISMISSED_BREAKDOWN_ENTITIES_STORAGE_KEY = "hammer:dismissed-breakd
 const HAMMER_SUPPORTING_DOCUMENTS_STORAGE_KEY = "hammer:supporting-documents";
 const HAMMER_REFERENCE_IMAGES_STORAGE_KEY = "hammer:reference-images";
 const HAMMER_PROSPECT_ASSETS_STORAGE_KEY = "hammer:prospect-assets";
+
+type DownloadResourceType = "documentVersion" | "supportingDocument" | "prospectAsset" | "asset";
 const HAMMER_LOCAL_VERSION_NOTES_STORAGE_KEY = "hammer:version-notes";
 const HAMMER_LOCAL_VERSION_MARKDOWN_STORAGE_KEY = "hammer:version-markdown-notes";
 const HAMMER_LOCAL_COMMENTS_STORAGE_KEY = "hammer:comments";
 
-type HammerView = "dashboard" | "projects" | "prospects" | "collections" | "project-new" | "project-detail" | "project-documents" | "project-assets" | "scripts" | "script-detail" | "script-versions" | "script-diff" | "script-breakdown" | "assets" | "asset-detail" | "tasks" | "contacts" | "reviews" | "executive" | "admin-users" | "account";
+type HammerView = "dashboard" | "projects" | "prospects" | "collections" | "project-new" | "project-detail" | "project-documents" | "project-assets" | "scripts" | "script-detail" | "script-versions" | "script-diff" | "script-breakdown" | "assets" | "asset-detail" | "tasks" | "contacts" | "reviews" | "reports" | "executive" | "admin-users" | "account";
 type ScriptLibrarySection = "inbox" | "projects" | "all";
 type AppRole = "admin" | "executive" | "producer" | "department_lead";
 
@@ -163,6 +165,7 @@ interface SupportingDocument {
   scriptDocumentId: string;
   title: string;
   type: SupportingDocumentType;
+  source?: string;
   fileName: string;
   fileType: string;
   fileSize: number;
@@ -179,6 +182,7 @@ interface ProjectReferenceImage {
   projectId: string;
   title: string;
   description: string;
+  source?: string;
   category: AssetType;
   status: AssetStatus;
   fileName: string;
@@ -192,6 +196,7 @@ interface ProspectAsset {
   prospectId: string;
   title: string;
   description: string;
+  source?: string;
   fileName: string;
   fileType: string;
   fileSize: number;
@@ -200,6 +205,8 @@ interface ProspectAsset {
   uploadedById: string;
   uploadedAt: string;
 }
+
+type TaskPatch = Partial<Pick<HammerTask, "projectId" | "title" | "description" | "assignedToId" | "dueDate" | "priority" | "status" | "targetType" | "targetId">>;
 
 function toSessionUser(user: HammerUser): SessionUser {
   return {
@@ -247,7 +254,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   const [localSlateCollectionItems, setLocalSlateCollectionItems] = useState<HammerSlateCollectionItem[]>([]);
   const [localProspectAssets, setLocalProspectAssets] = useState<ProspectAsset[]>([]);
   const [localTasks, setLocalTasks] = useState<HammerTask[]>([]);
-  const [taskUpdates, setTaskUpdates] = useState<Record<string, Partial<Pick<HammerTask, "priority" | "status">>>>({});
+  const [taskUpdates, setTaskUpdates] = useState<Record<string, TaskPatch>>({});
   const documents = useMemo(() => (workspaceMode === "database" ? localDocuments : [...hammerDocuments, ...localDocuments]).filter(isValidDocument).map((document) => (
     Object.prototype.hasOwnProperty.call(documentProjectOverrides, document.id)
       ? { ...document, projectId: documentProjectOverrides[document.id] ?? undefined }
@@ -498,6 +505,24 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_PROJECTS_EVENT));
   }
 
+  async function updateProject(projectId: string, patch: Partial<HammerProject>) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("updateProject", { projectId, ...patch });
+      return;
+    }
+    setProjects((current) => current.map((project) => project.id === projectId ? { ...project, ...patch, updatedAt: new Date().toISOString().slice(0, 10) } : project));
+    setLocalProjects((current) => {
+      const existingLocal = current.some((project) => project.id === projectId);
+      const sourceProject = projects.find((project) => project.id === projectId);
+      const next = existingLocal
+        ? current.map((project) => project.id === projectId ? { ...project, ...patch, updatedAt: new Date().toISOString().slice(0, 10) } : project)
+        : sourceProject ? [{ ...sourceProject, ...patch, updatedAt: new Date().toISOString().slice(0, 10) }, ...current] : current;
+      window.localStorage.setItem(HAMMER_LOCAL_PROJECTS_STORAGE_KEY, JSON.stringify(next));
+      window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_PROJECTS_EVENT));
+      return next;
+    });
+  }
+
   async function updateProjectLead(leadId: string, patch: Partial<HammerProjectLead>) {
     if (workspaceMode === "database") {
       await runWorkspaceAction("updateProjectLead", { leadId, ...patch });
@@ -563,6 +588,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     title: string;
     type: DocumentType;
     writerName: string;
+    source: string;
     file: File;
     notes: string;
   }) {
@@ -575,6 +601,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
         title: input.title,
         type: input.type,
         writerName: input.writerName,
+        source: input.source,
         fileName: input.file.name,
         fileType: input.file.type || inferFileType(input.file.name),
         fileSize: input.file.size,
@@ -607,7 +634,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       extractedText
     };
     const nextDocuments = existingDocument
-      ? localDocuments.map((doc) => doc.id === existingDocument.id ? { ...doc, title: input.title, type: input.type, writerName: input.writerName, currentVersionId: versionId, updatedAt: now } : doc)
+      ? localDocuments.map((doc) => doc.id === existingDocument.id ? { ...doc, title: input.title, type: input.type, writerName: input.writerName, source: input.source || doc.source, currentVersionId: versionId, updatedAt: now } : doc)
       : [
           ...localDocuments,
           {
@@ -618,6 +645,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
             currentVersionId: versionId,
             createdById: currentUser.id,
             writerName: input.writerName,
+            source: input.source || undefined,
             updatedAt: now
           }
         ];
@@ -807,6 +835,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     scriptDocumentId: string;
     title: string;
     type: SupportingDocumentType;
+    source: string;
     notes: string;
     file: File;
   }) {
@@ -819,6 +848,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
         projectId: scriptDocument?.projectId,
         title: input.title,
         type: input.type,
+        source: input.source,
         notes: input.notes,
         fileName: input.file.name,
         fileType: input.file.type || inferFileType(input.file.name),
@@ -836,6 +866,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       scriptDocumentId: input.scriptDocumentId,
       title: input.title.trim() || input.file.name.replace(/\.[^.]+$/, ""),
       type: input.type,
+      source: input.source.trim() || undefined,
       fileName: input.file.name,
       fileType: input.file.type || inferFileType(input.file.name),
       fileSize: input.file.size,
@@ -865,6 +896,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     projectId: string;
     title: string;
     description: string;
+    source: string;
     category: AssetType;
     file: File;
   }) {
@@ -875,6 +907,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
         projectId: input.projectId,
         title: input.title,
         description: input.description,
+        source: input.source,
         category: input.category,
         fileName: input.file.name,
         fileType: input.file.type || inferFileType(input.file.name),
@@ -890,6 +923,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       projectId: input.projectId,
       title: input.title.trim() || input.file.name.replace(/\.[^.]+$/, ""),
       description: input.description.trim() || "Uploaded project reference.",
+      source: input.source.trim() || undefined,
       category: input.category,
       status: "UPLOADED",
       fileName: input.file.name,
@@ -905,6 +939,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     prospectId: string;
     title: string;
     description: string;
+    source: string;
     file: File;
   }) {
     if (!isAllowedProspectAssetFile(input.file)) throw new Error("Upload a PDF, DOC, DOCX, TXT, MD, or image file.");
@@ -914,6 +949,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
         prospectId: input.prospectId,
         title: input.title,
         description: input.description,
+        source: input.source,
         fileName: input.file.name,
         fileType: input.file.type || inferProspectAssetFileType(input.file.name),
         fileSize: input.file.size,
@@ -928,6 +964,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       prospectId: input.prospectId,
       title: input.title.trim() || input.file.name.replace(/\.[^.]+$/, ""),
       description: input.description.trim(),
+      source: input.source.trim() || undefined,
       fileName: input.file.name,
       fileType: input.file.type || inferProspectAssetFileType(input.file.name),
       fileSize: input.file.size,
@@ -985,7 +1022,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_TASKS_EVENT));
   }
 
-  async function updateTask(taskId: string, patch: Partial<Pick<HammerTask, "priority" | "status">>) {
+  async function updateTask(taskId: string, patch: TaskPatch) {
     if (workspaceMode === "database") {
       await runWorkspaceAction("updateTask", { taskId, ...patch });
       return;
@@ -1223,9 +1260,9 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       return <ProjectEditor users={users} currentUser={currentUser} onCreate={addProject} />;
     }
     if (["project-detail", "project-documents", "project-assets"].includes(view) && !projects.length) return <EmptyWorkspaceState />;
-    if (view === "project-detail") return <ProjectWorkspace project={project} activeTab="overview" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
-    if (view === "project-documents") return <ProjectWorkspace project={project} activeTab="documents" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
-    if (view === "project-assets") return <ProjectWorkspace project={project} activeTab="assets" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
+    if (view === "project-detail") return <ProjectWorkspace project={project} activeTab="overview" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpdateProject={canManageScriptLibrary(currentUser.role) ? updateProject : undefined} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
+    if (view === "project-documents") return <ProjectWorkspace project={project} activeTab="documents" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpdateProject={canManageScriptLibrary(currentUser.role) ? updateProject : undefined} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
+    if (view === "project-assets") return <ProjectWorkspace project={project} activeTab="assets" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpdateProject={canManageScriptLibrary(currentUser.role) ? updateProject : undefined} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
     if (view === "scripts") return <LegacyRedirect title="Scripts now live inside the slate" detail="Script tracking is most useful in context. Open a Development Slate item for active project scripts and supporting documents, or use Prospects for materials the team may want to pursue." href="/projects" label="Open Development Slate" />;
     if (["script-detail", "script-versions", "script-diff", "script-breakdown"].includes(view) && !documents.some((item) => item.id === document.id)) return <EmptyScriptState />;
     if (view === "script-detail") return <ScriptDetail documentId={document.id} documents={documents} versions={versions} comments={comments} currentUser={currentUser} supportingDocuments={supportingDocuments} onUpload={uploadDocumentVersion} onSupportingUpload={uploadSupportingDocument} onSupportingDelete={deleteSupportingDocument} onStatusChange={updateDocumentStatus} onUpdateVersionNotes={canManageScriptLibrary(currentUser.role) ? updateDocumentVersionNotes : undefined} onUpdateVersionMarkdown={canAccessScriptDocument(currentUser, document) ? updateDocumentVersionMarkdown : undefined} onCreateComment={createComment} onUpdateMetadata={canAccessScriptDocument(currentUser, document) ? updateDocumentMetadata : undefined} onDelete={deleteUploadedDocument} />;
@@ -1238,6 +1275,10 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     if (view === "contacts") {
       if (!canViewContacts(currentUser.role)) return <AccessDenied title="Contacts access required" detail="Only admins, producers, and executives can view the studio contact directory." />;
       return <Contacts initialContacts={contacts} contactRelationships={contactRelationships} currentUser={currentUser} users={users} projects={projects} documents={documents} tasks={tasks} databaseMode={workspaceMode === "database"} onDatabaseImport={(importedContacts) => runWorkspaceAction("importContacts", { contacts: importedContacts })} onCreateContact={createContact} onUpdateContact={updateContact} onDeleteContact={deleteContact} onCreateRelationship={createContactRelationship} onDeleteRelationship={deleteContactRelationship} />;
+    }
+    if (view === "reports") {
+      if (!canViewReports(currentUser.role)) return <AccessDenied title="Reports access required" detail="Only admins, producers, and executives can generate executive email reports." />;
+      return <Reports projects={projects} prospects={projectLeads} documents={documents} versions={versions} supportingDocuments={supportingDocuments} tasks={tasks} assets={assets} approvals={approvals} comments={comments} users={users} currentUser={currentUser} />;
     }
     if (view === "account") return <AccountSettings user={sessionUser} onUpdateAccount={updateAccount} />;
     if (view === "reviews") return <LegacyRedirect title="Reviews are folded into the slate" detail="Review work now starts from the relevant Development Slate item or Prospect, so the queue is easier to follow in context." href="/projects" label="Open Development Slate" />;
@@ -1414,7 +1455,7 @@ function Projects({
   onImportLeads?: (leads: HammerProjectLead[]) => Promise<void>;
   onPromoteLead?: (leadId: string) => Promise<void>;
   onCreateTask?: (input: { projectId?: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
-  onUploadProspectAsset?: (input: { prospectId: string; title: string; description: string; file: File }) => Promise<void>;
+  onUploadProspectAsset?: (input: { prospectId: string; title: string; description: string; source: string; file: File }) => Promise<void>;
   onDeleteProspectAsset?: (assetId: string) => Promise<void>;
 }) {
   const section = mode === "prospects" ? "slate" : "active";
@@ -1427,6 +1468,7 @@ function Projects({
   const [addSlateOpen, setAddSlateOpen] = useState(false);
   const [slatePage, setSlatePage] = useState(1);
   const [slateImportMessage, setSlateImportMessage] = useState("");
+  const [prospectSort, setProspectSort] = useState<{ key: ProspectSortKey; direction: "asc" | "desc" }>({ key: "title", direction: "asc" });
   const filteredLeads = projectLeads.filter((lead) => {
     const matchesSearch = `${lead.title} ${lead.logline ?? ""} ${lead.creator ?? ""} ${lead.genre ?? ""} ${lead.lane ?? ""} ${lead.notes ?? ""} ${lead.searchKeywords ?? ""} ${lead.contactRep ?? ""}`.toLowerCase().includes(slateSearch.toLowerCase());
     return matchesSearch
@@ -1446,9 +1488,17 @@ function Projects({
     promoted: projectLeads.filter((lead) => lead.promotedProjectId).length
   };
   const slatePageSize = 100;
-  const slateTotalPages = Math.max(1, Math.ceil(filteredLeads.length / slatePageSize));
+  const sortedLeads = useMemo(() => {
+    return [...filteredLeads].sort((a, b) => {
+      const aValue = prospectSortValue(a, prospectSort.key, users);
+      const bValue = prospectSortValue(b, prospectSort.key, users);
+      const comparison = aValue.localeCompare(bValue, undefined, { numeric: true, sensitivity: "base" });
+      return prospectSort.direction === "asc" ? comparison : -comparison;
+    });
+  }, [filteredLeads, prospectSort.direction, prospectSort.key, users]);
+  const slateTotalPages = Math.max(1, Math.ceil(sortedLeads.length / slatePageSize));
   const normalizedSlatePage = Math.min(slatePage, slateTotalPages);
-  const pagedLeads = filteredLeads.slice((normalizedSlatePage - 1) * slatePageSize, normalizedSlatePage * slatePageSize);
+  const pagedLeads = sortedLeads.slice((normalizedSlatePage - 1) * slatePageSize, normalizedSlatePage * slatePageSize);
   const selectedLead = selectedLeadId
     ? pagedLeads.find((lead) => lead.id === selectedLeadId && lead.title === selectedLeadTitle)
       ?? filteredLeads.find((lead) => lead.id === selectedLeadId && lead.title === selectedLeadTitle)
@@ -1476,7 +1526,10 @@ function Projects({
     if (!file || !onImportLeads) return;
     try {
       const text = await file.text();
-      const parsed = parseProjectLeadCsv(text);
+      const parsed = parseProjectLeadCsv(text).map((lead) => ({
+        ...lead,
+        ownerIds: lead.ownerIds?.length ? lead.ownerIds : resolveCsvOwnerIds(lead.owner, users)
+      }));
       await onImportLeads(parsed);
       setSlateImportMessage(`Processed ${parsed.length} prospect row${parsed.length === 1 ? "" : "s"}. Existing IDs were ignored.`);
     } catch (error) {
@@ -1486,6 +1539,13 @@ function Projects({
 
   function setFilter(key: keyof typeof filters, value: string) {
     setFilters((current) => ({ ...current, [key]: value }));
+  }
+
+  function toggleProspectSort(key: ProspectSortKey) {
+    setProspectSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === "asc" ? "desc" : "asc"
+    }));
   }
 
   return (
@@ -1546,7 +1606,16 @@ function Projects({
                     <col className="w-[90px]" />
                   </colgroup>
                   <thead>
-                    <tr><th>Title</th><th>Lane</th><th>Genre</th><th>Urgency</th><th>Rights</th><th>Owner</th><th>Action Status</th><th>Score</th></tr>
+                    <tr>
+                      <SortableHeader label="Title" sortKey="title" activeSort={prospectSort} onSort={toggleProspectSort} />
+                      <SortableHeader label="Lane" sortKey="lane" activeSort={prospectSort} onSort={toggleProspectSort} />
+                      <SortableHeader label="Genre" sortKey="genre" activeSort={prospectSort} onSort={toggleProspectSort} />
+                      <SortableHeader label="Urgency" sortKey="urgency" activeSort={prospectSort} onSort={toggleProspectSort} />
+                      <SortableHeader label="Rights" sortKey="rights" activeSort={prospectSort} onSort={toggleProspectSort} />
+                      <SortableHeader label="Owner" sortKey="owner" activeSort={prospectSort} onSort={toggleProspectSort} />
+                      <SortableHeader label="Action Status" sortKey="actionStatus" activeSort={prospectSort} onSort={toggleProspectSort} />
+                      <SortableHeader label="Score" sortKey="score" activeSort={prospectSort} onSort={toggleProspectSort} />
+                    </tr>
                   </thead>
                   <tbody>
                     {pagedLeads.map((lead) => (
@@ -1600,6 +1669,7 @@ function Projects({
                   draft={leadDraft}
                   projects={projects}
                   users={users}
+                  currentUser={currentUser}
                   tasks={tasks}
                   onDraftChange={setLeadDraft}
                   onSave={saveLead}
@@ -1655,14 +1725,14 @@ function SlateFilter({ label, value, options, onChange }: { label: string; value
 }
 
 function ProspectOwnerFilter({ label, value, users, leads, onChange }: { label: string; value: string; users: HammerUser[]; leads: HammerProjectLead[]; onChange: (value: string) => void }) {
-  const legacyOwners = uniqueLeadOptions(leads, "owner").filter((owner) => !users.some((user) => user.name.toLowerCase() === owner.toLowerCase() || user.email.toLowerCase() === owner.toLowerCase()));
+  const assignedOwnerIds = new Set(leads.flatMap((lead) => lead.ownerIds ?? []));
+  const ownerOptions = users.filter((user) => assignedOwnerIds.has(user.id));
   return (
     <label className="grid gap-1">
       <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">{label}</span>
       <select className="field" value={value} onChange={(event) => onChange(event.target.value)}>
         <option value="ALL">All</option>
-        {users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
-        {legacyOwners.map((owner) => <option key={owner} value={owner}>{owner}</option>)}
+        {ownerOptions.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
       </select>
     </label>
   );
@@ -1752,6 +1822,7 @@ function SlateLeadPanel({
   draft,
   projects,
   users,
+  currentUser,
   tasks,
   assets = [],
   canManageAssets = false,
@@ -1767,6 +1838,7 @@ function SlateLeadPanel({
   draft: Partial<HammerProjectLead>;
   projects: HammerProject[];
   users: HammerUser[];
+  currentUser: HammerUser;
   tasks: HammerTask[];
   assets?: ProspectAsset[];
   canManageAssets?: boolean;
@@ -1774,7 +1846,7 @@ function SlateLeadPanel({
   onSave: () => Promise<void>;
   onPromote?: (leadId: string) => Promise<void>;
   onCreateTask?: (input: { projectId?: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
-  onUploadAsset?: (input: { prospectId: string; title: string; description: string; file: File }) => Promise<void>;
+  onUploadAsset?: (input: { prospectId: string; title: string; description: string; source: string; file: File }) => Promise<void>;
   onDeleteAsset?: (assetId: string) => Promise<void>;
   onClose?: () => void;
 }) {
@@ -1801,10 +1873,14 @@ function SlateLeadPanel({
           ) : null}
         </div>
       </div>
-      <p className="mt-3 text-[13px] leading-5 text-studio-300">{lead.logline || "No logline provided."}</p>
+      <label className="mt-3 grid gap-1">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Logline</span>
+        <textarea className="field min-h-20" value={draft.logline ?? ""} onChange={(event) => onDraftChange((current) => ({ ...current, logline: event.target.value }))} placeholder="Add a short creative summary for this prospect." />
+      </label>
       <ProspectAssetsPanel
         prospect={lead}
         assets={assets}
+        currentUser={currentUser}
         canManage={canManageAssets}
         onUpload={onUploadAsset}
         onDelete={onDeleteAsset}
@@ -1885,18 +1961,21 @@ function SlateLeadPanel({
 function ProspectAssetsPanel({
   prospect,
   assets,
+  currentUser,
   canManage,
   onUpload,
   onDelete
 }: {
   prospect: HammerProjectLead;
   assets: ProspectAsset[];
+  currentUser: HammerUser;
   canManage: boolean;
-  onUpload?: (input: { prospectId: string; title: string; description: string; file: File }) => Promise<void>;
+  onUpload?: (input: { prospectId: string; title: string; description: string; source: string; file: File }) => Promise<void>;
   onDelete?: (assetId: string) => Promise<void>;
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [source, setSource] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1914,10 +1993,12 @@ function ProspectAssetsPanel({
         prospectId: prospect.id,
         title: title.trim() || file.name.replace(/\.[^.]+$/, ""),
         description: description.trim(),
+        source: source.trim(),
         file
       });
       setTitle("");
       setDescription("");
+      setSource("");
       setFile(null);
       event.currentTarget.reset();
       setMessage("File uploaded and associated to this prospect.");
@@ -1943,6 +2024,7 @@ function ProspectAssetsPanel({
             <input className="field" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Script or material title" />
             <input className="field" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Short description" />
           </div>
+          <input className="field" value={source} onChange={(event) => setSource(event.target.value)} placeholder="Source: agency, contest, list, manager, referral" />
           <div className="grid gap-2 md:grid-cols-[1fr_auto]">
             <input className="field file:mr-3 file:rounded file:border-0 file:bg-amberline file:px-2.5 file:py-1 file:text-xs file:font-semibold file:text-studio-950" type="file" accept=".pdf,.doc,.docx,.txt,.md,image/*" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
             <button type="submit" disabled={busy} className="inline-flex items-center justify-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-xs font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">
@@ -1963,12 +2045,13 @@ function ProspectAssetsPanel({
               <div className="min-w-0">
                 <p className="truncate text-[13px] font-semibold text-studio-100">{asset.title || asset.fileName}</p>
                 <p className="mt-0.5 truncate text-xs text-studio-400">{asset.fileName} / {asset.fileType || "file"} / {formatBytes(asset.fileSize)}</p>
+                {asset.source ? <p className="mt-1 text-xs text-studio-400">Source: {asset.source}</p> : null}
                 {asset.description ? <p className="mt-1 text-xs leading-5 text-studio-300">{asset.description}</p> : null}
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
               {asset.dataUrl ? <a href={asset.dataUrl} target="_blank" rel="noreferrer" className="rounded border border-white/10 px-1.5 py-1 text-[11px] font-semibold text-studio-300 hover:text-amberline">Open</a> : null}
-              {canManage ? <DownloadFileLink fileName={asset.fileName} dataUrl={asset.dataUrl} compact /> : null}
+              {canManage ? <DownloadFileLink fileName={asset.fileName} dataUrl={asset.dataUrl} resourceType="prospectAsset" resourceId={asset.id} currentUser={currentUser} compact /> : null}
               {canManage && onDelete ? (
                 <button type="button" onClick={() => onDelete(asset.id)} className="rounded-md border border-white/10 p-2 text-studio-400 transition hover:border-rose-400/40 hover:text-rose-200" aria-label={`Delete ${asset.title || asset.fileName}`}>
                   <Trash2 className="h-3.5 w-3.5" />
@@ -2026,6 +2109,7 @@ function SlateEditField({ label, value, onChange }: { label: string; value?: str
 function normalizeLeadPatch(draft: Partial<HammerProjectLead>) {
   return {
     ...draft,
+    owner: draft.ownerIds?.length ? "" : draft.owner,
     title: draft.title?.trim() || undefined,
     creator: draft.creator?.trim() || undefined,
     genre: draft.genre?.trim() || undefined,
@@ -2037,10 +2121,12 @@ function normalizeLeadPatch(draft: Partial<HammerProjectLead>) {
 function projectLeadCoreEditablePatch(draft: Partial<HammerProjectLead>) {
   return {
     title: draft.title,
+    logline: draft.logline,
     creator: draft.creator,
     urgencyLabel: draft.urgencyLabel,
     genre: draft.genre,
-    priorityScore: draft.priorityScore
+    priorityScore: draft.priorityScore,
+    ownerIds: draft.ownerIds
   };
 }
 
@@ -2111,7 +2197,7 @@ function matchesFilter(filter: string, value?: string) {
 
 function matchesOwnerFilter(filter: string, lead: HammerProjectLead) {
   if (filter === "ALL") return true;
-  return Boolean(lead.ownerIds?.includes(filter) || lead.owner === filter);
+  return Boolean(lead.ownerIds?.includes(filter));
 }
 
 function prospectOwnerLabel(lead: HammerProjectLead, users: HammerUser[]) {
@@ -2332,6 +2418,7 @@ type DocumentUploadInput = {
   title: string;
   type: DocumentType;
   writerName: string;
+  source: string;
   file: File;
   notes: string;
 };
@@ -2353,6 +2440,7 @@ function ProjectWorkspace({
   onDelete,
   onAssignToProject,
   onReferenceUpload,
+  onUpdateProject,
   onCreateTask
 }: {
   project: HammerProject;
@@ -2370,7 +2458,8 @@ function ProjectWorkspace({
   onUpload?: (input: DocumentUploadInput) => Promise<void>;
   onDelete?: (documentId: string) => void;
   onAssignToProject?: (documentId: string, projectId: string) => void;
-  onReferenceUpload?: (input: { projectId: string; title: string; description: string; category: AssetType; file: File }) => Promise<void>;
+  onReferenceUpload?: (input: { projectId: string; title: string; description: string; source: string; category: AssetType; file: File }) => Promise<void>;
+  onUpdateProject?: (projectId: string, patch: Partial<HammerProject>) => Promise<void>;
   onCreateTask?: (input: { projectId?: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
 }) {
   const docs = documents.filter((doc) => doc.projectId === project.id);
@@ -2408,7 +2497,7 @@ function ProjectWorkspace({
               <span className="rounded border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] text-studio-300">Updated {project.updatedAt}</span>
             </div>
             <h2 className="mt-3 text-2xl font-semibold text-studio-100">{project.title}</h2>
-            <p className="mt-2 max-w-2xl text-[13px] leading-5 text-studio-300">{project.logline}</p>
+            <ProjectLoglineEditor project={project} onUpdateProject={onUpdateProject} />
           </div>
           <div className="grid min-w-[260px] grid-cols-2 gap-x-5 gap-y-2 text-[13px]">
             <ProjectMeta label="Type" value={project.type} />
@@ -2458,17 +2547,17 @@ function ProjectWorkspace({
               <div className="grid gap-3 xl:grid-cols-2">
                 <div>
                   <h3 className="mb-2 text-sm font-semibold text-studio-100">Associated Scripts</h3>
-                  <ProjectScriptFileList docs={scriptDocs.slice(0, 4)} versions={versions} canDownload={canDownload} />
+                  <ProjectScriptFileList docs={scriptDocs.slice(0, 4)} versions={versions} canDownload={canDownload} currentUser={currentUser} />
                 </div>
                 <div>
                   <h3 className="mb-2 text-sm font-semibold text-studio-100">Supporting Documentation</h3>
-                  <ProjectSupportingDocs docs={docs} versions={versions} supportingDocuments={projectSupportingDocs} canDownload={canDownload} />
+                  <ProjectSupportingDocs docs={docs} versions={versions} supportingDocuments={projectSupportingDocs} canDownload={canDownload} currentUser={currentUser} />
                 </div>
               </div>
             </Panel>
             <Panel>
               <SectionHeader eyebrow="Visual Reference" title="Reference Images" action={<TableLink href={`/projects/${project.id}/assets`}>Open reference</TableLink>} />
-              <ReferenceImageGrid images={projectReferenceImages.slice(0, 6)} assets={projectAssets.slice(0, 6)} canDownload={canDownload} />
+              <ReferenceImageGrid images={projectReferenceImages.slice(0, 6)} assets={projectAssets.slice(0, 6)} canDownload={canDownload} currentUser={currentUser} />
             </Panel>
           </div>
           <div className="space-y-4">
@@ -2478,12 +2567,69 @@ function ProjectWorkspace({
       ) : null}
 
       {activeTab === "documents" ? <Scripts projectId={project.id} documents={documents} versions={versions} projects={projects} currentUser={currentUser} onUpload={onUpload} onDelete={onDelete} onAssignToProject={canManageScriptLibrary(currentUser.role) ? onAssignToProject : undefined} /> : null}
-      {activeTab === "assets" ? <ProjectReferenceWorkspace project={project} assets={projectAssets} referenceImages={projectReferenceImages} canDownload={canDownload} onReferenceUpload={onReferenceUpload} /> : null}
+      {activeTab === "assets" ? <ProjectReferenceWorkspace project={project} assets={projectAssets} referenceImages={projectReferenceImages} canDownload={canDownload} currentUser={currentUser} onReferenceUpload={onReferenceUpload} /> : null}
     </div>
   );
 }
 
-function ProjectSupportingDocs({ docs, versions, supportingDocuments, canDownload }: { docs: HammerDocument[]; versions: HammerDocumentVersion[]; supportingDocuments: SupportingDocument[]; canDownload: boolean }) {
+function ProjectLoglineEditor({ project, onUpdateProject }: { project: HammerProject; onUpdateProject?: (projectId: string, patch: Partial<HammerProject>) => Promise<void> }) {
+  const [editing, setEditing] = useState(false);
+  const [logline, setLogline] = useState(project.logline);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    if (!editing) setLogline(project.logline);
+  }, [editing, project.logline]);
+
+  async function save() {
+    if (!onUpdateProject) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await onUpdateProject(project.id, { logline: logline.trim() });
+      setEditing(false);
+      setMessage("Logline saved.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not save logline.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!editing) {
+    return (
+      <div className="mt-2 max-w-2xl">
+        <p className="text-[13px] leading-5 text-studio-300">{project.logline || "No logline provided."}</p>
+        <div className="mt-2 flex items-center gap-2">
+          {onUpdateProject ? (
+            <button type="button" onClick={() => setEditing(true)} className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline">
+              <Pencil className="h-3 w-3" />
+              Edit Logline
+            </button>
+          ) : null}
+          {message ? <span className="text-xs text-studio-400">{message}</span> : null}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2 max-w-2xl rounded-md border border-white/10 bg-white/[0.025] p-2.5">
+      <label className="grid gap-1">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Logline</span>
+        <textarea className="field min-h-20" value={logline} onChange={(event) => setLogline(event.target.value)} />
+      </label>
+      <div className="mt-2 flex justify-end gap-2">
+        <button type="button" onClick={() => { setEditing(false); setLogline(project.logline); }} className="rounded border border-white/10 px-2.5 py-1.5 text-xs font-semibold text-studio-300 hover:text-amberline">Cancel</button>
+        <button type="button" disabled={busy} onClick={save} className="rounded bg-amberline px-2.5 py-1.5 text-xs font-semibold text-studio-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">Save Logline</button>
+      </div>
+      {message ? <p className="mt-2 text-xs text-studio-300">{message}</p> : null}
+    </div>
+  );
+}
+
+function ProjectSupportingDocs({ docs, versions, supportingDocuments, canDownload, currentUser }: { docs: HammerDocument[]; versions: HammerDocumentVersion[]; supportingDocuments: SupportingDocument[]; canDownload: boolean; currentUser: HammerUser }) {
   const directDocs = docs.filter((doc) => ["NOTES", "COVERAGE", "BUSINESS_DOCUMENT"].includes(doc.type));
   const items = [
     ...directDocs.map((doc) => {
@@ -2495,17 +2641,22 @@ function ProjectSupportingDocs({ docs, versions, supportingDocuments, canDownloa
         href: `/scripts/${doc.id}`,
         fileName: version?.fileName ?? `${doc.title}.txt`,
         dataUrl: version?.dataUrl,
-        fallbackText: version?.extractedText
+        fallbackText: version?.extractedText,
+        resourceType: version ? "documentVersion" as const : undefined,
+        resourceId: version?.id
       };
     }),
     ...supportingDocuments.map((doc) => ({
       id: doc.id,
       title: doc.title,
-      detail: doc.fileName,
+      detail: doc.source ? `${doc.fileName} / ${doc.source}` : doc.fileName,
       href: undefined,
       fileName: doc.fileName,
       dataUrl: doc.dataUrl,
-      fallbackText: doc.extractedText
+      fallbackText: doc.extractedText,
+      source: doc.source,
+      resourceType: "supportingDocument" as const,
+      resourceId: doc.id
     }))
   ];
   if (!items.length) return <EmptyState label="No context docs yet. Add coverage, notes, deck pages, or correspondence from a script's Files tab." />;
@@ -2521,7 +2672,7 @@ function ProjectSupportingDocs({ docs, versions, supportingDocuments, canDownloa
         return (
           <div key={item.id} className="flex items-start justify-between gap-2 rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-2 transition hover:border-amberline/30 hover:bg-white/[0.05]">
             {item.href ? <Link href={item.href} className="min-w-0">{text}</Link> : text}
-            {canDownload ? <DownloadFileLink fileName={item.fileName} dataUrl={item.dataUrl} fallbackText={item.fallbackText} /> : null}
+            {canDownload ? <DownloadFileLink fileName={item.fileName} dataUrl={item.dataUrl} fallbackText={item.fallbackText} resourceType={item.resourceType} resourceId={item.resourceId} currentUser={currentUser} /> : null}
           </div>
         );
       })}
@@ -2529,7 +2680,7 @@ function ProjectSupportingDocs({ docs, versions, supportingDocuments, canDownloa
   );
 }
 
-function ProjectScriptFileList({ docs, versions, canDownload }: { docs: HammerDocument[]; versions: HammerDocumentVersion[]; canDownload: boolean }) {
+function ProjectScriptFileList({ docs, versions, canDownload, currentUser }: { docs: HammerDocument[]; versions: HammerDocumentVersion[]; canDownload: boolean; currentUser: HammerUser }) {
   if (!docs.length) return <EmptyState label="No scripts, treatments, or outlines attached yet." />;
   return (
     <div className="grid gap-2">
@@ -2541,7 +2692,7 @@ function ProjectScriptFileList({ docs, versions, canDownload }: { docs: HammerDo
               <p className="truncate text-[13px] font-semibold text-studio-100">{doc.title}</p>
               <p className="mt-0.5 truncate text-xs text-studio-400">{version?.fileName ?? statusLabel(doc.type)}</p>
             </Link>
-            {canDownload && version ? <DownloadFileLink fileName={version.fileName} dataUrl={version.dataUrl} fallbackText={version.extractedText} /> : null}
+            {canDownload && version ? <DownloadFileLink fileName={version.fileName} dataUrl={version.dataUrl} fallbackText={version.extractedText} resourceType="documentVersion" resourceId={version.id} currentUser={currentUser} /> : null}
           </div>
         );
       })}
@@ -2647,13 +2798,15 @@ function ProjectReferenceWorkspace({
   assets,
   referenceImages,
   canDownload,
+  currentUser,
   onReferenceUpload
 }: {
   project: HammerProject;
   assets: HammerAsset[];
   referenceImages: ProjectReferenceImage[];
   canDownload: boolean;
-  onReferenceUpload?: (input: { projectId: string; title: string; description: string; category: AssetType; file: File }) => Promise<void>;
+  currentUser: HammerUser;
+  onReferenceUpload?: (input: { projectId: string; title: string; description: string; source: string; category: AssetType; file: File }) => Promise<void>;
 }) {
   return (
     <div className="space-y-4">
@@ -2661,7 +2814,7 @@ function ProjectReferenceWorkspace({
         <SectionHeader eyebrow={project.title} title="Reference Images" action={onReferenceUpload ? undefined : <PrimaryButton icon={UploadCloud} label="Upload Reference" />} />
         <div className="grid gap-4 xl:grid-cols-[320px_1fr]">
           {onReferenceUpload ? <ReferenceUpload projectId={project.id} onUpload={onReferenceUpload} /> : null}
-          <ReferenceImageGrid images={referenceImages} assets={assets} canDownload={canDownload} />
+          <ReferenceImageGrid images={referenceImages} assets={assets} canDownload={canDownload} currentUser={currentUser} />
         </div>
       </Panel>
     </div>
@@ -2673,10 +2826,11 @@ function ReferenceUpload({
   onUpload
 }: {
   projectId: string;
-  onUpload: (input: { projectId: string; title: string; description: string; category: AssetType; file: File }) => Promise<void>;
+  onUpload: (input: { projectId: string; title: string; description: string; source: string; category: AssetType; file: File }) => Promise<void>;
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [source, setSource] = useState("");
   const [category, setCategory] = useState<AssetType>("MOOD_IMAGE");
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState("");
@@ -2689,9 +2843,10 @@ function ReferenceUpload({
     }
     setStatus("Adding reference...");
     try {
-      await onUpload({ projectId, title, description, category, file });
+      await onUpload({ projectId, title, description, source, category, file });
       setTitle("");
       setDescription("");
+      setSource("");
       setCategory("MOOD_IMAGE");
       setFile(null);
       setStatus("Added.");
@@ -2710,6 +2865,7 @@ function ReferenceUpload({
         </div>
       </div>
       <input className="field" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Reference title" />
+      <input className="field" value={source} onChange={(event) => setSource(event.target.value)} placeholder="Source: agency, contest, list, vendor, internal" />
       <select className="field" value={category} onChange={(event) => setCategory(event.target.value as AssetType)}>
         {(["MOOD_IMAGE", "ENVIRONMENT_REFERENCE", "CHARACTER_REFERENCE", "PROP_REFERENCE", "KEYFRAME", "STORYBOARD", "LOOKBOOK_PAGE", "OTHER"] as AssetType[]).map((type) => (
           <option key={type} value={type}>{statusLabel(type)}</option>
@@ -2729,12 +2885,13 @@ function ReferenceUpload({
   );
 }
 
-function ReferenceImageGrid({ images, assets = [], canDownload = false }: { images: ProjectReferenceImage[]; assets?: HammerAsset[]; canDownload?: boolean }) {
+function ReferenceImageGrid({ images, assets = [], canDownload = false, currentUser }: { images: ProjectReferenceImage[]; assets?: HammerAsset[]; canDownload?: boolean; currentUser: HammerUser }) {
   const assetImages: ProjectReferenceImage[] = assets.map((asset) => ({
     id: asset.id,
     projectId: asset.projectId,
     title: asset.title,
     description: asset.description,
+    source: asset.source,
     category: asset.assetType,
     status: asset.status,
     fileName: asset.fileName,
@@ -2754,13 +2911,15 @@ function ReferenceImageGrid({ images, assets = [], canDownload = false }: { imag
               <div>
                 <p className="text-[13px] font-semibold text-studio-100">{image.title}</p>
                 <p className="mt-1 line-clamp-2 text-xs leading-5 text-studio-300">{image.description}</p>
+                {image.source ? <p className="mt-1 text-xs text-studio-400">Source: {image.source}</p> : null}
               </div>
               <Badge value={image.status} />
             </div>
             <div className="mt-2 flex flex-wrap gap-1.5">
               <Badge value={image.category} subtle />
               <span className="rounded border border-white/10 bg-white/[0.025] px-1.5 py-1 text-[11px] text-studio-400">{image.fileName}</span>
-              {canDownload ? <DownloadFileLink fileName={image.fileName} dataUrl={image.imageUrl} compact /> : null}
+              {image.source ? <span className="rounded border border-white/10 bg-white/[0.025] px-1.5 py-1 text-[11px] text-studio-400">Source: {image.source}</span> : null}
+              {canDownload ? <DownloadFileLink fileName={image.fileName} dataUrl={image.imageUrl} resourceType={image.id.startsWith("asset-") ? "asset" : undefined} resourceId={image.id.startsWith("asset-") ? image.id : undefined} currentUser={currentUser} compact /> : null}
             </div>
           </div>
         </div>
@@ -3023,6 +3182,7 @@ function DocumentUploadPanel({
   const [documentId, setDocumentId] = useState("");
   const [title, setTitle] = useState("");
   const [writerName, setWriterName] = useState("");
+  const [source, setSource] = useState("");
   const [type, setType] = useState<DocumentType>("SCRIPT");
   const [notes, setNotes] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -3034,6 +3194,7 @@ function DocumentUploadPanel({
       setTitle(selectedDocument.title);
       setType(selectedDocument.type);
       setWriterName(selectedDocument.writerName ?? "");
+      setSource(selectedDocument.source ?? "");
     }
   }, [selectedDocument]);
 
@@ -3051,6 +3212,7 @@ function DocumentUploadPanel({
         title: title.trim() || file.name.replace(/\.[^.]+$/, ""),
         type,
         writerName: writerName.trim() || "Unassigned Writer",
+        source: source.trim(),
         file,
         notes
       });
@@ -3072,6 +3234,7 @@ function DocumentUploadPanel({
         </select>
         <input className="field" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Document title" />
         <input className="field" list="writer-contact-options" value={writerName} onChange={(event) => setWriterName(event.target.value)} placeholder="Writer" />
+        <input className="field" value={source} onChange={(event) => setSource(event.target.value)} placeholder="Source: agency, contest, list, manager, referral" />
         <datalist id="writer-contact-options">
           {hammerContacts.filter((contact) => contact.type === "WRITER").map((contact) => <option key={contact.id} value={contact.name} />)}
         </datalist>
@@ -3096,10 +3259,11 @@ function SupportingDocumentUpload({
   onUpload
 }: {
   documentId: string;
-  onUpload: (input: { scriptDocumentId: string; title: string; type: SupportingDocumentType; notes: string; file: File }) => Promise<void>;
+  onUpload: (input: { scriptDocumentId: string; title: string; type: SupportingDocumentType; source: string; notes: string; file: File }) => Promise<void>;
 }) {
   const [title, setTitle] = useState("");
   const [type, setType] = useState<SupportingDocumentType>("CONTEXT");
+  const [source, setSource] = useState("");
   const [notes, setNotes] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState("");
@@ -3116,10 +3280,12 @@ function SupportingDocumentUpload({
         scriptDocumentId: documentId,
         title: title.trim() || file.name.replace(/\.[^.]+$/, ""),
         type,
+        source: source.trim(),
         notes,
         file
       });
       setTitle("");
+      setSource("");
       setNotes("");
       setFile(null);
       setStatus("Added.");
@@ -3135,6 +3301,7 @@ function SupportingDocumentUpload({
         <p className="mt-1 text-xs leading-5 text-studio-300">Coverage, context notes, correspondence, research, and writer materials.</p>
       </div>
       <input className="field" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Document title" />
+      <input className="field" value={source} onChange={(event) => setSource(event.target.value)} placeholder="Source: agency, contest, list, manager, referral" />
       <select className="field" value={type} onChange={(event) => setType(event.target.value as SupportingDocumentType)}>
         {(["CONTEXT", "COVERAGE", "NOTES", "EMAIL", "WRITER_MATERIAL", "OTHER"] as SupportingDocumentType[]).map((documentType) => (
           <option key={documentType} value={documentType}>{statusLabel(documentType)}</option>
@@ -3269,11 +3436,59 @@ function Collections({
   onAddDocument: (collectionId: string, documentId: string, notes?: string) => Promise<void>;
   onRemoveDocument: (collectionItemId: string) => Promise<void>;
 }) {
+  const [mode, setMode] = useState<"slate" | "scripts">("slate");
+  const slateItemCount = slateItems.length;
+  const scriptItemCount = scriptItems.length;
   return (
     <div className="grid gap-4">
-      <SlateCollections collections={slateCollections} items={slateItems} projects={projects} prospects={prospects} users={users} canManage={canManage} onCreateCollection={onCreateSlateCollection} onAddItem={onAddSlateItem} onRemoveItem={onRemoveSlateItem} />
-      <ScriptCollections collections={scriptCollections} items={scriptItems} documents={documents} versions={versions} projects={projects} canManage={canManage} onCreateCollection={onCreateScriptCollection} onAddDocument={onAddDocument} onRemoveDocument={onRemoveDocument} />
+      <Panel>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <SectionHeader eyebrow="Collections" title="Review Packets" />
+          <div className="inline-flex w-fit rounded-md border border-white/10 bg-white/[0.025] p-1">
+            <button
+              type="button"
+              onClick={() => setMode("slate")}
+              className={cn("rounded px-3 py-1.5 text-xs font-semibold transition", mode === "slate" ? "bg-amberline text-studio-950" : "text-studio-300 hover:text-studio-100")}
+            >
+              Slate Packets
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("scripts")}
+              className={cn("rounded px-3 py-1.5 text-xs font-semibold transition", mode === "scripts" ? "bg-amberline text-studio-950" : "text-studio-300 hover:text-studio-100")}
+            >
+              Script Groups
+            </button>
+          </div>
+        </div>
+        <div className="mt-3 grid gap-2 md:grid-cols-2">
+          <CompactStat label="Slate packets" value={`${slateCollections.length}`} sub={`${slateItemCount} project/prospect item${slateItemCount === 1 ? "" : "s"}`} active={mode === "slate"} onClick={() => setMode("slate")} />
+          <CompactStat label="Script groups" value={`${scriptCollections.length}`} sub={`${scriptItemCount} script/doc item${scriptItemCount === 1 ? "" : "s"}`} active={mode === "scripts"} onClick={() => setMode("scripts")} />
+        </div>
+      </Panel>
+
+      {mode === "slate" ? (
+        <SlateCollections collections={slateCollections} items={slateItems} projects={projects} prospects={prospects} users={users} canManage={canManage} onCreateCollection={onCreateSlateCollection} onAddItem={onAddSlateItem} onRemoveItem={onRemoveSlateItem} />
+      ) : (
+        <ScriptCollections collections={scriptCollections} items={scriptItems} documents={documents} versions={versions} projects={projects} canManage={canManage} onCreateCollection={onCreateScriptCollection} onAddDocument={onAddDocument} onRemoveDocument={onRemoveDocument} />
+      )}
     </div>
+  );
+}
+
+function CompactStat({ label, value, sub, active, onClick }: { label: string; value: string; sub: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn("rounded-md border p-3 text-left transition", active ? "border-amberline/45 bg-amberline/10" : "border-white/10 bg-white/[0.025] hover:border-white/25")}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">{label}</p>
+        <p className="text-lg font-semibold text-studio-100">{value}</p>
+      </div>
+      <p className="mt-1 text-xs text-studio-400">{sub}</p>
+    </button>
   );
 }
 
@@ -3304,6 +3519,7 @@ function SlateCollections({
   const [visibility, setVisibility] = useState<HammerSlateCollection["visibility"]>("PROJECT_TEAM");
   const [itemType, setItemType] = useState<SlateCollectionItemType>("PROJECT");
   const [itemId, setItemId] = useState("");
+  const [itemSearch, setItemSearch] = useState("");
   const [itemNotes, setItemNotes] = useState("");
   const [message, setMessage] = useState("");
   const selectedCollection = collections.find((collection) => collection.id === selectedCollectionId) ?? collections[0];
@@ -3313,6 +3529,19 @@ function SlateCollections({
   const availableProjects = projects.filter((project) => !collectionProjectIds.has(project.id));
   const availableProspects = prospects.filter((prospect) => !collectionProspectIds.has(prospect.id));
   const availableItems = itemType === "PROJECT" ? availableProjects : availableProspects;
+  const selectedItem = availableItems.find((item) => item.id === itemId);
+  const normalizedItemSearch = itemSearch.trim().toLowerCase();
+  const visibleAvailableItems = availableItems
+    .filter((item) => {
+      if (itemType === "PROJECT") {
+        const projectItem = item as HammerProject;
+        return !normalizedItemSearch || `${projectItem.title} ${projectItem.genre} ${projectItem.status} ${projectItem.logline}`.toLowerCase().includes(normalizedItemSearch);
+      }
+      const prospectItem = item as HammerProjectLead;
+      const searchableText = `${prospectItem.title} ${prospectItem.creator} ${prospectItem.genre} ${prospectItem.lane} ${prospectItem.rightsStatus} ${prospectItem.nextActionStatus}`;
+      return !normalizedItemSearch || searchableText.toLowerCase().includes(normalizedItemSearch);
+    })
+    .slice(0, 25);
 
   useEffect(() => {
     if (!selectedCollectionId && collections[0]) setSelectedCollectionId(collections[0].id);
@@ -3344,6 +3573,7 @@ function SlateCollections({
     }
     await onAddItem(selectedCollection.id, itemType, itemId, itemNotes);
     setItemId("");
+    setItemSearch("");
     setItemNotes("");
     setMessage(`${itemType === "PROJECT" ? "Development Slate item" : "Prospect"} added to collection.`);
   }
@@ -3413,19 +3643,44 @@ function SlateCollections({
         {selectedCollection && canManage ? (
           <Panel>
             <SectionHeader eyebrow="Add" title="Add Project or Prospect" />
-            <form onSubmit={submitItem} className="mt-3 grid gap-2 lg:grid-cols-[160px_1fr_1fr_auto]">
-              <select className="field" value={itemType} onChange={(event) => { setItemType(event.target.value as SlateCollectionItemType); setItemId(""); }}>
+            <form onSubmit={submitItem} className="mt-3 grid gap-3">
+              <div className="grid gap-2 lg:grid-cols-[180px_1fr_auto]">
+                <select className="field" value={itemType} onChange={(event) => { setItemType(event.target.value as SlateCollectionItemType); setItemId(""); setItemSearch(""); }}>
                 <option value="PROJECT">Development Slate</option>
                 <option value="PROSPECT">Prospect</option>
               </select>
-              <select className="field" value={itemId} onChange={(event) => setItemId(event.target.value)}>
-                <option value="">Choose {itemType === "PROJECT" ? "project" : "prospect"}</option>
-                {availableItems.map((item) => (
-                  <option key={item.id} value={item.id}>{item.title}</option>
-                ))}
-              </select>
+                <div>
+                  <input className="field" value={itemSearch} onChange={(event) => { setItemSearch(event.target.value); setItemId(""); }} placeholder={`Search ${itemType === "PROJECT" ? "development slate" : "prospects"} by title, writer, genre, status`} />
+                  {selectedItem ? (
+                    <p className="mt-1.5 text-xs text-amberline">Selected: {selectedItem.title}</p>
+                  ) : null}
+                </div>
+                <button type="submit" disabled={!itemId} className="inline-flex items-center justify-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-xs font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-40">
+                  <Plus className="h-3.5 w-3.5" />
+                  Add
+                </button>
+              </div>
               <input className="field" value={itemNotes} onChange={(event) => setItemNotes(event.target.value)} placeholder="Optional collection note" />
-              <PrimaryButton icon={Plus} label="Add" />
+              <div className="max-h-52 overflow-y-auto rounded-md border border-white/10 bg-white/[0.02] p-1.5">
+                {visibleAvailableItems.length ? visibleAvailableItems.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => { setItemId(item.id); setItemSearch(item.title); }}
+                    className={cn("flex w-full items-start justify-between gap-3 rounded px-2.5 py-2 text-left text-xs transition hover:bg-white/[0.04]", itemId === item.id && "bg-amberline/10 text-amberline")}
+                  >
+                    <span>
+                      <span className="block font-semibold text-studio-100">{item.title}</span>
+                      <span className="mt-0.5 block text-studio-400">
+                        {itemType === "PROJECT"
+                          ? `${(item as HammerProject).genre || "No genre"} / ${(item as HammerProject).status || "No status"}`
+                          : `${(item as HammerProjectLead).creator || "No writer"} / ${(item as HammerProjectLead).genre || "No genre"}`}
+                      </span>
+                    </span>
+                    {itemId === item.id ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amberline" /> : null}
+                  </button>
+                )) : <p className="px-2.5 py-3 text-xs text-studio-400">No available {itemType === "PROJECT" ? "development slate items" : "prospects"} match that search.</p>}
+              </div>
             </form>
           </Panel>
         ) : null}
@@ -3492,6 +3747,7 @@ function ScriptCollections({
   const [description, setDescription] = useState("");
   const [visibility, setVisibility] = useState<HammerScriptCollection["visibility"]>("PROJECT_TEAM");
   const [documentId, setDocumentId] = useState("");
+  const [documentSearch, setDocumentSearch] = useState("");
   const [itemNotes, setItemNotes] = useState("");
   const [message, setMessage] = useState("");
   const selectedCollection = collections.find((collection) => collection.id === selectedCollectionId) ?? collections[0];
@@ -3499,6 +3755,15 @@ function ScriptCollections({
   const collectionDocumentIds = new Set(collectionItems.map((item) => item.documentId));
   const scriptDocuments = documents.filter((document) => ["SCRIPT", "TREATMENT", "OUTLINE", "NOTES", "COVERAGE", "BUSINESS_DOCUMENT"].includes(document.type));
   const availableDocuments = scriptDocuments.filter((document) => !collectionDocumentIds.has(document.id));
+  const selectedDocument = availableDocuments.find((document) => document.id === documentId);
+  const normalizedDocumentSearch = documentSearch.trim().toLowerCase();
+  const visibleAvailableDocuments = availableDocuments
+    .filter((document) => {
+      const version = currentVersionFor(document.id, documents, versions);
+      const searchableText = `${document.title} ${document.writerName} ${document.type} ${document.projectId ? projectTitleFromList(document.projectId, projects) : "Inbox"} ${version?.status ?? ""}`;
+      return !normalizedDocumentSearch || searchableText.toLowerCase().includes(normalizedDocumentSearch);
+    })
+    .slice(0, 25);
 
   useEffect(() => {
     if (!selectedCollectionId && collections[0]) setSelectedCollectionId(collections[0].id);
@@ -3526,6 +3791,7 @@ function ScriptCollections({
     }
     await onAddDocument(selectedCollection.id, documentId, itemNotes);
     setDocumentId("");
+    setDocumentSearch("");
     setItemNotes("");
     setMessage("Script added to collection.");
   }
@@ -3594,15 +3860,37 @@ function ScriptCollections({
         {selectedCollection && canManage ? (
           <Panel>
             <SectionHeader eyebrow="Add" title="Add Script to Collection" />
-            <form onSubmit={submitDocument} className="mt-3 grid gap-2 lg:grid-cols-[1fr_1fr_auto]">
-              <select className="field" value={documentId} onChange={(event) => setDocumentId(event.target.value)}>
-                <option value="">Choose script or document</option>
-                {availableDocuments.map((document) => (
-                  <option key={document.id} value={document.id}>{document.title}</option>
-                ))}
-              </select>
+            <form onSubmit={submitDocument} className="mt-3 grid gap-3">
+              <div className="grid gap-2 lg:grid-cols-[1fr_auto]">
+                <div>
+                  <input className="field" value={documentSearch} onChange={(event) => { setDocumentSearch(event.target.value); setDocumentId(""); }} placeholder="Search scripts by title, writer, project, status" />
+                  {selectedDocument ? <p className="mt-1.5 text-xs text-amberline">Selected: {selectedDocument.title}</p> : null}
+                </div>
+                <button type="submit" disabled={!documentId} className="inline-flex items-center justify-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-xs font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-40">
+                  <Plus className="h-3.5 w-3.5" />
+                  Add
+                </button>
+              </div>
               <input className="field" value={itemNotes} onChange={(event) => setItemNotes(event.target.value)} placeholder="Optional collection note" />
-              <PrimaryButton icon={Plus} label="Add" />
+              <div className="max-h-52 overflow-y-auto rounded-md border border-white/10 bg-white/[0.02] p-1.5">
+                {visibleAvailableDocuments.length ? visibleAvailableDocuments.map((document) => {
+                  const version = currentVersionFor(document.id, documents, versions);
+                  return (
+                    <button
+                      key={document.id}
+                      type="button"
+                      onClick={() => { setDocumentId(document.id); setDocumentSearch(document.title); }}
+                      className={cn("flex w-full items-start justify-between gap-3 rounded px-2.5 py-2 text-left text-xs transition hover:bg-white/[0.04]", documentId === document.id && "bg-amberline/10 text-amberline")}
+                    >
+                      <span>
+                        <span className="block font-semibold text-studio-100">{document.title}</span>
+                        <span className="mt-0.5 block text-studio-400">{document.writerName || "No writer"} / {document.projectId ? projectTitleFromList(document.projectId, projects) : "Inbox"} / {statusLabel(version?.status ?? "DRAFT")}</span>
+                      </span>
+                      {documentId === document.id ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amberline" /> : null}
+                    </button>
+                  );
+                }) : <p className="px-2.5 py-3 text-xs text-studio-400">No available scripts match that search.</p>}
+              </div>
             </form>
           </Panel>
         ) : null}
@@ -3662,7 +3950,7 @@ function ScriptDetail({
   currentUser?: HammerUser;
   supportingDocuments?: SupportingDocument[];
   onUpload?: (input: DocumentUploadInput) => Promise<void>;
-  onSupportingUpload?: (input: { scriptDocumentId: string; title: string; type: SupportingDocumentType; notes: string; file: File }) => Promise<void>;
+  onSupportingUpload?: (input: { scriptDocumentId: string; title: string; type: SupportingDocumentType; source: string; notes: string; file: File }) => Promise<void>;
   onSupportingDelete?: (documentId: string) => void;
   onStatusChange?: (versionId: string, status: ScriptStatus) => void;
   onUpdateVersionNotes?: (versionId: string, notes: string) => Promise<void>;
@@ -3975,7 +4263,7 @@ function ScriptDetail({
                 <p className="mt-1 text-[13px] font-semibold text-studio-100">{version?.fileName ?? doc.title}</p>
                 <p className="mt-1 text-xs text-studio-400">{version?.fileType ?? doc.type} / {version ? formatBytes(version.fileSize) : "Unknown size"}</p>
                 <p className="mt-2 break-all text-xs text-studio-300">{version?.storagePath}</p>
-                {canDownload && version ? <div className="mt-2"><DownloadFileLink fileName={version.fileName} dataUrl={version.dataUrl} fallbackText={version.extractedText} /></div> : null}
+                {canDownload && version ? <div className="mt-2"><DownloadFileLink fileName={version.fileName} dataUrl={version.dataUrl} fallbackText={version.extractedText} resourceType="documentVersion" resourceId={version.id} currentUser={currentUser} /></div> : null}
               </div>
               {onSupportingUpload ? <SupportingDocumentUpload documentId={doc.id} onUpload={onSupportingUpload} /> : null}
             </div>
@@ -3995,12 +4283,13 @@ function ScriptDetail({
                             <Badge value={item.type} />
                           </div>
                           <p className="mt-1 text-xs text-studio-400">{item.fileName} / {item.fileType} / {formatBytes(item.fileSize)}</p>
+                          {item.source ? <p className="mt-1 text-xs text-studio-400">Source: {item.source}</p> : null}
                           {item.notes ? <p className="mt-2 text-[13px] leading-5 text-studio-300">{item.notes}</p> : null}
                           {item.extractedText ? <p className="mt-2 line-clamp-2 text-xs leading-5 text-studio-400">{item.extractedText}</p> : null}
                         </div>
                         <div className="flex shrink-0 items-center gap-1.5">
                           <span className="text-[11px] text-studio-500">{item.uploadedAt}</span>
-                          {canDownload ? <DownloadFileLink fileName={item.fileName} dataUrl={item.dataUrl} fallbackText={item.extractedText} compact /> : null}
+                          {canDownload ? <DownloadFileLink fileName={item.fileName} dataUrl={item.dataUrl} fallbackText={item.extractedText} resourceType="supportingDocument" resourceId={item.id} currentUser={currentUser} compact /> : null}
                           {onSupportingDelete ? <DangerButton label="Delete" onClick={() => onSupportingDelete(item.id)} /> : null}
                         </div>
                       </div>
@@ -4019,7 +4308,7 @@ function ScriptDetail({
         <Panel>
           <SectionHeader eyebrow="History" title="Versions" action={onUpload ? <TableLink href={`/scripts/${doc.id}/versions`}>Manage versions</TableLink> : undefined} />
           <div className="grid gap-3">
-            {documentVersions.map((item) => <div key={item.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-3"><div className="flex items-center justify-between gap-3"><p className="text-[13px] font-semibold text-studio-100">Version {item.versionNumber}: {item.fileName}</p><div className="flex shrink-0 items-center gap-1.5">{canDownload ? <DownloadFileLink fileName={item.fileName} dataUrl={item.dataUrl} fallbackText={item.extractedText} compact /> : null}<Badge value={item.status} /></div></div><p className="mt-1.5 text-xs text-studio-300">{item.notes}</p>{item.markdownNotes ? <p className="mt-1 text-xs font-semibold text-amberline">Markdown notes attached</p> : null}<p className="mt-1 text-[11px] text-studio-500">{item.fileType} / {formatBytes(item.fileSize)} / {item.createdAt}</p></div>)}
+            {documentVersions.map((item) => <div key={item.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-3"><div className="flex items-center justify-between gap-3"><p className="text-[13px] font-semibold text-studio-100">Version {item.versionNumber}: {item.fileName}</p><div className="flex shrink-0 items-center gap-1.5">{canDownload ? <DownloadFileLink fileName={item.fileName} dataUrl={item.dataUrl} fallbackText={item.extractedText} resourceType="documentVersion" resourceId={item.id} currentUser={currentUser} compact /> : null}<Badge value={item.status} /></div></div><p className="mt-1.5 text-xs text-studio-300">{item.notes}</p>{item.markdownNotes ? <p className="mt-1 text-xs font-semibold text-amberline">Markdown notes attached</p> : null}<p className="mt-1 text-[11px] text-studio-500">{item.fileType} / {formatBytes(item.fileSize)} / {item.createdAt}</p></div>)}
           </div>
         </Panel>
       ) : null}
@@ -4062,7 +4351,7 @@ function ScriptVersions({
         <SectionHeader eyebrow="History" title="Document Versions" action={onUpload ? <PrimaryButton icon={UploadCloud} label="Upload New Version" onClick={() => setUploadOpen((open) => !open)} /> : undefined} />
         {uploadOpen && onUpload ? <DocumentUploadPanel projectId={document.projectId} documents={[document]} onUpload={onUpload} onDone={() => setUploadOpen(false)} /> : null}
         <div className="grid gap-3">
-          {documentVersions.map((version) => <div key={version.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-3"><div className="flex items-center justify-between gap-3"><p className="text-[13px] font-semibold text-studio-100">Version {version.versionNumber}: {version.fileName}</p><div className="flex shrink-0 items-center gap-1.5">{canDownload ? <DownloadFileLink fileName={version.fileName} dataUrl={version.dataUrl} fallbackText={version.extractedText} compact /> : null}<Badge value={version.status} /></div></div><p className="mt-1.5 text-xs text-studio-300">{version.notes}</p>{version.markdownNotes ? <p className="mt-1 text-xs font-semibold text-amberline">Markdown notes attached</p> : null}<p className="mt-1 text-[11px] text-studio-500">{version.fileType} / {formatBytes(version.fileSize)} / {version.createdAt}</p></div>)}
+          {documentVersions.map((version) => <div key={version.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-3"><div className="flex items-center justify-between gap-3"><p className="text-[13px] font-semibold text-studio-100">Version {version.versionNumber}: {version.fileName}</p><div className="flex shrink-0 items-center gap-1.5">{canDownload ? <DownloadFileLink fileName={version.fileName} dataUrl={version.dataUrl} fallbackText={version.extractedText} resourceType="documentVersion" resourceId={version.id} currentUser={currentUser} compact /> : null}<Badge value={version.status} /></div></div><p className="mt-1.5 text-xs text-studio-300">{version.notes}</p>{version.markdownNotes ? <p className="mt-1 text-xs font-semibold text-amberline">Markdown notes attached</p> : null}<p className="mt-1 text-[11px] text-studio-500">{version.fileType} / {formatBytes(version.fileSize)} / {version.createdAt}</p></div>)}
         </div>
       </Panel>
       <Panel>
@@ -4434,11 +4723,11 @@ function Assets({ projectId, assets = hammerAssets, currentUser }: { projectId?:
           <div key={asset.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-3 transition hover:border-amberline/40">
             <Link href={`/assets/${asset.id}`}>
               <div className="flex aspect-video items-center justify-center overflow-hidden rounded-md bg-studio-950 text-amberline">{asset.imageUrl ? <img src={asset.imageUrl} alt="" className="h-full w-full object-cover" /> : <PackageCheck className="h-8 w-8" />}</div>
-              <div className="mt-2.5 flex items-start justify-between gap-3"><div><h3 className="text-[13px] font-semibold text-studio-100">{asset.title}</h3><p className="mt-1 text-xs text-studio-300">{asset.description}</p></div><Badge value={asset.status} /></div>
+              <div className="mt-2.5 flex items-start justify-between gap-3"><div><h3 className="text-[13px] font-semibold text-studio-100">{asset.title}</h3><p className="mt-1 text-xs text-studio-300">{asset.description}</p>{asset.source ? <p className="mt-1 text-xs text-studio-400">Source: {asset.source}</p> : null}</div><Badge value={asset.status} /></div>
             </Link>
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
               <p className="text-[11px] text-studio-400">{asset.fileName}</p>
-              {canDownload ? <DownloadFileLink fileName={asset.fileName} dataUrl={asset.imageUrl} compact /> : null}
+              {canDownload ? <DownloadFileLink fileName={asset.fileName} dataUrl={asset.imageUrl} resourceType="asset" resourceId={asset.id} currentUser={currentUser} compact /> : null}
             </div>
           </div>
         )) : <div className="md:col-span-2 xl:col-span-3"><EmptyState label={projectName ? `No assets for ${projectName} yet. Upload reference, keyframe, storyboard, or mood art.` : "No assets match this view."} /></div>}
@@ -4459,7 +4748,7 @@ function AssetDetail({ assetId, assets = hammerAssets, currentUser }: { assetId:
         <p className="mt-4 text-studio-300">{asset.description}</p>
       </Panel>
       <div className="space-y-4">
-        <Panel><SectionHeader eyebrow="Signed URL" title="File Metadata" action={canDownload ? <DownloadFileLink fileName={asset.fileName} dataUrl={asset.imageUrl} /> : undefined} /><SmallStat label="Storage Path" value={asset.storagePath} /><SmallStat label="Status" value={statusLabel(asset.status)} /></Panel>
+        <Panel><SectionHeader eyebrow="Signed URL" title="File Metadata" action={canDownload ? <DownloadFileLink fileName={asset.fileName} dataUrl={asset.imageUrl} resourceType="asset" resourceId={asset.id} currentUser={currentUser} /> : undefined} /><SmallStat label="Source" value={asset.source ?? "Not listed"} /><SmallStat label="Storage Path" value={asset.storagePath} /><SmallStat label="Status" value={statusLabel(asset.status)} /></Panel>
         <Panel><SectionHeader eyebrow="Links" title="Scene and Entity Links" />{links.map((link) => <p key={link.id} className="rounded border border-white/10 bg-white/[0.03] p-2.5 text-[13px] text-studio-300">{link.linkType} / {link.sceneId ?? "No scene"} / {link.entityId ?? "No entity"}</p>)}</Panel>
         <CommentsPanel targetId={asset.id} />
       </div>
@@ -4487,7 +4776,7 @@ function Tasks({
   tasks?: HammerTask[];
   projects?: HammerProject[];
   onCreateTask?: (input: { projectId?: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
-  onUpdateTask?: (taskId: string, patch: Partial<Pick<HammerTask, "priority" | "status">>) => void;
+  onUpdateTask?: (taskId: string, patch: TaskPatch) => void;
   onDeleteTask?: (taskId: string) => void;
 }) {
   const canViewAllTasks = canViewAllProjectTasks(currentUser?.role);
@@ -4502,7 +4791,7 @@ function Tasks({
       <Panel>
         <SectionHeader eyebrow="Flexible Tracking" title={compact ? "Tasks" : canViewAllTasks ? "General Tasks" : "My General Tasks"} action={onCreateTask ? <NewTaskDialog projects={projects} users={users} onCreateTask={onCreateTask} /> : undefined} />
         {generalTasks.length ? (
-          <TaskRows tasks={generalTasks} users={users} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} showContext onUpdateTask={onUpdateTask} onDeleteTask={canDeleteTasks ? onDeleteTask : undefined} />
+          <TaskRows tasks={generalTasks} users={users} projects={projects} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} showContext onUpdateTask={onUpdateTask} onDeleteTask={canDeleteTasks ? onDeleteTask : undefined} />
         ) : (
           <EmptyState label={canViewAllTasks ? "No general tasks yet. Create one for follow-ups that are not tied to a slate item or prospect." : "No general tasks assigned to you."} />
         )}
@@ -4510,7 +4799,7 @@ function Tasks({
       <Panel>
         <SectionHeader eyebrow={projectName ? `Showing ${projectName}` : "Development Slate"} title={compact ? "Slate Tasks" : canViewAllTasks ? "Development Slate Tasks" : "My Development Slate Tasks"} />
         {projectTasks.length ? (
-          <TaskRows tasks={projectTasks} users={users} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} showContext onUpdateTask={onUpdateTask} onDeleteTask={canDeleteTasks ? onDeleteTask : undefined} />
+          <TaskRows tasks={projectTasks} users={users} projects={projects} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} showContext onUpdateTask={onUpdateTask} onDeleteTask={canDeleteTasks ? onDeleteTask : undefined} />
         ) : (
           <EmptyState label={projectName ? (canViewAllTasks ? `No Development Slate tasks for ${projectName}. Create one when there is a next step.` : `No Development Slate tasks assigned to you for ${projectName}.`) : "No Development Slate tasks match this view."} />
         )}
@@ -4518,7 +4807,7 @@ function Tasks({
       <Panel>
         <SectionHeader eyebrow="Prospects" title={canViewAllTasks ? "Prospect Tasks" : "My Prospect Tasks"} />
         {slateTasks.length ? (
-          <TaskRows tasks={slateTasks} users={users} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} showContext onUpdateTask={onUpdateTask} onDeleteTask={canDeleteTasks ? onDeleteTask : undefined} />
+          <TaskRows tasks={slateTasks} users={users} projects={projects} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} showContext onUpdateTask={onUpdateTask} onDeleteTask={canDeleteTasks ? onDeleteTask : undefined} />
         ) : (
           <EmptyState label={projectName ? (canViewAllTasks ? `No prospect tasks for ${projectName}.` : `No prospect tasks assigned to you for ${projectName}.`) : "No prospect tasks match this view."} />
         )}
@@ -5330,6 +5619,238 @@ function Reviews({ projectId }: { projectId?: string }) {
   );
 }
 
+function Reports({
+  projects,
+  prospects,
+  documents,
+  versions,
+  supportingDocuments,
+  tasks,
+  assets,
+  approvals,
+  comments,
+  users,
+  currentUser
+}: {
+  projects: HammerProject[];
+  prospects: HammerProjectLead[];
+  documents: HammerDocument[];
+  versions: HammerDocumentVersion[];
+  supportingDocuments: SupportingDocument[];
+  tasks: HammerTask[];
+  assets: HammerAsset[];
+  approvals: HammerApproval[];
+  comments: HammerComment[];
+  users: HammerUser[];
+  currentUser: HammerUser;
+}) {
+  const [fromDate, setFromDate] = useState(() => reportDateInput(daysAgo(1)));
+  const [toDate, setToDate] = useState(() => reportDateInput(new Date()));
+  const [scope, setScope] = useState("ALL");
+  const [recipient, setRecipient] = useState("");
+  const [copied, setCopied] = useState(false);
+  const windowStart = parseReportDateInput(fromDate);
+  const windowEnd = parseReportDateInput(toDate);
+  const selectedProject = projects.find((project) => project.id === scope);
+  const scopeLabel = scope === "ALL" ? "All Development" : scope === "PROSPECTS" ? "Prospects" : selectedProject?.title ?? "Selected Scope";
+  const scopedProjectIds = scope === "ALL" ? projects.map((project) => project.id) : selectedProject ? [selectedProject.id] : [];
+  const scopedProjects = scope === "PROSPECTS" ? [] : projects.filter((project) => scope === "ALL" || project.id === scope);
+  const scopedProspects = scope === "ALL" || scope === "PROSPECTS" ? prospects : [];
+  const updatedProjects = scopedProjects.filter((project) => isWithinReportWindow(project.updatedAt, windowStart, windowEnd));
+  const updatedProspects = scopedProspects.filter((prospect) => isWithinReportWindow(prospect.lastUpdated, windowStart, windowEnd));
+  const relevantDocuments = documents.filter((document) => {
+    if (scope === "PROSPECTS") return !document.projectId;
+    if (scope === "ALL") return true;
+    return document.projectId === scope;
+  });
+  const relevantDocumentIds = new Set(relevantDocuments.map((document) => document.id));
+  const newVersions = versions.filter((version) => relevantDocumentIds.has(version.documentId) && isWithinReportWindow(version.createdAt, windowStart, windowEnd));
+  const newSupportingDocs = supportingDocuments.filter((document) => {
+    if (!relevantDocumentIds.has(document.scriptDocumentId)) return false;
+    return isWithinReportWindow(document.uploadedAt, windowStart, windowEnd);
+  });
+  const scopedTasks = tasks.filter((task) => {
+    if (scope === "ALL") return true;
+    if (scope === "PROSPECTS") return task.targetType === "PROJECT_LEAD";
+    return task.projectId === scope;
+  });
+  const dueTasks = scopedTasks
+    .filter((task) => task.status !== "DONE" && task.status !== "ARCHIVED" && isWithinReportWindow(task.dueDate, windowStart, windowEnd))
+    .sort((a, b) => priorityRank(b.priority) - priorityRank(a.priority) || a.dueDate.localeCompare(b.dueDate));
+  const urgentTasks = scopedTasks.filter((task) => task.status !== "DONE" && task.status !== "ARCHIVED" && (task.priority === "URGENT" || task.status === "BLOCKED" || task.status === "ON_HOLD"));
+  const scopedApprovals = approvals.filter((approval) => {
+    if (scope === "ALL") return true;
+    if (scope === "PROSPECTS") return !approval.projectId;
+    return approval.projectId === scope;
+  });
+  const approvalActivity = scopedApprovals.filter((approval) => isWithinReportWindow(approval.createdAt, windowStart, windowEnd) || isWithinReportWindow(approval.decidedAt, windowStart, windowEnd));
+  const pendingApprovals = scopedApprovals.filter((approval) => approval.status === "REQUESTED" || approval.status === "CHANGES_REQUESTED");
+  const relevantVersionIds = new Set(versions.filter((version) => relevantDocumentIds.has(version.documentId)).map((version) => version.id));
+  const commentActivity = comments.filter((comment) => {
+    if (!isWithinReportWindow(comment.createdAt, windowStart, windowEnd)) return false;
+    if (scope === "ALL") return true;
+    if (scope === "PROSPECTS") return comment.targetType === "DOCUMENT" && relevantDocumentIds.has(comment.targetId);
+    return relevantDocumentIds.has(comment.targetId) || relevantVersionIds.has(comment.targetId);
+  });
+  const assetReviews = assets.filter((asset) => {
+    if (scope !== "ALL" && scope !== asset.projectId) return false;
+    return asset.status === "IN_REVIEW" || asset.status === "REVISION_REQUESTED";
+  });
+  const greenlightProjects = scopedProjects.filter((project) => project.status === "GREENLIGHT_REVIEW");
+  const onHoldProjects = scopedProjects.filter((project) => project.status === "ON_HOLD");
+  const subject = `GreenLight Executive Report - ${scopeLabel} - ${formatReportWindow(windowStart, windowEnd)}`;
+  const emailBody = buildExecutiveReportEmail({
+    subject,
+    scopeLabel,
+    windowStart,
+    windowEnd,
+    currentUser,
+    projects: scopedProjects,
+    updatedProjects,
+    updatedProspects,
+    newVersions,
+    newSupportingDocs,
+    documents,
+    dueTasks,
+    urgentTasks,
+    approvalActivity,
+    pendingApprovals,
+    comments: commentActivity,
+    assetReviews,
+    greenlightProjects,
+    onHoldProjects,
+    users
+  });
+  const mailtoHref = `mailto:${encodeURIComponent(recipient)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(emailBody)}`;
+
+  async function copyReport() {
+    await navigator.clipboard.writeText(`Subject: ${subject}\n\n${emailBody}`);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1600);
+  }
+
+  function downloadReport() {
+    triggerBrowserDownload(
+      URL.createObjectURL(new Blob([`Subject: ${subject}\n\n${emailBody}`], { type: "text/plain;charset=utf-8" })),
+      `greenlight-executive-report-${new Date().toISOString().slice(0, 10)}.txt`
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <Panel className="border-amberline/20 bg-amberline/[0.045]">
+        <div className="grid gap-4 xl:grid-cols-[1fr_auto] xl:items-end">
+          <div>
+            <p className="font-display text-[10px] uppercase tracking-[0.16em] text-amberline">Executive Email Report</p>
+            <h2 className="mt-1 text-xl font-semibold text-studio-100">Generate a studio-ready update</h2>
+            <p className="mt-1 max-w-3xl text-[13px] leading-5 text-studio-300">Choose a date/time window and GreenLight will assemble changes, task pressure, material uploads, approvals, and decision points into a concise email draft.</p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3 xl:w-[620px]">
+            <label className="grid gap-1">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-400">From</span>
+              <input className="field" type="datetime-local" value={fromDate} onChange={(event) => setFromDate(event.target.value)} />
+            </label>
+            <label className="grid gap-1">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-400">To</span>
+              <input className="field" type="datetime-local" value={toDate} onChange={(event) => setToDate(event.target.value)} />
+            </label>
+            <label className="grid gap-1">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-400">Scope</span>
+              <select className="field" value={scope} onChange={(event) => setScope(event.target.value)}>
+                <option value="ALL">All Development</option>
+                <option value="PROSPECTS">Prospects Only</option>
+                {projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
+              </select>
+            </label>
+          </div>
+        </div>
+      </Panel>
+
+      <div className="grid gap-3 md:grid-cols-4">
+        <SmallStat label="Changed Items" value={`${updatedProjects.length + updatedProspects.length + newVersions.length + newSupportingDocs.length}`} />
+        <SmallStat label="Tasks Due" value={`${dueTasks.length}`} />
+        <SmallStat label="Pending Decisions" value={`${pendingApprovals.length}`} />
+        <SmallStat label="Comments / Notes" value={`${commentActivity.length}`} />
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[0.82fr_1.18fr]">
+        <div className="space-y-4">
+          <Panel>
+            <SectionHeader eyebrow="Attention" title="What Matters" />
+            <ReportList
+              emptyLabel="No urgent items in this window."
+              items={[
+                ...urgentTasks.slice(0, 5).map((task) => ({ label: "Task", title: task.title, detail: `${nameForUserFromList(task.assignedToId, users)} / ${task.priority} / ${task.status}` })),
+                ...greenlightProjects.slice(0, 3).map((project) => ({ label: "Greenlight", title: project.title, detail: project.logline })),
+                ...onHoldProjects.slice(0, 3).map((project) => ({ label: "On Hold", title: project.title, detail: project.logline })),
+                ...assetReviews.slice(0, 3).map((asset) => ({ label: "Asset", title: asset.title, detail: `${projectTitleFromList(asset.projectId, projects)} / ${statusLabel(asset.status)}` }))
+              ]}
+            />
+          </Panel>
+          <Panel>
+            <SectionHeader eyebrow="Window Activity" title="Changes" />
+            <ReportList
+              emptyLabel="No project, prospect, or material changes in this window."
+              items={[
+                ...updatedProjects.map((project) => ({ label: "Project", title: project.title, detail: `${statusLabel(project.status)} / updated ${project.updatedAt}` })),
+                ...updatedProspects.map((prospect) => ({ label: "Prospect", title: prospect.title, detail: `${prospect.creator || "Writer TBD"} / ${prospect.lastUpdated || "updated"}` })),
+                ...newVersions.map((version) => {
+                  const document = documents.find((item) => item.id === version.documentId);
+                  return { label: "Version", title: document ? `${document.title} v${version.versionNumber}` : `Version ${version.versionNumber}`, detail: `${version.fileName} / ${statusLabel(version.status)}` };
+                }),
+                ...newSupportingDocs.map((document) => ({ label: "Support", title: document.title, detail: `${document.fileName} / ${statusLabel(document.type)}` }))
+              ]}
+            />
+          </Panel>
+          <Panel>
+            <SectionHeader eyebrow="This Window" title="Tasks and Approvals" />
+            <ReportList
+              emptyLabel="No tasks due or approval changes in this window."
+              items={[
+                ...dueTasks.map((task) => ({ label: "Task Due", title: task.title, detail: `${nameForUserFromList(task.assignedToId, users)} / due ${task.dueDate} / ${statusLabel(task.status)}` })),
+                ...approvalActivity.map((approval) => ({ label: "Approval", title: approval.targetId, detail: `${statusLabel(approval.status)} / reviewer ${nameForUserFromList(approval.reviewerId, users)}` }))
+              ]}
+            />
+          </Panel>
+        </div>
+
+        <Panel>
+          <SectionHeader eyebrow="Email Draft" title="Executive Summary" />
+          <label className="grid gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-400">Recipient</span>
+            <input className="field" type="email" value={recipient} onChange={(event) => setRecipient(event.target.value)} placeholder="executive@example.com" />
+          </label>
+          <label className="mt-3 grid gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-400">Subject</span>
+            <input className="field" value={subject} readOnly />
+          </label>
+          <textarea className="field mt-3 min-h-[640px] font-mono text-[12px] leading-5" value={emailBody} readOnly />
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button type="button" onClick={copyReport} className="rounded-md bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300">{copied ? "Copied" : "Copy Email"}</button>
+            <button type="button" onClick={downloadReport} className="rounded-md border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:border-amberline/40 hover:text-amberline">Download TXT</button>
+            <a href={mailtoHref} className="rounded-md border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:border-amberline/40 hover:text-amberline">Open Email Draft</a>
+          </div>
+        </Panel>
+      </div>
+    </div>
+  );
+}
+
+function ReportList({ items, emptyLabel }: { items: Array<{ label: string; title: string; detail: string }>; emptyLabel: string }) {
+  if (!items.length) return <EmptyState label={emptyLabel} />;
+  return (
+    <div className="space-y-2">
+      {items.slice(0, 10).map((item, index) => (
+        <div key={`${item.label}-${item.title}-${index}`} className="rounded-md border border-white/10 bg-white/[0.03] p-2.5">
+          <p className="font-display text-[10px] uppercase tracking-[0.12em] text-amberline">{item.label}</p>
+          <p className="mt-1 text-[13px] font-semibold text-studio-100">{item.title}</p>
+          <p className="mt-0.5 text-xs leading-5 text-studio-400">{item.detail}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function Executive({
   projects,
   documents,
@@ -6081,6 +6602,7 @@ function temporaryPassword() {
 }
 
 type ProjectSortKey = "title" | "logline" | "status" | "owner" | "updatedAt";
+type ProspectSortKey = "title" | "lane" | "genre" | "urgency" | "rights" | "owner" | "actionStatus" | "score";
 
 function ProjectTable({ projects }: { projects: HammerProject[] }) {
   const [sort, setSort] = useState<{ key: ProjectSortKey; direction: "asc" | "desc" }>({ key: "title", direction: "asc" });
@@ -6101,10 +6623,10 @@ function ProjectTable({ projects }: { projects: HammerProject[] }) {
   }
 
   if (!projects.length) return <EmptyState label="No projects match this view." />;
-  return <div className="data-scroll"><table className="data-table min-w-[980px]"><thead><tr><SortableProjectHeader label="Project" sortKey="title" activeSort={sort} onSort={toggleSort} /><SortableProjectHeader label="Logline" sortKey="logline" activeSort={sort} onSort={toggleSort} /><SortableProjectHeader label="Status" sortKey="status" activeSort={sort} onSort={toggleSort} /><SortableProjectHeader label="Owner" sortKey="owner" activeSort={sort} onSort={toggleSort} /><SortableProjectHeader label="Updated" sortKey="updatedAt" activeSort={sort} onSort={toggleSort} /></tr></thead><tbody>{sortedProjects.map((project) => <tr key={project.id} className="transition hover:bg-white/[0.035]"><td><Link className="block font-semibold text-studio-100" href={`/projects/${project.id}`}>{project.title}<p className="mt-0.5 text-xs font-normal text-studio-400">{project.genre}</p></Link></td><td><Link className="line-clamp-2 max-w-[420px] text-[13px] leading-5 text-studio-300" href={`/projects/${project.id}`}>{project.logline || "-"}</Link></td><td><Link className="block" href={`/projects/${project.id}`}><Badge value={project.status} /></Link></td><td><Link className="block text-studio-300" href={`/projects/${project.id}`}>{userName(project.ownerId)}</Link></td><td><Link className="block text-studio-300" href={`/projects/${project.id}`}>{project.updatedAt}</Link></td></tr>)}</tbody></table></div>;
+  return <div className="data-scroll"><table className="data-table min-w-[980px]"><thead><tr><SortableHeader label="Project" sortKey="title" activeSort={sort} onSort={toggleSort} /><SortableHeader label="Logline" sortKey="logline" activeSort={sort} onSort={toggleSort} /><SortableHeader label="Status" sortKey="status" activeSort={sort} onSort={toggleSort} /><SortableHeader label="Owner" sortKey="owner" activeSort={sort} onSort={toggleSort} /><SortableHeader label="Updated" sortKey="updatedAt" activeSort={sort} onSort={toggleSort} /></tr></thead><tbody>{sortedProjects.map((project) => <tr key={project.id} className="transition hover:bg-white/[0.035]"><td><Link className="block font-semibold text-studio-100" href={`/projects/${project.id}`}>{project.title}<p className="mt-0.5 text-xs font-normal text-studio-400">{project.genre}</p></Link></td><td><Link className="line-clamp-2 max-w-[420px] text-[13px] leading-5 text-studio-300" href={`/projects/${project.id}`}>{project.logline || "-"}</Link></td><td><Link className="block" href={`/projects/${project.id}`}><Badge value={project.status} /></Link></td><td><Link className="block text-studio-300" href={`/projects/${project.id}`}>{userName(project.ownerId)}</Link></td><td><Link className="block text-studio-300" href={`/projects/${project.id}`}>{project.updatedAt}</Link></td></tr>)}</tbody></table></div>;
 }
 
-function SortableProjectHeader({ label, sortKey, activeSort, onSort }: { label: string; sortKey: ProjectSortKey; activeSort: { key: ProjectSortKey; direction: "asc" | "desc" }; onSort: (key: ProjectSortKey) => void }) {
+function SortableHeader<TSortKey extends string>({ label, sortKey, activeSort, onSort }: { label: string; sortKey: TSortKey; activeSort: { key: TSortKey; direction: "asc" | "desc" }; onSort: (key: TSortKey) => void }) {
   const active = activeSort.key === sortKey;
   return (
     <th>
@@ -6125,16 +6647,27 @@ function projectSortValue(project: HammerProject, key: ProjectSortKey) {
   return project.updatedAt;
 }
 
+function prospectSortValue(lead: HammerProjectLead, key: ProspectSortKey, users: HammerUser[]) {
+  if (key === "title") return lead.title;
+  if (key === "lane") return lead.lane ?? "";
+  if (key === "genre") return lead.genre ?? "";
+  if (key === "urgency") return lead.urgencyLabel ?? "";
+  if (key === "rights") return lead.rightsStatus ?? "";
+  if (key === "owner") return prospectOwnerLabel(lead, users);
+  if (key === "actionStatus") return lead.nextActionStatus ?? "";
+  return lead.priorityScore === undefined || lead.priorityScore === null ? "" : String(lead.priorityScore).padStart(6, "0");
+}
+
 function taskContextLabel(task: HammerTask) {
   if (task.targetType === "GENERAL" || !task.projectId) return "General";
   if (task.targetType === "PROJECT_LEAD") return "Prospect";
   return projectTitle(task.projectId);
 }
 
-function TaskRows({ tasks, users = hammerUsers, selectedTaskId, showAssignee = false, showContext = false, onUpdateTask, onDeleteTask }: { tasks: HammerTask[]; users?: HammerUser[]; selectedTaskId?: string; showAssignee?: boolean; showContext?: boolean; onUpdateTask?: (taskId: string, patch: Partial<Pick<HammerTask, "priority" | "status">>) => void; onDeleteTask?: (taskId: string) => void }) {
+function TaskRows({ tasks, users = hammerUsers, projects = hammerProjects, selectedTaskId, showAssignee = false, showContext = false, onUpdateTask, onDeleteTask }: { tasks: HammerTask[]; users?: HammerUser[]; projects?: HammerProject[]; selectedTaskId?: string; showAssignee?: boolean; showContext?: boolean; onUpdateTask?: (taskId: string, patch: TaskPatch) => void; onDeleteTask?: (taskId: string) => void }) {
   const gridClass = showAssignee
-    ? showContext ? "md:grid-cols-[1fr_130px_120px_120px_110px_100px_72px]" : "md:grid-cols-[1fr_130px_120px_110px_100px_72px]"
-    : showContext ? "md:grid-cols-[1fr_120px_120px_110px_100px_72px]" : "md:grid-cols-[1fr_120px_110px_100px_72px]";
+    ? showContext ? "md:grid-cols-[1fr_130px_120px_120px_110px_100px_128px]" : "md:grid-cols-[1fr_130px_120px_110px_100px_128px]"
+    : showContext ? "md:grid-cols-[1fr_120px_120px_110px_100px_128px]" : "md:grid-cols-[1fr_120px_110px_100px_128px]";
   const nameForUser = (userId: string) => users.find((user) => user.id === userId)?.name ?? userName(userId);
   return (
     <div className="data-scroll-list grid gap-2">
@@ -6145,7 +6678,7 @@ function TaskRows({ tasks, users = hammerUsers, selectedTaskId, showAssignee = f
         <span>Priority</span>
         <span>Progress</span>
         <span>Due</span>
-        <span>{onDeleteTask ? "Admin" : ""}</span>
+        <span>{onUpdateTask || onDeleteTask ? "Actions" : ""}</span>
       </div>
       {tasks.map((task) => (
         <div
@@ -6169,20 +6702,139 @@ function TaskRows({ tasks, users = hammerUsers, selectedTaskId, showAssignee = f
             <TaskInlineSelect label="Progress" value={task.status} options={["TODO", "IN_PROGRESS", "DONE", "ON_HOLD", "REVIEW"]} onChange={(value) => onUpdateTask(task.id, { status: value as TaskStatus })} />
           ) : <Badge value={task.status} />}
           <p className="text-xs text-studio-300">{task.dueDate}</p>
-          {onDeleteTask ? (
-            <button
-              type="button"
-              onClick={() => {
-                if (window.confirm(`Delete task "${task.title}"?`)) onDeleteTask(task.id);
-              }}
-              className="inline-flex h-7 items-center justify-center gap-1 rounded border border-rose-400/25 bg-rose-500/5 px-2 text-[11px] font-semibold text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200"
-            >
-              <Trash2 className="h-3 w-3" />
-              Delete
-            </button>
-          ) : <span className="hidden md:block" />}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {onUpdateTask ? <EditTaskDialog task={task} users={users} projects={projects} onUpdateTask={onUpdateTask} /> : null}
+            {onDeleteTask ? (
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm(`Delete task "${task.title}"?`)) onDeleteTask(task.id);
+                }}
+                className="inline-flex h-7 items-center justify-center gap-1 rounded border border-rose-400/25 bg-rose-500/5 px-2 text-[11px] font-semibold text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200"
+              >
+                <Trash2 className="h-3 w-3" />
+                Delete
+              </button>
+            ) : null}
+          </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+function EditTaskDialog({ task, users, projects, onUpdateTask }: { task: HammerTask; users: HammerUser[]; projects: HammerProject[]; onUpdateTask: (taskId: string, patch: TaskPatch) => void }) {
+  const [open, setOpen] = useState(false);
+  const [scope, setScope] = useState<"GENERAL" | "PROJECT">(task.projectId ? "PROJECT" : "GENERAL");
+  const [projectId, setProjectId] = useState(task.projectId || projects[0]?.id || "");
+  const [title, setTitle] = useState(task.title);
+  const [description, setDescription] = useState(task.description);
+  const [assignedToId, setAssignedToId] = useState(task.assignedToId || users[0]?.id || "");
+  const [dueDate, setDueDate] = useState(task.dueDate || defaultDueDate());
+  const [priority, setPriority] = useState<TaskPriority>(task.priority);
+  const [status, setStatus] = useState<TaskStatus>(task.status);
+
+  useEffect(() => {
+    if (!open) return;
+    setScope(task.projectId ? "PROJECT" : "GENERAL");
+    setProjectId(task.projectId || projects[0]?.id || "");
+    setTitle(task.title);
+    setDescription(task.description);
+    setAssignedToId(task.assignedToId || users[0]?.id || "");
+    setDueDate(task.dueDate || defaultDueDate());
+    setPriority(task.priority);
+    setStatus(task.status);
+  }, [open, projects, task, users]);
+
+  function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!title.trim() || !assignedToId || (scope === "PROJECT" && !projectId)) return;
+    const nextProjectId = scope === "PROJECT" ? projectId : "";
+    onUpdateTask(task.id, {
+      projectId: nextProjectId,
+      title: title.trim(),
+      description: description.trim(),
+      assignedToId,
+      dueDate,
+      priority,
+      status,
+      targetType: scope,
+      targetId: nextProjectId
+    });
+    setOpen(false);
+  }
+
+  return (
+    <div>
+      <button type="button" onClick={() => setOpen(true)} className="inline-flex h-7 items-center justify-center gap-1 rounded border border-white/10 bg-white/[0.03] px-2 text-[11px] font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline">
+        <Pencil className="h-3 w-3" />
+        Edit
+      </button>
+      {open ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4">
+          <form onSubmit={submit} className="w-full max-w-xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-glow">
+            <div className="flex items-start justify-between gap-3">
+              <SectionHeader eyebrow="Task" title="Edit Task" />
+              <button type="button" onClick={() => setOpen(false)} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close task editor">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="grid gap-3">
+              <label className="grid gap-1">
+                <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Task Area</span>
+                <select className="field" value={scope} onChange={(event) => setScope(event.target.value as "GENERAL" | "PROJECT")}>
+                  <option value="GENERAL">General Task</option>
+                  <option value="PROJECT">Development Slate Task</option>
+                </select>
+              </label>
+              {scope === "PROJECT" ? (
+                <label className="grid gap-1">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Development Slate Item</span>
+                  <select className="field" value={projectId} onChange={(event) => setProjectId(event.target.value)}>
+                    {projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
+                  </select>
+                </label>
+              ) : null}
+              <label className="grid gap-1">
+                <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Task Name</span>
+                <input className="field" value={title} onChange={(event) => setTitle(event.target.value)} />
+              </label>
+              <label className="grid gap-1">
+                <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Description</span>
+                <textarea className="field min-h-24" value={description} onChange={(event) => setDescription(event.target.value)} />
+              </label>
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="grid gap-1">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Assign To</span>
+                  <select className="field" value={assignedToId} onChange={(event) => setAssignedToId(event.target.value)}>
+                    {users.map((user) => <option key={user.id} value={user.id}>{user.name} / {statusLabel(user.role)}</option>)}
+                  </select>
+                </label>
+                <label className="grid gap-1">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Due Date</span>
+                  <input className="field" type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} />
+                </label>
+                <label className="grid gap-1">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Priority</span>
+                  <select className="field" value={priority} onChange={(event) => setPriority(event.target.value as TaskPriority)}>
+                    {(["LOW", "MEDIUM", "HIGH", "URGENT"] as TaskPriority[]).map((item) => <option key={item} value={item}>{statusLabel(item)}</option>)}
+                  </select>
+                </label>
+                <label className="grid gap-1">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Progress</span>
+                  <select className="field" value={status} onChange={(event) => setStatus(event.target.value as TaskStatus)}>
+                    {(["TODO", "IN_PROGRESS", "DONE", "ON_HOLD", "REVIEW"] as TaskStatus[]).map((item) => <option key={item} value={item}>{taskStatusLabel(item)}</option>)}
+                  </select>
+                </label>
+              </div>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" onClick={() => setOpen(false)} className="rounded border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:text-amberline">Cancel</button>
+              <button type="submit" className="rounded bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300">Save Task</button>
+            </div>
+          </form>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -6399,24 +7051,163 @@ function TableLink({ href, children }: { href: string; children: React.ReactNode
   return <Link href={href} className="rounded border border-white/10 px-1.5 py-1 text-[11px] font-semibold text-studio-300 hover:text-amberline">{children}</Link>;
 }
 
-function DownloadFileLink({ fileName, dataUrl, fallbackText, compact = false }: { fileName: string; dataUrl?: string; fallbackText?: string; compact?: boolean }) {
+function DownloadFileLink({
+  fileName,
+  dataUrl,
+  fallbackText,
+  resourceType,
+  resourceId,
+  currentUser,
+  compact = false
+}: {
+  fileName: string;
+  dataUrl?: string;
+  fallbackText?: string;
+  resourceType?: DownloadResourceType;
+  resourceId?: string;
+  currentUser?: HammerUser;
+  compact?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [includeIp, setIncludeIp] = useState(true);
+  const [message, setMessage] = useState("");
   const href = dataUrl || textDownloadUrl(fallbackText);
-  if (!href) return null;
-  const downloadName = dataUrl ? fileName : textFileName(fileName);
+  const hasDownloadSource = Boolean(href || (resourceType && resourceId));
+  if (!hasDownloadSource) return null;
+
+  async function downloadFile(watermark: boolean) {
+    setMessage("");
+    try {
+      if (!watermark && href) {
+        triggerBrowserDownload(href, dataUrl ? fileName : textFileName(fileName));
+        setOpen(false);
+        return;
+      }
+      if (watermark && href) {
+        const result = await buildClientWatermarkedDownload({ fileName, dataUrl, fallbackText, includeIp, currentUser });
+        triggerBrowserDownload(result.href, result.fileName);
+        window.setTimeout(() => URL.revokeObjectURL(result.href), 1500);
+        setOpen(false);
+        return;
+      }
+      if (!resourceType || !resourceId) {
+        setMessage("This file is not available for secure download yet.");
+        return;
+      }
+      window.location.href = `/api/download?type=${encodeURIComponent(resourceType)}&id=${encodeURIComponent(resourceId)}&watermark=${watermark ? "1" : "0"}&ip=${includeIp ? "1" : "0"}`;
+      setOpen(false);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not prepare download.");
+    }
+  }
+
   return (
-    <a
-      href={href}
-      download={downloadName}
-      onClick={(event) => event.stopPropagation()}
-      className={cn(
-        "inline-flex shrink-0 items-center gap-1 rounded border border-white/10 px-1.5 py-1 text-[11px] font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline",
-        compact && "px-1.5"
-      )}
-    >
-      <Download className="h-3 w-3" />
-      {compact ? null : "Download"}
-    </a>
+    <>
+      <button
+        type="button"
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setOpen(true);
+        }}
+        className={cn(
+          "inline-flex shrink-0 items-center gap-1 rounded border border-white/10 px-1.5 py-1 text-[11px] font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline",
+          compact && "px-1.5"
+        )}
+      >
+        <Download className="h-3 w-3" />
+        {compact ? null : "Download"}
+      </button>
+      {open ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => setOpen(false)}>
+          <div className="w-full max-w-md rounded-xl border border-white/12 bg-studio-950 p-4 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="font-display text-[11px] uppercase tracking-[0.16em] text-amberline">Secure Download</p>
+                <h3 className="mt-1 text-lg font-semibold text-studio-100">{fileName}</h3>
+              </div>
+              <button type="button" onClick={() => setOpen(false)} className="rounded-md border border-white/10 p-1.5 text-studio-400 hover:text-studio-100" aria-label="Close download options">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <p className="mt-3 text-[13px] leading-5 text-studio-300">
+              Watermarked downloads stamp the file with the signed-in user, UTC date/time, and optionally the requester IP. Use original only when the reviewer will not accept a watermark.
+            </p>
+            <label className="mt-3 flex items-center gap-2 text-[13px] text-studio-300">
+              <input type="checkbox" checked={includeIp} onChange={(event) => setIncludeIp(event.target.checked)} className="h-4 w-4 accent-amberline" />
+              Include IP address when available
+            </label>
+            {message ? <p className="mt-3 rounded border border-rose-400/25 bg-rose-500/10 px-2.5 py-2 text-xs text-rose-200">{message}</p> : null}
+            <div className="mt-4 grid gap-2 sm:grid-cols-2">
+              <button type="button" onClick={() => downloadFile(true)} className="inline-flex items-center justify-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 transition hover:bg-emerald-300">
+                <ShieldCheck className="h-4 w-4" />
+                Download Watermarked
+              </button>
+              <button type="button" onClick={() => downloadFile(false)} className="inline-flex items-center justify-center gap-1.5 rounded-md border border-white/12 bg-white/[0.025] px-3 py-2 text-sm font-semibold text-studio-200 transition hover:border-white/30">
+                <Download className="h-4 w-4" />
+                Download Original
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
   );
+}
+
+async function buildClientWatermarkedDownload({ fileName, dataUrl, fallbackText, includeIp, currentUser }: { fileName: string; dataUrl?: string; fallbackText?: string; includeIp: boolean; currentUser?: HammerUser }) {
+  const timestamp = new Date().toISOString();
+  const userLabel = currentUser ? `${currentUser.name} <${currentUser.email}>` : "GreenLight user";
+  const watermark = `${userLabel} | ${timestamp}${includeIp ? " | IP captured on server when available" : ""}`;
+  if (dataUrl?.startsWith("data:image/")) {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000">
+  <image href="${escapeHtmlAttribute(dataUrl)}" width="1600" height="1000" preserveAspectRatio="xMidYMid meet"/>
+  <g transform="translate(110 650) rotate(-28)" opacity="0.28">
+    <text x="0" y="0" font-family="Arial, Helvetica, sans-serif" font-size="42" font-weight="700" fill="#0f7a34">${escapeHtmlText(watermark)}</text>
+    <text x="0" y="84" font-family="Arial, Helvetica, sans-serif" font-size="42" font-weight="700" fill="#0f7a34">${escapeHtmlText(watermark)}</text>
+  </g>
+  <text x="32" y="966" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" fill="#0b5f2a" opacity="0.75">${escapeHtmlText(watermark)}</text>
+</svg>`;
+    return { href: URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" })), fileName: watermarkedFileName(fileName, "svg") };
+  }
+  if (dataUrl?.startsWith("data:text/") || fallbackText?.trim()) {
+    const text = fallbackText?.trim() || await dataUrlToText(dataUrl ?? "");
+    return {
+      href: URL.createObjectURL(new Blob([`WATERMARK: ${watermark}\n\n${text}`], { type: "text/plain;charset=utf-8" })),
+      fileName: watermarkedFileName(fileName, "txt")
+    };
+  }
+  if (dataUrl && fileName.toLowerCase().endsWith(".pdf")) {
+    throw new Error("PDF watermarking for this file requires the production download route. Try the original download, or re-open from database-backed storage.");
+  }
+  throw new Error("This file type cannot be watermarked in the browser yet.");
+}
+
+function triggerBrowserDownload(href: string, fileName: string) {
+  const link = document.createElement("a");
+  link.href = href;
+  link.download = fileName;
+  link.rel = "noreferrer";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+async function dataUrlToText(dataUrl: string) {
+  const response = await fetch(dataUrl);
+  return response.text();
+}
+
+function watermarkedFileName(fileName: string, extension: string) {
+  return `${fileName.replace(/\.[^.]+$/, "")}.watermarked.${extension}`;
+}
+
+function escapeHtmlText(value: string) {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+function escapeHtmlAttribute(value: string) {
+  return escapeHtmlText(value).replaceAll('"', "&quot;");
 }
 
 function PrimaryButton({ icon: Icon, label, onClick }: { icon: React.ComponentType<{ className?: string }>; label: string; onClick?: () => void }) {
@@ -6498,6 +7289,10 @@ function canViewContacts(role?: string) {
   return isManagerRole(role);
 }
 
+function canViewReports(role?: string) {
+  return isManagerRole(role);
+}
+
 function isManagerRole(role?: string) {
   const normalizedRole = role?.toUpperCase();
   return normalizedRole === "ADMIN" || normalizedRole === "PRODUCER" || normalizedRole === "EXECUTIVE" || normalizedRole === "EXEC";
@@ -6510,6 +7305,121 @@ function normalizeScriptSection(section?: string): ScriptLibrarySection | undefi
 
 function projectTitleFromList(projectId: string, projects: HammerProject[]) {
   return projects.find((project) => project.id === projectId)?.title ?? projectTitle(projectId);
+}
+
+function nameForUserFromList(userId: string | undefined, users: HammerUser[]) {
+  if (!userId) return "Unassigned";
+  return users.find((user) => user.id === userId)?.name ?? userName(userId);
+}
+
+function daysAgo(days: number) {
+  const date = new Date();
+  date.setDate(date.getDate() - days);
+  return date;
+}
+
+function reportDateInput(date: Date) {
+  const offsetMs = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+}
+
+function parseReportDateInput(value: string) {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+}
+
+function parseReportRecordDate(value?: string) {
+  if (!value) return null;
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T12:00:00` : value;
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function isWithinReportWindow(value: string | undefined, start: Date, end: Date) {
+  const parsed = parseReportRecordDate(value);
+  if (!parsed) return false;
+  return parsed >= start && parsed <= end;
+}
+
+function formatReportWindow(start: Date, end: Date) {
+  return `${start.toLocaleString()} to ${end.toLocaleString()}`;
+}
+
+function reportSection(title: string, lines: string[]) {
+  return [`${title}:`, ...(lines.length ? lines.map((line) => `- ${line}`) : ["- None"]), ""].join("\n");
+}
+
+function buildExecutiveReportEmail(input: {
+  subject: string;
+  scopeLabel: string;
+  windowStart: Date;
+  windowEnd: Date;
+  currentUser: HammerUser;
+  projects: HammerProject[];
+  updatedProjects: HammerProject[];
+  updatedProspects: HammerProjectLead[];
+  newVersions: HammerDocumentVersion[];
+  newSupportingDocs: SupportingDocument[];
+  documents: HammerDocument[];
+  dueTasks: HammerTask[];
+  urgentTasks: HammerTask[];
+  approvalActivity: HammerApproval[];
+  pendingApprovals: HammerApproval[];
+  comments: HammerComment[];
+  assetReviews: HammerAsset[];
+  greenlightProjects: HammerProject[];
+  onHoldProjects: HammerProject[];
+  users: HammerUser[];
+}) {
+  const documentById = new Map(input.documents.map((document) => [document.id, document]));
+  const summaryLines = [
+    `${input.updatedProjects.length + input.updatedProspects.length} slate/prospect update${input.updatedProjects.length + input.updatedProspects.length === 1 ? "" : "s"}`,
+    `${input.newVersions.length + input.newSupportingDocs.length} material upload${input.newVersions.length + input.newSupportingDocs.length === 1 ? "" : "s"}`,
+    `${input.dueTasks.length} task${input.dueTasks.length === 1 ? "" : "s"} due in the selected window`,
+    `${input.pendingApprovals.length} pending approval${input.pendingApprovals.length === 1 ? "" : "s"}`
+  ];
+  const attentionLines = [
+    ...input.urgentTasks.slice(0, 8).map((task) => `${task.title} (${task.priority}, ${statusLabel(task.status)}) - ${nameForUserFromList(task.assignedToId, input.users)}`),
+    ...input.greenlightProjects.slice(0, 5).map((project) => `${project.title} is in Greenlight Review`),
+    ...input.onHoldProjects.slice(0, 5).map((project) => `${project.title} is On Hold`),
+    ...input.assetReviews.slice(0, 5).map((asset) => `${asset.title} needs visual/reference review`)
+  ];
+  const changeLines = [
+    ...input.updatedProjects.map((project) => `${project.title}: ${statusLabel(project.status)} / ${project.updatedAt}`),
+    ...input.updatedProspects.map((prospect) => `${prospect.title}: ${prospect.creator || "Writer TBD"} / ${prospect.lastUpdated || "updated"}`)
+  ];
+  const materialLines = [
+    ...input.newVersions.map((version) => {
+      const document = documentById.get(version.documentId);
+      return `${document?.title ?? "Document"} v${version.versionNumber}: ${version.fileName} (${statusLabel(version.status)})${document?.source ? ` / Source: ${document.source}` : ""}`;
+    }),
+    ...input.newSupportingDocs.map((document) => `${document.title}: ${document.fileName} (${statusLabel(document.type)})${document.source ? ` / Source: ${document.source}` : ""}`)
+  ];
+  const taskLines = input.dueTasks.map((task) => `${task.title} - ${nameForUserFromList(task.assignedToId, input.users)} - due ${task.dueDate} - ${statusLabel(task.status)} / ${task.priority}`);
+  const approvalLines = [
+    ...input.pendingApprovals.map((approval) => `${approval.targetType} ${approval.targetId}: ${statusLabel(approval.status)} - reviewer ${nameForUserFromList(approval.reviewerId, input.users)}`),
+    ...input.approvalActivity.map((approval) => `${approval.targetType} ${approval.targetId}: activity ${statusLabel(approval.status)}`)
+  ];
+  const noteLines = input.comments.slice(0, 10).map((comment) => `${statusLabel(comment.targetType)} ${comment.targetId}: ${comment.body}`);
+
+  return [
+    `Hi team,`,
+    "",
+    `Here is the GreenLight executive report for ${input.scopeLabel}.`,
+    `Window: ${formatReportWindow(input.windowStart, input.windowEnd)}`,
+    `Prepared by: ${input.currentUser.name} (${input.currentUser.email})`,
+    "",
+    reportSection("Topline", summaryLines),
+    reportSection("Needs Attention", attentionLines),
+    reportSection("Slate / Prospect Changes", changeLines),
+    reportSection("Script and Supporting Material Updates", materialLines),
+    reportSection("Tasks", taskLines),
+    reportSection("Approvals", approvalLines),
+    reportSection("Recent Notes / Comments", noteLines),
+    `Recommended next step: review pending approvals and urgent tasks first, then scan material updates for anything that needs executive context.`,
+    "",
+    `- GreenLight`
+  ].join("\n");
 }
 
 function projectsForDocumentGroups(projects: HammerProject[], docs: HammerDocument[]) {
@@ -6586,6 +7496,7 @@ function parseProjectLeadCsv(csv: string): HammerProjectLead[] {
       studioFitScore: optionalCsvNumber(record.studiofitscore),
       nextActionStatus: record.nextactionstatus,
       owner: record.owner,
+      ownerIds: resolveCsvOwnerIds(record.owner, hammerUsers),
       nextStep: record.nextstep,
       lastUpdated: record.lastupdated,
       notes: record.notes,
@@ -6602,6 +7513,17 @@ function parseProjectLeadCsv(csv: string): HammerProjectLead[] {
       scriptPdf: record.scriptpdf
     };
   });
+}
+
+function resolveCsvOwnerIds(owner: string | undefined, users: HammerUser[]) {
+  if (!owner?.trim()) return [];
+  const ownerTokens = owner.split(/[;,/]+/).map((token) => token.trim().toLowerCase()).filter(Boolean);
+  return users
+    .filter((user) => {
+      const names = [user.id, user.name, user.email].map((value) => value.toLowerCase());
+      return ownerTokens.some((token) => names.includes(token));
+    })
+    .map((user) => user.id);
 }
 
 function parseContactsCsv(csv: string): HammerContact[] {
@@ -6910,6 +7832,7 @@ function titleForView(view: HammerView, context: { project: HammerProject; docum
     tasks: "Tasks",
     contacts: "Contacts",
     reviews: "Reviews",
+    reports: "Reports",
     executive: "Executive",
     "admin-users": "Admin",
     account: "Account"

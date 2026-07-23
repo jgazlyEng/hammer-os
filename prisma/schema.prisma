@@ -606,6 +606,7 @@ model SupportingDocument {
   projectId        String?
   title            String
   type             SupportingDocumentType @default(CONTEXT)
+  source           String?
   notes            String?                @db.Text
   fileName         String
   fileType         String
@@ -632,6 +633,7 @@ model ProspectAsset {
   prospectId   String
   title        String
   description  String?   @db.Text
+  source       String?
   fileName     String
   fileType     String
   fileSize     Int
@@ -917,6 +919,7 @@ model Asset {
   projectId     String
   title         String
   description   String?     @db.Text
+  source        String?
   assetType     AssetType
   fileName      String
   fileType      String

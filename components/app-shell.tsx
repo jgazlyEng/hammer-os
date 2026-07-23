@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { BarChart3, ClipboardList, ContactRound, FolderKanban, Layers3, LayoutDashboard, LibraryBig, LogOut, Moon, Settings2, Sun, UserRound } from "lucide-react";
+import { BarChart3, ClipboardList, ContactRound, FileBarChart2, FolderKanban, Layers3, LayoutDashboard, LibraryBig, LogOut, Moon, Settings2, Sun, UserRound } from "lucide-react";
 import {
   assignedProjectsForUser,
   HAMMER_DOCUMENT_PROJECT_OVERRIDES_STORAGE_KEY,
@@ -38,6 +38,7 @@ const navItems = [
 
 const contactsNavItem = { href: "/contacts", label: "Contacts", icon: ContactRound };
 const executiveNavItem = { href: "/executive", label: "Executive", icon: BarChart3 };
+const reportsNavItem = { href: "/reports", label: "Reports", icon: FileBarChart2 };
 const adminNavItem = { href: "/admin/users", label: "Admin", icon: Settings2 };
 const accountNavItem = { href: "/account", label: "Account", icon: UserRound };
 const HAMMER_THEME_STORAGE_KEY = "hammer-os-theme";
@@ -295,6 +296,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             {[
               ...navItems,
               ...(currentUser?.role === "EXECUTIVE" || currentUser?.role === "ADMIN" ? [executiveNavItem] : []),
+              ...(currentUser && canViewReports(currentUser.role) ? [reportsNavItem] : []),
               ...(currentUser && canViewContacts(currentUser.role) ? [contactsNavItem] : []),
             ].map((item) => {
               const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
@@ -504,6 +506,10 @@ function isValidProject(project: unknown): project is HammerProject {
 }
 
 function canViewContacts(role: string) {
+  return role === "ADMIN" || role === "PRODUCER" || role === "EXECUTIVE";
+}
+
+function canViewReports(role: string) {
   return role === "ADMIN" || role === "PRODUCER" || role === "EXECUTIVE";
 }
 
