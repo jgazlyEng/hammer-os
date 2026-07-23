@@ -1594,9 +1594,10 @@ function Projects({
               </div>
               {slateImportMessage ? <p className="mb-2 text-xs text-studio-300">{slateImportMessage}</p> : null}
               <div className="data-scroll data-scroll-slate">
-                <table className="data-table min-w-[1320px] table-fixed">
+                <table className="data-table min-w-[1540px] table-fixed">
                   <colgroup>
-                    <col className="w-[300px]" />
+                    <col className="w-[260px]" />
+                    <col className="w-[320px]" />
                     <col className="w-[190px]" />
                     <col className="w-[180px]" />
                     <col className="w-[120px]" />
@@ -1608,6 +1609,7 @@ function Projects({
                   <thead>
                     <tr>
                       <SortableHeader label="Title" sortKey="title" activeSort={prospectSort} onSort={toggleProspectSort} />
+                      <SortableHeader label="Logline" sortKey="logline" activeSort={prospectSort} onSort={toggleProspectSort} />
                       <SortableHeader label="Lane" sortKey="lane" activeSort={prospectSort} onSort={toggleProspectSort} />
                       <SortableHeader label="Genre" sortKey="genre" activeSort={prospectSort} onSort={toggleProspectSort} />
                       <SortableHeader label="Urgency" sortKey="urgency" activeSort={prospectSort} onSort={toggleProspectSort} />
@@ -1621,6 +1623,7 @@ function Projects({
                     {pagedLeads.map((lead) => (
                       <tr key={`${lead.id}-${lead.title}`} onClick={() => { setSelectedLeadId(lead.id); setSelectedLeadTitle(lead.title); }} className={cn("cursor-pointer text-studio-200 hover:bg-white/[0.035]", selectedLeadId === lead.id && selectedLeadTitle === lead.title && "bg-emerald-400/10")}>
                         <td><p className="truncate font-semibold text-studio-100">{lead.title}</p><p className="mt-0.5 truncate text-xs text-studio-400">{lead.creator || lead.sourceLink || "No source listed"}</p></td>
+                        <td><span className="line-clamp-2 text-[13px] leading-5 text-studio-300">{lead.logline || "-"}</span></td>
                         <td><span className="block truncate">{lead.lane || "-"}</span></td>
                         <td><span className="block truncate">{lead.genre || "-"}</span></td>
                         <td>{lead.urgencyLabel ? <Badge value={lead.urgencyLabel} subtle /> : <span className="text-studio-500">-</span>}</td>
@@ -1850,6 +1853,22 @@ function SlateLeadPanel({
   onDeleteAsset?: (assetId: string) => Promise<void>;
   onClose?: () => void;
 }) {
+  const [saving, setSaving] = useState(false);
+  const [saveMessage, setSaveMessage] = useState("");
+
+  async function savePanel() {
+    setSaving(true);
+    setSaveMessage("");
+    try {
+      await onSave();
+      setSaveMessage("Saved.");
+    } catch (error) {
+      setSaveMessage(error instanceof Error ? error.message : "Could not save changes.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   if (!lead) return <Panel><EmptyState label="Select a prospect to review details." /></Panel>;
   const promotedProject = lead.promotedProjectId ? projects.find((project) => project.id === lead.promotedProjectId) : undefined;
   const slateTasks = tasks.filter((task) => task.targetType === "PROJECT_LEAD" && task.targetId === lead.id);
@@ -1865,6 +1884,8 @@ function SlateLeadPanel({
           <p className="mt-1 text-[13px] text-studio-300">{draft.creator || lead.creator || "Writer not listed"}</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {saveMessage ? <span className="hidden text-xs text-studio-400 md:inline">{saveMessage}</span> : null}
+          <PrimaryButton icon={CheckCircle2} label={saving ? "Saving" : "Save"} onClick={savePanel} />
           {promotedProject ? <TableLink href={`/projects/${promotedProject.id}`}>Open Development Slate</TableLink> : <button type="button" onClick={() => onPromote?.(lead.id)} className="rounded-md bg-amberline px-2.5 py-1.5 text-xs font-semibold text-studio-950">Promote</button>}
           {onClose ? (
             <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close slate details">
@@ -1875,7 +1896,7 @@ function SlateLeadPanel({
       </div>
       <label className="mt-3 grid gap-1">
         <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Logline</span>
-        <textarea className="field min-h-20" value={draft.logline ?? ""} onChange={(event) => onDraftChange((current) => ({ ...current, logline: event.target.value }))} placeholder="Add a short creative summary for this prospect." />
+        <textarea className="field min-h-28 resize-y text-[14px] leading-6" value={draft.logline ?? ""} onChange={(event) => onDraftChange((current) => ({ ...current, logline: event.target.value }))} placeholder="Add a short creative summary for this prospect." />
       </label>
       <ProspectAssetsPanel
         prospect={lead}
@@ -1952,7 +1973,7 @@ function SlateLeadPanel({
         <SmallStat label="Source" value={lead.sourceLink ? "Available" : "Missing"} />
       </div>
       <div className="mt-4 flex justify-end">
-        <PrimaryButton icon={CheckCircle2} label="Save Slate Item" onClick={onSave} />
+        <PrimaryButton icon={CheckCircle2} label={saving ? "Saving Slate Item" : "Save Slate Item"} onClick={savePanel} />
       </div>
     </Panel>
   );
@@ -2491,7 +2512,7 @@ function ProjectWorkspace({
     <div className="space-y-4">
       <section className="project-hero rounded-lg border border-white/10 bg-studio-850/60 p-4">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="max-w-3xl">
+          <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <Badge value={project.status} />
               <span className="rounded border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] text-studio-300">Updated {project.updatedAt}</span>
@@ -2599,7 +2620,7 @@ function ProjectLoglineEditor({ project, onUpdateProject }: { project: HammerPro
 
   if (!editing) {
     return (
-      <div className="mt-2 max-w-2xl">
+      <div className="mt-2 w-full max-w-4xl">
         <p className="text-[13px] leading-5 text-studio-300">{project.logline || "No logline provided."}</p>
         <div className="mt-2 flex items-center gap-2">
           {onUpdateProject ? (
@@ -2615,14 +2636,22 @@ function ProjectLoglineEditor({ project, onUpdateProject }: { project: HammerPro
   }
 
   return (
-    <div className="mt-2 max-w-2xl rounded-md border border-white/10 bg-white/[0.025] p-2.5">
-      <label className="grid gap-1">
+    <div className="mt-3 w-full max-w-none rounded-lg border border-amberline/25 bg-white/[0.035] p-4 shadow-[0_18px_60px_rgba(0,0,0,0.18)]">
+      <label className="grid gap-2">
         <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Logline</span>
-        <textarea className="field min-h-20" value={logline} onChange={(event) => setLogline(event.target.value)} />
+        <textarea
+          className="field min-h-24 resize-y text-[14px] leading-6"
+          value={logline}
+          onChange={(event) => setLogline(event.target.value)}
+          placeholder="Write the concise creative premise for this Development Slate item."
+        />
       </label>
-      <div className="mt-2 flex justify-end gap-2">
-        <button type="button" onClick={() => { setEditing(false); setLogline(project.logline); }} className="rounded border border-white/10 px-2.5 py-1.5 text-xs font-semibold text-studio-300 hover:text-amberline">Cancel</button>
-        <button type="button" disabled={busy} onClick={save} className="rounded bg-amberline px-2.5 py-1.5 text-xs font-semibold text-studio-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">Save Logline</button>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-studio-400">{logline.trim().length} characters</p>
+        <div className="flex gap-2">
+          <button type="button" onClick={() => { setEditing(false); setLogline(project.logline); }} className="rounded border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:text-amberline">Cancel</button>
+          <button type="button" disabled={busy} onClick={save} className="rounded bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">Save Logline</button>
+        </div>
       </div>
       {message ? <p className="mt-2 text-xs text-studio-300">{message}</p> : null}
     </div>
@@ -3538,10 +3567,10 @@ function SlateCollections({
         return !normalizedItemSearch || `${projectItem.title} ${projectItem.genre} ${projectItem.status} ${projectItem.logline}`.toLowerCase().includes(normalizedItemSearch);
       }
       const prospectItem = item as HammerProjectLead;
-      const searchableText = `${prospectItem.title} ${prospectItem.creator} ${prospectItem.genre} ${prospectItem.lane} ${prospectItem.rightsStatus} ${prospectItem.nextActionStatus}`;
+      const searchableText = `${prospectItem.title} ${prospectItem.logline} ${prospectItem.creator} ${prospectItem.genre} ${prospectItem.lane} ${prospectItem.rightsStatus} ${prospectItem.nextActionStatus} ${prospectItem.sourceLink} ${prospectItem.platformSource} ${prospectItem.contactRep} ${prospectItem.searchKeywords}`;
       return !normalizedItemSearch || searchableText.toLowerCase().includes(normalizedItemSearch);
     })
-    .slice(0, 25);
+    .sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: "base" }));
 
   useEffect(() => {
     if (!selectedCollectionId && collections[0]) setSelectedCollectionId(collections[0].id);
@@ -3661,6 +3690,9 @@ function SlateCollections({
                 </button>
               </div>
               <input className="field" value={itemNotes} onChange={(event) => setItemNotes(event.target.value)} placeholder="Optional collection note" />
+              <p className="text-xs text-studio-400">
+                Showing {visibleAvailableItems.length} available {itemType === "PROJECT" ? "development slate item" : "prospect"}{visibleAvailableItems.length === 1 ? "" : "s"}.
+              </p>
               <div className="max-h-52 overflow-y-auto rounded-md border border-white/10 bg-white/[0.02] p-1.5">
                 {visibleAvailableItems.length ? visibleAvailableItems.map((item) => (
                   <button
@@ -3679,7 +3711,7 @@ function SlateCollections({
                     </span>
                     {itemId === item.id ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amberline" /> : null}
                   </button>
-                )) : <p className="px-2.5 py-3 text-xs text-studio-400">No available {itemType === "PROJECT" ? "development slate items" : "prospects"} match that search.</p>}
+                )) : <p className="px-2.5 py-3 text-xs text-studio-400">No available {itemType === "PROJECT" ? "development slate items" : "prospects"} match that search, or every matching item is already in this collection.</p>}
               </div>
             </form>
           </Panel>
@@ -6602,7 +6634,7 @@ function temporaryPassword() {
 }
 
 type ProjectSortKey = "title" | "logline" | "status" | "owner" | "updatedAt";
-type ProspectSortKey = "title" | "lane" | "genre" | "urgency" | "rights" | "owner" | "actionStatus" | "score";
+type ProspectSortKey = "title" | "logline" | "lane" | "genre" | "urgency" | "rights" | "owner" | "actionStatus" | "score";
 
 function ProjectTable({ projects }: { projects: HammerProject[] }) {
   const [sort, setSort] = useState<{ key: ProjectSortKey; direction: "asc" | "desc" }>({ key: "title", direction: "asc" });
@@ -6649,6 +6681,7 @@ function projectSortValue(project: HammerProject, key: ProjectSortKey) {
 
 function prospectSortValue(lead: HammerProjectLead, key: ProspectSortKey, users: HammerUser[]) {
   if (key === "title") return lead.title;
+  if (key === "logline") return lead.logline ?? "";
   if (key === "lane") return lead.lane ?? "";
   if (key === "genre") return lead.genre ?? "";
   if (key === "urgency") return lead.urgencyLabel ?? "";
