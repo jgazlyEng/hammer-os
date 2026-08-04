@@ -18,7 +18,7 @@ export async function GET(_request: Request, { params }: { params: { id: string 
 
   try {
     const project = await prisma.project.findUnique({
-      where: { id: params.id },
+      where: { id: params.id, deletedAt: null },
       include: {
         scriptVersions: {
           orderBy: { uploadedAt: "desc" },
@@ -99,7 +99,7 @@ export async function DELETE(_request: Request, { params }: { params: { id: stri
   }
 
   try {
-    await prisma.project.delete({ where: { id: params.id } });
+    await prisma.project.update({ where: { id: params.id }, data: { deletedAt: new Date() } });
     return NextResponse.json({ ok: true });
   } catch {
     return NextResponse.json({ error: "Database unavailable." }, { status: 503 });

@@ -16,8 +16,9 @@ export async function GET(request: Request) {
   }
 
   try {
+    const canViewFullSlate = user.appRole === "admin" || user.appRole === "producer" || user.appRole === "executive";
     const projects = await prisma.project.findMany({
-      where: user.appRole === "admin" ? undefined : { memberships: { some: { userId: user.id } } },
+      where: canViewFullSlate ? { deletedAt: null } : { deletedAt: null, memberships: { some: { userId: user.id } } },
       orderBy: { updatedAt: "desc" },
       include: {
         _count: {
@@ -46,7 +47,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Project creation requires DATABASE_URL." }, { status: 503 });
   }
 
-  if (user.appRole !== "admin" && user.appRole !== "producer") {
+  if (user.appRole !== "admin" && user.appRole !== "producer" && user.appRole !== "executive") {
     return NextResponse.json(forbidden(), { status: 403 });
   }
 

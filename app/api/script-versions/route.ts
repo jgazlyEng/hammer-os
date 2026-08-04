@@ -29,6 +29,9 @@ export async function POST(request: Request) {
   if (!(file instanceof File)) {
     return NextResponse.json({ error: "file is required." }, { status: 400 });
   }
+  if (!isAllowedScriptUploadFile(file)) {
+    return NextResponse.json({ error: "DOCX script parsing is disabled for now. Upload PDF, FDX, TXT, or MD instead." }, { status: 400 });
+  }
 
   if (!isDatabaseConfigured()) {
     return NextResponse.json({ error: "Server script upload requires DATABASE_URL. Falling back to local parser." }, { status: 503 });
@@ -47,4 +50,9 @@ export async function POST(request: Request) {
     const message = error instanceof Error ? error.message : "Unknown upload error.";
     return NextResponse.json({ error: message }, { status: 503 });
   }
+}
+
+function isAllowedScriptUploadFile(file: File) {
+  const lowerName = file.name.toLowerCase();
+  return lowerName.endsWith(".pdf") || lowerName.endsWith(".fdx") || lowerName.endsWith(".txt") || lowerName.endsWith(".text") || lowerName.endsWith(".md") || file.type === "application/pdf" || file.type === "text/plain" || file.type === "text/markdown";
 }

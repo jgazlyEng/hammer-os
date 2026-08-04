@@ -1,0 +1,198 @@
+import { NextResponse } from "next/server";
+import type { DocumentType, Prisma } from "@prisma/client";
+import { forbidden, isDatabaseConfigured, requireUser } from "@/lib/auth";
+import { prisma } from "@/lib/db";
+import { storeUpload } from "@/lib/server-file-storage";
+
+export const runtime = "nodejs";
+
+const documentTypes: DocumentType[] = ["SCRIPT", "TREATMENT", "OUTLINE", "NOTES", "COVERAGE", "BUSINESS_DOCUMENT"];
+const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+
+export async function POST(request: Request) {
+  const auth = requireUser(request);
+  if ("error" in auth) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  if (!isDatabaseConfigured()) return NextResponse.json({ error: "Database mode is not configured." }, { status: 503 });
+
+  try {
+    const formData = await request.formData();
+    const file = formData.get("file");
+    if (!(file instanceof File)) return NextResponse.json({ error: "Choose a PDF, FDX, TXT, or MD file first." }, { status: 400 });
+    if (file.size > MAX_UPLOAD_BYTES) return NextResponse.json({ error: "Uploads must be 100MB or smaller." }, { status: 400 });
+    if (!isAllowedScriptUploadFile(file)) {
+      return NextResponse.json({ error: "DOCX script parsing is disabled for now. Upload PDF, FDX, TXT, or MD instead." }, { status: 400 });
+    }
+
+    const uploader = await prisma.user.findUnique({ where: { id: auth.user.id }, select: { id: true } });
+    if (!uploader) return NextResponse.json({ error: "Your login session no longer matches an active user. Sign out and back in, then try again." }, { status: 401 });
+
+    const documentId = optionalString(formData.get("documentId"));
+    const requestedProjectId = optionalString(formData.get("projectId"));
+    const existingDocument = documentId
+      ? await prisma.document.findUnique({ where: { id: documentId }, include: { versions: true } })
+      : null;
+
+    if (documentId && (!existingDocument || existingDocument.deletedAt)) {
+      return NextResponse.json({ error: "The selected document no longer exists." }, { status: 404 });
+    }
+
+    const projectId = existingDocument?.projectId ?? requestedProjectId;
+    if (projectId) {
+      const project = await prisma.project.findUnique({ where: { id: projectId }, select: { id: true, deletedAt: true } });
+      if (!project || project.deletedAt) return NextResponse.json({ error: "The selected project no longer exists." }, { status: 404 });
+    }
+
+    if (!canUploadDocument(auth.user.appRole, auth.user.projectRoles, projectId)) {
+      return NextResponse.json(forbidden(), { status: 403 });
+    }
+
+    const fileName = file.name || "uploaded-document";
+    const fileType = file.type || inferFileType(fileName);
+    const bytes = Buffer.from(await file.arrayBuffer());
+    const storedUpload = await storeUpload(projectId ?? "inbox", fileName, bytes);
+    const extractedText = await extractUploadText(fileName, fileType, bytes);
+    const now = new Date();
+
+    const result = await prisma.$transaction(async (tx) => {
+      const document = existingDocument ?? await tx.document.create({
+        data: {
+          projectId,
+          title: stringField(formData.get("title")) || stripExtension(fileName) || "Untitled Document",
+          type: documentTypeField(formData.get("type")),
+          writerName: optionalString(formData.get("writerName")),
+          source: optionalString(formData.get("source")),
+          submittedAt: projectId ? undefined : now,
+          createdById: auth.user.id
+        },
+        include: { versions: true }
+      });
+
+      const nextVersionNumber = document.versions.length ? Math.max(...document.versions.map((version) => version.versionNumber)) + 1 : 1;
+      const version = await tx.documentVersion.create({
+        data: {
+          documentId: document.id,
+          versionNumber: nextVersionNumber,
+          status: "DRAFT",
+          fileName,
+          fileType,
+          fileSize: storedUpload.sizeBytes,
+          storagePath: storedUpload.storagePath,
+          extractedText,
+          uploadedById: auth.user.id,
+          notes: optionalString(formData.get("notes"))
+        }
+      });
+
+      const updatedDocument = await tx.document.update({
+        where: { id: document.id },
+        data: {
+          currentVersionId: version.id,
+          title: stringField(formData.get("title")) || document.title,
+          type: documentTypeField(formData.get("type")),
+          writerName: optionalString(formData.get("writerName")) ?? document.writerName,
+          source: formData.has("source") ? optionalString(formData.get("source")) ?? null : document.source,
+          updatedAt: now
+        }
+      });
+
+      await tx.auditLog.create({
+        data: {
+          actorUserId: auth.user.id,
+          actor: auth.user.email,
+          action: existingDocument ? "document.version_uploaded" : "document.created",
+          entityType: "Document",
+          entityId: document.id,
+          detailJson: { fileName, projectId, versionNumber: nextVersionNumber } as Prisma.InputJsonValue
+        }
+      });
+
+      return { document: updatedDocument, version };
+    });
+
+    return NextResponse.json({
+      document: toDocument(result.document),
+      version: toVersion(result.version)
+    }, { status: 201 });
+  } catch (error) {
+    return NextResponse.json({ error: uploadErrorMessage(error) }, { status: 500 });
+  }
+}
+
+function canUploadDocument(role: string, projectRoles: Record<string, string>, projectId?: string) {
+  const normalizedRole = role.toLowerCase();
+  if (normalizedRole === "admin" || normalizedRole === "producer" || normalizedRole === "executive" || normalizedRole === "exec") return true;
+  return Boolean(projectId && projectRoles[projectId]);
+}
+
+async function extractUploadText(fileName: string, fileType: string, bytes: Buffer) {
+  const lowerName = fileName.toLowerCase();
+  if (lowerName.endsWith(".pdf") || fileType === "application/pdf") return extractPdfText(bytes);
+  if (lowerName.endsWith(".fdx") || lowerName.endsWith(".txt") || lowerName.endsWith(".md") || fileType.startsWith("text/")) {
+    const text = bytes.toString("utf8").trim();
+    if (!text) throw new Error("No text found in uploaded file.");
+    return text;
+  }
+  throw new Error("Unsupported file type. Upload PDF, FDX, TXT, or MD.");
+}
+
+function isAllowedScriptUploadFile(file: File) {
+  const lowerName = file.name.toLowerCase();
+  return lowerName.endsWith(".pdf") || lowerName.endsWith(".fdx") || lowerName.endsWith(".txt") || lowerName.endsWith(".md") || file.type === "application/pdf" || file.type === "text/plain" || file.type === "text/markdown";
+}
+
+async function extractPdfText(bytes: Buffer) {
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const pdf = await pdfjs.getDocument({ data: new Uint8Array(bytes), disableWorker: true } as Parameters<typeof pdfjs.getDocument>[0]).promise;
+  const pages: string[] = [];
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const content = await page.getTextContent();
+    pages.push(content.items.map((item) => ("str" in item ? item.str : "")).filter(Boolean).join("\n"));
+  }
+  const text = pages.join("\n\n").trim();
+  if (!text) throw new Error("No selectable text found in PDF. Scanned PDFs need OCR before parsing.");
+  return text;
+}
+
+function uploadErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  return "Document upload failed.";
+}
+
+function toDocument(document: { id: string; projectId: string | null; title: string; type: DocumentType; currentVersionId: string | null; createdById: string | null; updatedAt: Date; writerName: string | null; source: string | null; contactId: string | null; submittedAt: Date | null }) {
+  return { id: document.id, projectId: document.projectId ?? undefined, title: document.title, type: document.type, currentVersionId: document.currentVersionId ?? "", createdById: document.createdById ?? "", updatedAt: dateString(document.updatedAt), writerName: document.writerName ?? undefined, source: document.source ?? undefined, contactId: document.contactId ?? undefined, submittedAt: document.submittedAt ? dateString(document.submittedAt) : undefined };
+}
+
+function toVersion(version: { id: string; documentId: string; versionNumber: number; status: string; fileName: string; fileType: string; fileSize: number; storagePath: string; dataUrl?: string | null; uploadedById: string | null; createdAt: Date; notes: string | null; markdownNotes?: string | null; extractedText: string | null }) {
+  return { id: version.id, documentId: version.documentId, versionNumber: version.versionNumber, status: version.status, fileName: version.fileName, fileType: version.fileType, fileSize: version.fileSize, storagePath: version.storagePath, dataUrl: version.dataUrl ?? undefined, uploadedById: version.uploadedById ?? "", createdAt: dateString(version.createdAt), notes: version.notes ?? "", markdownNotes: version.markdownNotes ?? undefined, extractedText: version.extractedText ?? "" };
+}
+
+function documentTypeField(value: FormDataEntryValue | null): DocumentType {
+  const type = stringField(value).toUpperCase();
+  return documentTypes.includes(type as DocumentType) ? type as DocumentType : "SCRIPT";
+}
+
+function optionalString(value: FormDataEntryValue | null) {
+  const string = stringField(value);
+  return string || undefined;
+}
+
+function stringField(value: FormDataEntryValue | null) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function stripExtension(fileName: string) {
+  return fileName.replace(/\.[^.]+$/, "");
+}
+
+function inferFileType(fileName: string) {
+  const extension = fileName.split(".").pop()?.toLowerCase();
+  if (extension === "pdf") return "application/pdf";
+  if (extension === "fdx") return "application/xml";
+  if (extension === "md") return "text/markdown";
+  return "text/plain";
+}
+
+function dateString(date: Date) {
+  return date.toISOString().slice(0, 10);
+}

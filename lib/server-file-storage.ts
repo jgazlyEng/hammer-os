@@ -41,7 +41,13 @@ async function storeUploadInGcs(projectId: string, fileName: string, bytes: Buff
   }
 
   const { Storage } = await import("@google-cloud/storage");
-  const storage = new Storage();
+  const storage = new Storage({
+    projectId: process.env.GCS_PROJECT_ID,
+    credentials: process.env.GCS_CLIENT_EMAIL && process.env.GCS_PRIVATE_KEY ? {
+      client_email: process.env.GCS_CLIENT_EMAIL,
+      private_key: process.env.GCS_PRIVATE_KEY.replace(/\\n/g, "\n")
+    } : undefined
+  });
   const safeProjectId = sanitizePathSegment(projectId);
   const safeFileName = sanitizeFileName(fileName);
   const checksum = createHash("sha256").update(bytes).digest("hex");
@@ -79,6 +85,7 @@ function inferContentType(fileName: string) {
   if (lowerName.endsWith(".pdf")) return "application/pdf";
   if (lowerName.endsWith(".fdx")) return "application/xml";
   if (lowerName.endsWith(".txt")) return "text/plain";
+  if (lowerName.endsWith(".md")) return "text/markdown";
   if (lowerName.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
   return "application/octet-stream";
 }
