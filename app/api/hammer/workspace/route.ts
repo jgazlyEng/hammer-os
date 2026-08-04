@@ -23,7 +23,24 @@ export async function GET(request: Request) {
       prisma.prospect.findMany({ where: { deletedAt: null }, orderBy: [{ promotedProjectId: "asc" }, { updatedAt: "desc" }] }),
       prisma.prospectAsset.findMany({ where: { deletedAt: null, prospect: { deletedAt: null } }, orderBy: { createdAt: "desc" } }),
       prisma.document.findMany({ where: documentWhere, orderBy: { updatedAt: "desc" } }),
-      prisma.documentVersion.findMany({ where: { document: documentWhere }, orderBy: { createdAt: "desc" } }),
+      prisma.documentVersion.findMany({
+        where: { document: documentWhere },
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          documentId: true,
+          versionNumber: true,
+          status: true,
+          fileName: true,
+          fileType: true,
+          fileSize: true,
+          storagePath: true,
+          uploadedById: true,
+          createdAt: true,
+          notes: true,
+          markdownNotes: true
+        }
+      }),
       prisma.supportingDocument.findMany({ where: { deletedAt: null, scriptDocument: documentWhere }, orderBy: { createdAt: "desc" } }),
       prisma.asset.findMany({ where: canSeeLibrary ? { deletedAt: null } : { deletedAt: null, projectId: { in: projectIds } }, orderBy: { updatedAt: "desc" } }),
       prisma.task.findMany({ where: canViewAllTasks(auth.user.appRole) ? { deletedAt: null } : { deletedAt: null, assignedToId: auth.user.id }, orderBy: { updatedAt: "desc" } }),
@@ -691,7 +708,7 @@ function toDocument(document: { id: string; projectId: string | null; title: str
   return { id: document.id, projectId: document.projectId ?? undefined, title: document.title, type: document.type, currentVersionId: document.currentVersionId ?? "", createdById: document.createdById ?? "", updatedAt: dateString(document.updatedAt), writerName: document.writerName ?? undefined, source: document.source ?? undefined, contactId: document.contactId ?? undefined, submittedAt: document.submittedAt ? dateString(document.submittedAt) : undefined };
 }
 
-function toVersion(version: { id: string; documentId: string; versionNumber: number; status: DocumentVersionStatus; fileName: string; fileType: string; fileSize: number; storagePath: string; dataUrl?: string | null; uploadedById: string | null; createdAt: Date; notes: string | null; markdownNotes?: string | null; extractedText: string | null }) {
+function toVersion(version: { id: string; documentId: string; versionNumber: number; status: DocumentVersionStatus; fileName: string; fileType: string; fileSize: number; storagePath: string; dataUrl?: string | null; uploadedById: string | null; createdAt: Date; notes: string | null; markdownNotes?: string | null; extractedText?: string | null }) {
   return { id: version.id, documentId: version.documentId, versionNumber: version.versionNumber, status: version.status, fileName: version.fileName, fileType: version.fileType, fileSize: version.fileSize, storagePath: version.storagePath, dataUrl: version.dataUrl ?? undefined, uploadedById: version.uploadedById ?? "", createdAt: dateString(version.createdAt), notes: version.notes ?? "", markdownNotes: version.markdownNotes ?? undefined, extractedText: version.extractedText ?? "" };
 }
 

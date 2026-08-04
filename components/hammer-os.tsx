@@ -191,6 +191,77 @@ async function fetchDatabaseWorkspace(userEmail?: string | null, options: { forc
   return hammerWorkspaceRequest;
 }
 
+async function fetchDocumentVersionsWithText(documentId: string) {
+  const response = await fetch(`/api/hammer/document-versions?documentId=${encodeURIComponent(documentId)}`, { cache: "no-store" });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({})) as { error?: string };
+    throw new Error(data.error ?? "Could not load script text.");
+  }
+  const data = await response.json() as { versions?: HammerDocumentVersion[] };
+  return data.versions ?? [];
+}
+
+function mergeHydratedVersions(baseVersions: HammerDocumentVersion[], hydratedVersions: HammerDocumentVersion[]) {
+  if (!hydratedVersions.length) return baseVersions;
+  const hydratedById = new Map(hydratedVersions.map((version) => [version.id, version]));
+  return baseVersions.map((version) => {
+    const hydrated = hydratedById.get(version.id);
+    return hydrated ? { ...version, ...hydrated } : version;
+  });
+}
+
+function useDocumentVersionsWithText(documentId: string, versions: HammerDocumentVersion[]) {
+  const [hydratedVersions, setHydratedVersions] = useState<HammerDocumentVersion[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const versionTextKey = versions
+    .filter((version) => version.documentId === documentId)
+    .map((version) => `${version.id}:${Boolean(version.extractedText)}`)
+    .join("|");
+
+  useEffect(() => {
+    if (!documentId || documentId === "no-document") {
+      setHydratedVersions([]);
+      setLoading(false);
+      setMessage("");
+      return;
+    }
+
+    const documentVersions = versions.filter((version) => version.documentId === documentId);
+    const needsText = documentVersions.some((version) => !version.extractedText);
+    if (!documentVersions.length || !needsText) {
+      setHydratedVersions([]);
+      setLoading(false);
+      setMessage("");
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
+    setMessage("");
+    fetchDocumentVersionsWithText(documentId)
+      .then((nextVersions) => {
+        if (!cancelled) setHydratedVersions(nextVersions);
+      })
+      .catch((error) => {
+        if (!cancelled) setMessage(error instanceof Error ? error.message : "Could not load script text.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [documentId, versionTextKey, versions]);
+
+  return {
+    versionsWithText: mergeHydratedVersions(versions, hydratedVersions),
+    loading,
+    message
+  };
+}
+
 interface ProjectDraft {
   title: string;
   logline: string;
@@ -280,6 +351,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   const [sessionUser, setSessionUser] = useState<SessionUser | null>(null);
   const [sessionLoaded, setSessionLoaded] = useState(false);
   const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
+  const [workspaceSyncing, setWorkspaceSyncing] = useState(false);
   const [activeProjectId, setActiveProjectId] = useState(hammerProjects[0]?.id ?? "");
   const [localDocuments, setLocalDocuments] = useState<HammerDocument[]>([]);
   const [localVersions, setLocalVersions] = useState<HammerDocumentVersion[]>([]);
@@ -352,8 +424,13 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   }
 
   async function loadDatabaseWorkspace(options: { force?: boolean; userEmail?: string | null } = {}) {
-    const data = await fetchDatabaseWorkspace(options.userEmail ?? sessionUser?.email, { force: options.force });
-    applyDatabaseWorkspace(data);
+    setWorkspaceSyncing(true);
+    try {
+      const data = await fetchDatabaseWorkspace(options.userEmail ?? sessionUser?.email, { force: options.force });
+      applyDatabaseWorkspace(data);
+    } finally {
+      setWorkspaceSyncing(false);
+    }
   }
 
   async function runWorkspaceAction(action: string, payload: Record<string, unknown>) {
@@ -388,9 +465,15 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
           if (cachedWorkspace) {
             applyDatabaseWorkspace(cachedWorkspace.data);
             setWorkspaceLoaded(true);
-            void fetchDatabaseWorkspace(nextSessionUser?.email, { force: true }).then(applyDatabaseWorkspace).catch(() => null);
+            setWorkspaceSyncing(true);
+            void fetchDatabaseWorkspace(nextSessionUser?.email, { force: true }).then(applyDatabaseWorkspace).catch(() => null).finally(() => setWorkspaceSyncing(false));
           } else {
-            applyDatabaseWorkspace(await fetchDatabaseWorkspace(nextSessionUser?.email));
+            setWorkspaceSyncing(true);
+            try {
+              applyDatabaseWorkspace(await fetchDatabaseWorkspace(nextSessionUser?.email));
+            } finally {
+              setWorkspaceSyncing(false);
+            }
           }
         }
         setWorkspaceLoaded(true);
@@ -1274,20 +1357,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   const isScriptDetailView = scriptDetailViews.includes(view);
   const scriptAccessLoading = isScriptDetailView && !sessionLoaded;
   const scriptAccessDenied = isScriptDetailView && sessionLoaded && !canAccessScriptDocument(currentUser, document);
-  const isWorkspaceInitializing = !sessionLoaded || !workspaceLoaded;
-
-  if (isWorkspaceInitializing) {
-    return (
-      <AppShell>
-        <div className="grid min-h-[50vh] place-items-center">
-          <Panel className="w-full max-w-xl">
-            <SectionHeader eyebrow="GreenLight" title="Loading workspace" />
-            <p className="text-[13px] leading-6 text-studio-300">Connecting to the production database and preparing your workspace.</p>
-          </Panel>
-        </div>
-      </AppShell>
-    );
-  }
+  const showWorkspaceSync = !sessionLoaded || !workspaceLoaded || workspaceSyncing;
 
   const content = (() => {
     if (scriptAccessLoading) {
@@ -1381,8 +1451,20 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
           <input className="field pl-8" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search" />
         </div>
       </div>
+      {showWorkspaceSync ? <WorkspaceSyncNotice workspaceLoaded={workspaceLoaded} /> : null}
       {content}
     </AppShell>
+  );
+}
+
+function WorkspaceSyncNotice({ workspaceLoaded }: { workspaceLoaded: boolean }) {
+  return (
+    <div className="mb-3 flex items-center justify-between gap-3 rounded-md border border-emerald-400/15 bg-emerald-400/[0.04] px-3 py-2 text-xs text-emerald-100">
+      <span>{workspaceLoaded ? "Syncing latest changes..." : "Opening workspace..."}</span>
+      <span className="h-1.5 w-24 overflow-hidden rounded-full bg-white/10">
+        <span className="block h-full w-1/2 animate-pulse rounded-full bg-emerald-400" />
+      </span>
+    </div>
   );
 }
 
@@ -4063,8 +4145,10 @@ function ScriptDetail({
   onUpdateMetadata?: (documentId: string, patch: Partial<Pick<HammerDocument, "title" | "type" | "writerName" | "source">>) => Promise<void>;
   onDelete?: (documentId: string) => void;
 }) {
-  const doc = documents.find((item) => item.id === documentId) ?? documents[0];
-  const version = currentVersionFor(doc.id, documents, versions);
+  const doc = documents.find((item) => item.id === documentId) ?? documents[0] ?? emptyDocument;
+  const textState = useDocumentVersionsWithText(doc.id, versions);
+  const versionsWithText = textState.versionsWithText;
+  const version = currentVersionFor(doc.id, documents, versionsWithText);
   const [tab, setTab] = useState<"overview" | "notes" | "files" | "versions" | "breakdown">("overview");
   const [metadataDraft, setMetadataDraft] = useState({
     title: doc.title,
@@ -4081,7 +4165,7 @@ function ScriptDetail({
   const [markdownDraft, setMarkdownDraft] = useState(version?.markdownNotes ?? "");
   const [markdownMessage, setMarkdownMessage] = useState("");
   const [markdownBusy, setMarkdownBusy] = useState(false);
-  const documentVersions = versions.filter((item) => item.documentId === doc.id).sort((a, b) => b.versionNumber - a.versionNumber);
+  const documentVersions = versionsWithText.filter((item) => item.documentId === doc.id).sort((a, b) => b.versionNumber - a.versionNumber);
   const attachedSupportingDocuments = supportingDocuments.filter((item) => item.scriptDocumentId === doc.id);
   const scriptComments = comments.filter((comment) => comment.targetId === doc.id);
   const versionComments = version ? comments.filter((comment) => comment.targetId === version.id) : [];
@@ -4206,7 +4290,9 @@ function ScriptDetail({
         <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
           <Panel>
             <SectionHeader eyebrow="Document" title="Readable Text" />
-            <pre className="max-h-[620px] overflow-auto rounded-lg border border-white/10 bg-black/25 p-3 text-[13px] leading-5 text-studio-200">{version?.extractedText}</pre>
+            {textState.loading ? <p className="mb-2 rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 text-xs text-studio-300">Loading script text...</p> : null}
+            {textState.message ? <p className="mb-2 rounded border border-ember/30 bg-ember/10 px-2.5 py-2 text-xs text-ember">{textState.message}</p> : null}
+            <pre className="max-h-[620px] overflow-auto rounded-lg border border-white/10 bg-black/25 p-3 text-[13px] leading-5 text-studio-200">{version?.extractedText || "Readable text is not available for this version yet."}</pre>
           </Panel>
           <div className="space-y-4">
             <Panel>
@@ -4441,7 +4527,9 @@ function ScriptVersions({
   onUpload?: (input: DocumentUploadInput) => Promise<void>;
 }) {
   const [uploadOpen, setUploadOpen] = useState(false);
-  const documentVersions = versions.filter((version) => version.documentId === documentId).sort((a, b) => b.versionNumber - a.versionNumber);
+  const textState = useDocumentVersionsWithText(documentId, versions);
+  const versionsWithText = textState.versionsWithText;
+  const documentVersions = versionsWithText.filter((version) => version.documentId === documentId).sort((a, b) => b.versionNumber - a.versionNumber);
   const compareVersions = [...documentVersions].sort((a, b) => a.versionNumber - b.versionNumber);
   const [fromVersionId, setFromVersionId] = useState(compareVersions[0]?.id ?? "");
   const [toVersionId, setToVersionId] = useState(compareVersions[1]?.id ?? compareVersions[0]?.id ?? "");
@@ -4449,6 +4537,17 @@ function ScriptVersions({
   const toVersion = compareVersions.find((version) => version.id === toVersionId) ?? compareVersions[1] ?? fromVersion;
   const diff = buildTextDiff(fromVersion?.extractedText ?? "", toVersion?.extractedText ?? "");
   const canDownload = canDownloadFiles(currentUser?.role);
+
+  useEffect(() => {
+    if (!compareVersions.length) return;
+    if (!fromVersionId || !compareVersions.some((version) => version.id === fromVersionId)) {
+      setFromVersionId(compareVersions[0].id);
+    }
+    if (!toVersionId || !compareVersions.some((version) => version.id === toVersionId)) {
+      setToVersionId(compareVersions[1]?.id ?? compareVersions[0].id);
+    }
+  }, [compareVersions, fromVersionId, toVersionId]);
+
   return (
     <div className="space-y-4">
       <Panel>
@@ -4460,6 +4559,8 @@ function ScriptVersions({
       </Panel>
       <Panel>
         <SectionHeader eyebrow="Compare" title="Version Comparison" />
+        {textState.loading ? <p className="mb-3 rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 text-xs text-studio-300">Loading version text for comparison...</p> : null}
+        {textState.message ? <p className="mb-3 rounded border border-ember/30 bg-ember/10 px-2.5 py-2 text-xs text-ember">{textState.message}</p> : null}
         <div className="mb-4 grid gap-3 md:grid-cols-2">
           <select className="field" value={fromVersion?.id ?? ""} onChange={(event) => setFromVersionId(event.target.value)}>
             {compareVersions.map((version) => <option key={version.id} value={version.id}>Version A: v{version.versionNumber} / {version.fileName}</option>)}
@@ -4510,15 +4611,30 @@ function formatMarkdownInline(text: string) {
 }
 
 function ScriptDiff({ documentId, versions = hammerVersions }: { documentId: string; versions?: HammerDocumentVersion[] }) {
-  const documentVersions = versions.filter((version) => version.documentId === documentId).sort((a, b) => a.versionNumber - b.versionNumber);
+  const textState = useDocumentVersionsWithText(documentId, versions);
+  const versionsWithText = textState.versionsWithText;
+  const documentVersions = versionsWithText.filter((version) => version.documentId === documentId).sort((a, b) => a.versionNumber - b.versionNumber);
   const [fromVersionId, setFromVersionId] = useState(documentVersions[0]?.id ?? "");
   const [toVersionId, setToVersionId] = useState(documentVersions[1]?.id ?? documentVersions[0]?.id ?? "");
   const fromVersion = documentVersions.find((version) => version.id === fromVersionId) ?? documentVersions[0];
   const toVersion = documentVersions.find((version) => version.id === toVersionId) ?? documentVersions[1] ?? fromVersion;
   const diff = buildTextDiff(fromVersion?.extractedText ?? "", toVersion?.extractedText ?? "");
+
+  useEffect(() => {
+    if (!documentVersions.length) return;
+    if (!fromVersionId || !documentVersions.some((version) => version.id === fromVersionId)) {
+      setFromVersionId(documentVersions[0].id);
+    }
+    if (!toVersionId || !documentVersions.some((version) => version.id === toVersionId)) {
+      setToVersionId(documentVersions[1]?.id ?? documentVersions[0].id);
+    }
+  }, [documentVersions, fromVersionId, toVersionId]);
+
   return (
     <Panel>
       <SectionHeader eyebrow="Compare" title="Version Diff" action={<GhostButton icon={FileDiff} label="Save Diff" />} />
+      {textState.loading ? <p className="mb-3 rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 text-xs text-studio-300">Loading version text for comparison...</p> : null}
+      {textState.message ? <p className="mb-3 rounded border border-ember/30 bg-ember/10 px-2.5 py-2 text-xs text-ember">{textState.message}</p> : null}
       <div className="mb-4 grid gap-3 md:grid-cols-2">
         <select className="field" value={fromVersion?.id ?? ""} onChange={(event) => setFromVersionId(event.target.value)}>
           {documentVersions.map((version) => <option key={version.id} value={version.id}>Version A: v{version.versionNumber} / {version.fileName}</option>)}
@@ -4564,8 +4680,10 @@ type BreakdownScene = {
 };
 
 function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = hammerVersions }: { documentId: string; documents?: HammerDocument[]; versions?: HammerDocumentVersion[] }) {
-  const doc = documents.find((item) => item.id === documentId) ?? documents[0];
-  const version = currentVersionFor(doc.id, documents, versions);
+  const doc = documents.find((item) => item.id === documentId) ?? documents[0] ?? emptyDocument;
+  const textState = useDocumentVersionsWithText(doc.id, versions);
+  const versionsWithText = textState.versionsWithText;
+  const version = currentVersionFor(doc.id, documents, versionsWithText);
   const parserProjectId = doc.projectId ?? "inbox";
   const [parsed, setParsed] = useState<ReturnType<typeof parseScriptText> | null>(null);
   const [breakdownStatus, setBreakdownStatus] = useState("");
@@ -4605,6 +4723,10 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
 
   function runBreakdown() {
     const sourceText = version?.extractedText?.trim() ?? "";
+    if (textState.loading) {
+      setBreakdownStatus("Script text is still loading. Try again in a moment.");
+      return;
+    }
     if (!sourceText) {
       setBreakdownStatus("No extracted script text is available. Upload a PDF, FDX, or TXT version with readable text first.");
       return;
@@ -4637,6 +4759,8 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
           <SmallStat label="Locations" value={`${parsed?.environments.length ?? 0}`} />
           <SmallStat label="Props / Actions" value={`${(parsed?.props.length ?? 0) + (parsed?.stuntBeats.length ?? 0)}`} />
         </div>
+        {textState.loading ? <p className="mt-3 rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 text-xs text-studio-300">Loading script text for breakdown...</p> : null}
+        {textState.message ? <p className="mt-3 rounded border border-ember/30 bg-ember/10 px-2.5 py-2 text-xs text-ember">{textState.message}</p> : null}
         {breakdownStatus ? <p className="mt-3 rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 text-xs text-studio-300">{breakdownStatus}</p> : null}
       </Panel>
       <Panel>
