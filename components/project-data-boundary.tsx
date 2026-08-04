@@ -32,13 +32,7 @@ export function ProjectDataBoundary({ children, moduleName }: { children: React.
     };
   }, []);
 
-  if (!ready) {
-    return (
-      <Panel>
-        <p className="font-display text-xs uppercase tracking-[0.18em] text-amberline">Loading Project</p>
-      </Panel>
-    );
-  }
+  if (!ready) return <>{children}</>;
 
   if (!activeProject || activeProject.id === "hammer") {
     return children;
