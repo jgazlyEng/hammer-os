@@ -115,7 +115,7 @@ export async function POST(request: Request) {
         })) });
 
       case "updateProjectStatus":
-        if (!canManageProject(auth.user.appRole, auth.user.projectRoles, stringField(body.projectId))) return NextResponse.json(forbidden(), { status: 403 });
+        if (!canManageLibrary(auth.user.appRole) && !canManageProject(auth.user.appRole, auth.user.projectRoles, stringField(body.projectId))) return NextResponse.json(forbidden(), { status: 403 });
         return NextResponse.json({ project: toProject(await prisma.project.update({
           where: { id: stringField(body.projectId) },
           data: { status: projectStatusField(body.status), auditLogs: { create: audit(auth.user.id, auth.user.email, "project.status_changed", "Project", stringField(body.projectId), { status: body.status }) } }

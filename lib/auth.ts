@@ -106,12 +106,12 @@ export function requireAdmin(request: Request) {
 }
 
 export function userCanAccessProject(user: AuthenticatedUser, projectId: string) {
-  return user.appRole === "admin" || Boolean(user.projectRoles[projectId]);
+  return user.appRole === "admin" || user.appRole === "producer" || user.appRole === "executive" || Boolean(user.projectRoles[projectId]);
 }
 
 export function userCanManageProject(user: AuthenticatedUser, projectId: string) {
   const projectRole = user.projectRoles[projectId];
-  return user.appRole === "admin" || projectRole === "owner" || projectRole === "producer";
+  return user.appRole === "admin" || user.appRole === "producer" || user.appRole === "executive" || projectRole === "owner" || projectRole === "producer";
 }
 
 export function userCanApprove(user: AuthenticatedUser, projectId: string) {

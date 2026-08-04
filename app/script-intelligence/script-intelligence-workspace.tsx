@@ -70,6 +70,10 @@ export function ScriptIntelligenceWorkspace() {
 
   async function handleUpload(file: File | undefined) {
     if (!file) return;
+    if (!isAllowedScriptUploadFile(file)) {
+      setParseMessage("DOCX script parsing is disabled for now. Upload PDF, FDX, TXT, or MD instead.");
+      return;
+    }
     setIsParsing(true);
     setParseMessage("Parsing draft locally...");
 
@@ -166,11 +170,11 @@ export function ScriptIntelligenceWorkspace() {
           <label className="mt-4 flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-amberline/35 bg-amberline/10 p-6 text-center transition hover:border-amberline/70">
             {isParsing ? <Loader2 className="h-8 w-8 animate-spin text-amberline" /> : <UploadCloud className="h-8 w-8 text-amberline" />}
             <span className="mt-3 font-semibold text-studio-100">Drop or select a screenplay file</span>
-            <span className="mt-2 max-w-md text-sm text-studio-300">FDX preferred. PDF and TXT screenplay exports parse locally. DOCX will need server extraction for production-grade accuracy.</span>
+            <span className="mt-2 max-w-md text-sm text-studio-300">FDX preferred. PDF, TXT, and MD screenplay exports parse locally. DOCX is disabled for script parsing.</span>
             <input
               className="sr-only"
               type="file"
-              accept=".fdx,.txt,.text,.pdf,.docx"
+              accept=".fdx,.txt,.text,.md,.pdf"
               onChange={(event) => {
                 handleUpload(event.target.files?.[0]);
                 event.currentTarget.value = "";
@@ -322,6 +326,11 @@ export function ScriptIntelligenceWorkspace() {
       </div>
     </div>
   );
+}
+
+function isAllowedScriptUploadFile(file: File) {
+  const lowerName = file.name.toLowerCase();
+  return lowerName.endsWith(".fdx") || lowerName.endsWith(".txt") || lowerName.endsWith(".text") || lowerName.endsWith(".md") || lowerName.endsWith(".pdf") || file.type === "application/pdf" || file.type === "text/plain" || file.type === "text/markdown";
 }
 
 function SummaryMetric({ label, value }: { label: string; value: string | number }) {

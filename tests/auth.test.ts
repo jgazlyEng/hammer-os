@@ -55,4 +55,26 @@ describe("auth helpers", () => {
     assert.equal(userCanManageProject(admin, "any_project"), true);
     assert.equal(userCanUploadScripts(admin, "any_project"), true);
   });
+
+  it("allows producers and executives to cross project boundaries", () => {
+    const producer: AuthenticatedUser = {
+      id: "producer",
+      email: "producer@example.com",
+      name: "Producer",
+      appRole: "producer",
+      projectRoles: {}
+    };
+    const executive: AuthenticatedUser = {
+      id: "executive",
+      email: "executive@example.com",
+      name: "Executive",
+      appRole: "executive",
+      projectRoles: {}
+    };
+
+    assert.equal(userCanAccessProject(producer, "any_project"), true);
+    assert.equal(userCanManageProject(producer, "any_project"), true);
+    assert.equal(userCanAccessProject(executive, "any_project"), true);
+    assert.equal(userCanManageProject(executive, "any_project"), true);
+  });
 });

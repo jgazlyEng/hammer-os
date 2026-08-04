@@ -271,7 +271,7 @@ function getFileKind(fileName: string) {
   const lowerName = fileName.toLowerCase();
   if (lowerName.endsWith(".fdx")) return "fdx" as const;
   if (lowerName.endsWith(".pdf")) return "pdf" as const;
-  if (lowerName.endsWith(".txt") || lowerName.endsWith(".text")) return "txt" as const;
+  if (lowerName.endsWith(".txt") || lowerName.endsWith(".text") || lowerName.endsWith(".md")) return "txt" as const;
   if (lowerName.endsWith(".docx")) return "docx" as const;
   return "other" as const;
 }

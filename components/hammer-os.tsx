@@ -148,6 +148,49 @@ interface HammerWorkspacePayload {
   approvals?: HammerApproval[];
 }
 
+interface HammerWorkspaceCacheEntry {
+  userEmail: string;
+  data: HammerWorkspacePayload;
+  loadedAt: number;
+}
+
+const HAMMER_WORKSPACE_CACHE_TTL_MS = 60 * 1000;
+let hammerWorkspaceCache: HammerWorkspaceCacheEntry | null = null;
+let hammerWorkspaceRequest: Promise<HammerWorkspacePayload> | null = null;
+
+function getCachedWorkspace(userEmail?: string | null) {
+  if (!hammerWorkspaceCache || !userEmail) return null;
+  if (hammerWorkspaceCache.userEmail.toLowerCase() !== userEmail.toLowerCase()) return null;
+  return hammerWorkspaceCache;
+}
+
+function getFreshCachedWorkspace(userEmail?: string | null) {
+  const cached = getCachedWorkspace(userEmail);
+  if (!cached) return null;
+  return Date.now() - cached.loadedAt < HAMMER_WORKSPACE_CACHE_TTL_MS ? cached : null;
+}
+
+async function fetchDatabaseWorkspace(userEmail?: string | null, options: { force?: boolean } = {}) {
+  const cached = options.force ? null : getFreshCachedWorkspace(userEmail);
+  if (cached) return cached.data;
+  if (hammerWorkspaceRequest) return hammerWorkspaceRequest;
+
+  hammerWorkspaceRequest = fetch("/api/hammer/workspace", { cache: "no-store" })
+    .then(async (response) => {
+      if (!response.ok) throw new Error("Workspace load failed.");
+      const data = await response.json() as HammerWorkspacePayload;
+      if (data.mode === "database" && userEmail) {
+        hammerWorkspaceCache = { userEmail, data, loadedAt: Date.now() };
+      }
+      return data;
+    })
+    .finally(() => {
+      hammerWorkspaceRequest = null;
+    });
+
+  return hammerWorkspaceRequest;
+}
+
 interface ProjectDraft {
   title: string;
   logline: string;
@@ -280,10 +323,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   const filteredProjects = projects.filter(isValidProject).filter((item) => `${item.title} ${item.logline} ${item.genre} ${item.status} ${item.type}`.toLowerCase().includes(query.toLowerCase()));
   const currentUser = users.find((user) => user.email.toLowerCase() === sessionUser?.email?.toLowerCase()) ?? hammerUserByEmail(sessionUser?.email);
 
-  async function loadDatabaseWorkspace() {
-    const response = await fetch("/api/hammer/workspace", { cache: "no-store" });
-    if (!response.ok) throw new Error("Workspace load failed.");
-    const data = await response.json() as HammerWorkspacePayload;
+  function applyDatabaseWorkspace(data: HammerWorkspacePayload) {
     if (data.mode !== "database") return;
     setWorkspaceMode("database");
     setProjects((data.projects ?? []).filter(isValidProject));
@@ -311,6 +351,11 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     setTaskUpdates({});
   }
 
+  async function loadDatabaseWorkspace(options: { force?: boolean; userEmail?: string | null } = {}) {
+    const data = await fetchDatabaseWorkspace(options.userEmail ?? sessionUser?.email, { force: options.force });
+    applyDatabaseWorkspace(data);
+  }
+
   async function runWorkspaceAction(action: string, payload: Record<string, unknown>) {
     if (workspaceMode !== "database") return null;
     const response = await fetch("/api/hammer/workspace", {
@@ -323,7 +368,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       throw new Error(data?.detail ? `${data.error ?? "Database update failed."}: ${data.detail}` : data?.error ?? "Database update failed.");
     }
     const data = await response.json();
-    await loadDatabaseWorkspace();
+    await loadDatabaseWorkspace({ force: true });
     return data;
   }
 
@@ -336,8 +381,18 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
         setWorkspaceMode(mode);
         const storedDemoEmail = data.mode === "database" ? null : window.localStorage.getItem(HAMMER_DEMO_USER_STORAGE_KEY);
         const storedDemoUser = hammerUsers.find((item) => item.email === storedDemoEmail);
-        setSessionUser(storedDemoUser ? toSessionUser(storedDemoUser) : data.user ?? data.demoUser ?? null);
-        if (mode === "database") await loadDatabaseWorkspace();
+        const nextSessionUser = storedDemoUser ? toSessionUser(storedDemoUser) : data.user ?? data.demoUser ?? null;
+        setSessionUser(nextSessionUser);
+        if (mode === "database") {
+          const cachedWorkspace = getCachedWorkspace(nextSessionUser?.email);
+          if (cachedWorkspace) {
+            applyDatabaseWorkspace(cachedWorkspace.data);
+            setWorkspaceLoaded(true);
+            void fetchDatabaseWorkspace(nextSessionUser?.email, { force: true }).then(applyDatabaseWorkspace).catch(() => null);
+          } else {
+            applyDatabaseWorkspace(await fetchDatabaseWorkspace(nextSessionUser?.email));
+          }
+        }
         setWorkspaceLoaded(true);
       } catch {
         setWorkspaceMode("demo");
@@ -592,26 +647,35 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     file: File;
     notes: string;
   }) {
-    const extractedText = await extractTextFromUpload(input.file);
-    const dataUrl = await fileToDataUrl(input.file);
+    if (!isAllowedScriptUploadFile(input.file)) {
+      throw new Error("DOCX script parsing is disabled for now. Upload PDF, FDX, TXT, or MD instead.");
+    }
     if (workspaceMode === "database") {
-      await runWorkspaceAction("uploadDocumentVersion", {
-        projectId: input.projectId,
-        documentId: input.documentId,
-        title: input.title,
-        type: input.type,
-        writerName: input.writerName,
-        source: input.source,
-        fileName: input.file.name,
-        fileType: input.file.type || inferFileType(input.file.name),
-        fileSize: input.file.size,
-        storagePath: `local://${input.projectId ?? "inbox"}/documents/${input.documentId ?? "new"}/versions/${Date.now()}/${input.file.name}`,
-        notes: input.notes,
-        dataUrl,
-        extractedText
+      const formData = new FormData();
+      if (input.projectId) formData.append("projectId", input.projectId);
+      if (input.documentId) formData.append("documentId", input.documentId);
+      formData.append("title", input.title);
+      formData.append("type", input.type);
+      formData.append("writerName", input.writerName);
+      formData.append("source", input.source);
+      formData.append("notes", input.notes);
+      formData.append("file", input.file);
+      const response = await fetch("/api/hammer/document-upload", {
+        method: "POST",
+        body: formData
       });
+      if (!response.ok) {
+        if (response.status === 413) {
+          throw new Error("Upload is larger than the production server allows. Increase the Nginx client_max_body_size setting, then try again.");
+        }
+        const data = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(data?.error ?? "Document upload failed.");
+      }
+      await loadDatabaseWorkspace({ force: true });
       return;
     }
+    const extractedText = await extractTextFromUpload(input.file);
+    const dataUrl = await fileToDataUrl(input.file);
     const existingDocument = input.documentId ? documents.find((item) => item.id === input.documentId) : undefined;
     const documentId = existingDocument?.id ?? `doc-local-${Date.now()}`;
     const existingVersions = versions.filter((version) => version.documentId === documentId);
@@ -1290,7 +1354,11 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     return <AdminUsers projects={projects} users={users} currentUser={currentUser} databaseMode={workspaceMode === "database"} onCreateProject={addProject} onDeleteProject={deleteProject} onCreateUser={createUser} onUpdateUserRole={updateUserRole} onDeleteUser={deleteUser} onStatusChange={updateProjectStatus} />;
   })();
 
-  function updateProjectStatus(projectId: string, status: HammerProjectStatus) {
+  async function updateProjectStatus(projectId: string, status: HammerProjectStatus) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("updateProjectStatus", { projectId, status });
+      return;
+    }
     setProjects((currentProjects) => currentProjects.map((project) => project.id === projectId ? { ...project, status, updatedAt: new Date().toISOString().slice(0, 10) } : project));
     setLocalProjects((currentProjects) => {
       const nextProjects = currentProjects.map((project) => project.id === projectId ? { ...project, status, updatedAt: new Date().toISOString().slice(0, 10) } : project);
@@ -3048,7 +3116,7 @@ function Scripts({
         <SectionHeader
           eyebrow={projectName ? `Showing ${projectName}` : "Repository"}
           title={compact ? "Documents" : "Scripts and Treatments"}
-          action={onUpload ? <PrimaryButton icon={UploadCloud} label="Upload PDF/DOCX" onClick={() => setUploadOpen((open) => !open)} /> : undefined}
+          action={onUpload ? <PrimaryButton icon={UploadCloud} label="Upload Script" onClick={() => setUploadOpen((open) => !open)} /> : undefined}
         />
         {uploadOpen && onUpload ? <DocumentUploadPanel projectId={scopedProjectId} documents={docs} onUpload={onUpload} onDone={() => setUploadOpen(false)} /> : null}
         <DocumentRows docs={docs} versions={versions} projects={projects} omitProject={Boolean(projectId)} onDelete={onDelete} onAssignToProject={canManageLibrary ? onAssignToProject : undefined} assignableProjects={projects} defaultProjectId={scopedProjectId} emptyLabel={projectName ? `No documents for ${projectName} yet. Upload a script, treatment, outline, or coverage document.` : "No documents match this view."} />
@@ -3230,7 +3298,11 @@ function DocumentUploadPanel({
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!file) {
-      setStatus("Choose a PDF, DOCX, FDX, or TXT file first.");
+      setStatus("Choose a PDF, FDX, TXT, or MD file first.");
+      return;
+    }
+    if (!isAllowedScriptUploadFile(file)) {
+      setStatus("DOCX script parsing is disabled for now. Upload PDF, FDX, TXT, or MD instead.");
       return;
     }
     setStatus("Extracting text and creating version...");
@@ -3276,7 +3348,7 @@ function DocumentUploadPanel({
             <option key={documentType} value={documentType}>{statusLabel(documentType)}</option>
           ))}
         </select>
-        <input className="block w-full text-xs text-studio-300 file:mr-3 file:rounded file:border-0 file:bg-studio-100 file:px-2.5 file:py-1.5 file:text-xs file:font-semibold file:text-studio-950" type="file" accept=".pdf,.docx,.fdx,.txt,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
+        <input className="block w-full text-xs text-studio-300 file:mr-3 file:rounded file:border-0 file:bg-studio-100 file:px-2.5 file:py-1.5 file:text-xs file:font-semibold file:text-studio-950" type="file" accept=".pdf,.fdx,.txt,.md,text/plain,text/markdown,application/pdf" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
         <PrimaryButton icon={UploadCloud} label={documentId ? "Upload Version" : "Create Document"} />
       </div>
     </form>
@@ -6281,12 +6353,13 @@ function AdminUsers({
   onCreateUser: (input: { name: string; email: string; password: string; appRole: AppRole }) => Promise<void>;
   onUpdateUserRole: (userId: string, appRole: AppRole) => Promise<void>;
   onDeleteUser: (userId: string) => Promise<void>;
-  onStatusChange: (projectId: string, status: HammerProjectStatus) => void;
+  onStatusChange: (projectId: string, status: HammerProjectStatus) => Promise<void>;
 }) {
   const canCreateProject = currentUser.role === "ADMIN" || currentUser.role === "PRODUCER" || currentUser.role === "EXECUTIVE";
   const [createUserOpen, setCreateUserOpen] = useState(false);
   const [roleUser, setRoleUser] = useState<HammerUser | null>(null);
   const [createdUserReceipt, setCreatedUserReceipt] = useState<{ name: string; email: string; password: string } | null>(null);
+  const [projectStatusMessage, setProjectStatusMessage] = useState("");
   const [localUserStates, setLocalUserStates] = useState<Record<string, { inactive?: boolean; deleted?: boolean }>>({});
   const [projectDraft, setProjectDraft] = useState<ProjectDraft>({
     title: "",
@@ -6349,6 +6422,16 @@ function AdminUsers({
     updateLocalUserState(user.id, { deleted: true, inactive: true });
   }
 
+  async function changeProjectStatus(project: HammerProject, status: HammerProjectStatus) {
+    setProjectStatusMessage("");
+    try {
+      await onStatusChange(project.id, status);
+      setProjectStatusMessage(`${project.title} status saved.`);
+    } catch (error) {
+      setProjectStatusMessage(error instanceof Error ? error.message : "Could not save project status.");
+    }
+  }
+
   function submitProject(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!canCreateProject) return;
@@ -6395,6 +6478,7 @@ function AdminUsers({
 
       <Panel>
         <SectionHeader eyebrow="Development Slate" title="Slate Status" />
+        {projectStatusMessage ? <p className="mb-3 text-xs text-studio-300">{projectStatusMessage}</p> : null}
         <div className="data-scroll">
           <table className="data-table min-w-[720px]">
             <thead className="text-xs uppercase tracking-[0.16em] text-studio-400"><tr><th className="py-2">Project</th><th>Current Status</th><th>Status Control</th><th>Updated</th><th>Admin</th></tr></thead>
@@ -6407,7 +6491,7 @@ function AdminUsers({
                     <select
                       className="rounded-md border border-white/10 bg-studio-950 px-2.5 py-1.5 text-[13px] text-studio-100 outline-none focus:border-amberline/60"
                       value={project.status}
-                      onChange={(event) => onStatusChange(project.id, event.target.value as HammerProjectStatus)}
+                      onChange={(event) => void changeProjectStatus(project, event.target.value as HammerProjectStatus)}
                     >
                       {hammerProjectStatuses.map((status) => (
                         <option key={status} value={status}>{statusLabel(status)}</option>
@@ -7698,7 +7782,7 @@ async function extractTextFromUpload(file: File) {
   if (file.type === "application/pdf" || extension === "pdf") {
     return extractPdfText(file);
   }
-  if (extension === "fdx" || file.type === "text/plain" || extension === "txt") {
+  if (extension === "fdx" || extension === "txt" || extension === "md" || file.type === "text/plain" || file.type === "text/markdown") {
     const text = await file.text();
     if (!text.trim()) throw new Error("No text found in uploaded file.");
     return text;
@@ -7706,7 +7790,12 @@ async function extractTextFromUpload(file: File) {
   if (extension === "docx" || file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
     return `DOCX uploaded: ${file.name}\n\nText extraction for DOCX is queued for the server-backed parser. Upload PDF, FDX, or TXT for immediate breakdown and diff text in this MVP.`;
   }
-  throw new Error("Unsupported file type. Upload PDF, DOCX, FDX, or TXT.");
+  throw new Error("Unsupported file type. Upload PDF, FDX, TXT, or MD.");
+}
+
+function isAllowedScriptUploadFile(file: File) {
+  const extension = file.name.split(".").pop()?.toLowerCase();
+  return extension === "pdf" || extension === "fdx" || extension === "txt" || extension === "md" || file.type === "application/pdf" || file.type === "text/plain" || file.type === "text/markdown";
 }
 
 function inferFileType(fileName: string) {
@@ -7714,6 +7803,7 @@ function inferFileType(fileName: string) {
   if (extension === "pdf") return "application/pdf";
   if (extension === "docx") return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
   if (extension === "fdx") return "application/xml";
+  if (extension === "md") return "text/markdown";
   return "text/plain";
 }
 
