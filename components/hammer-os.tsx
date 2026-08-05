@@ -2382,8 +2382,14 @@ function ProspectAssetsPanel({
             <input className="field" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Short description" />
           </div>
           <input className="field" value={source} onChange={(event) => setSource(event.target.value)} placeholder="Source: agency, contest, list, manager, referral" />
-          <div className="grid gap-2 md:grid-cols-[1fr_auto]">
-            <input className="field file:mr-3 file:rounded file:border-0 file:bg-amberline file:px-2.5 file:py-1 file:text-xs file:font-semibold file:text-studio-950" type="file" accept=".pdf,.doc,.docx,.txt,.md,image/*" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
+          <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
+            <FileUploadPicker
+              file={file}
+              onFileChange={setFile}
+              accept=".pdf,.doc,.docx,.txt,.md,image/*"
+              label="Choose Script or File"
+              helper="PDF, DOC, DOCX, TXT, MD, or image files"
+            />
             <button type="submit" disabled={busy} className="inline-flex items-center justify-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-xs font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">
               <UploadCloud className="h-3.5 w-3.5" />
               Upload Script / File
@@ -3241,12 +3247,13 @@ function ReferenceUpload({
         ))}
       </select>
       <textarea className="field min-h-16" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Why this reference matters" />
-      <input
-        key={status === "Added." ? "cleared" : "ready"}
-        className="block w-full text-xs text-studio-300 file:mr-3 file:rounded file:border-0 file:bg-studio-100 file:px-2.5 file:py-1.5 file:text-xs file:font-semibold file:text-studio-950"
-        type="file"
+      <FileUploadPicker
+        resetKey={status === "Added." ? "cleared" : "ready"}
+        file={file}
+        onFileChange={setFile}
         accept="image/png,image/jpeg,image/webp,image/gif"
-        onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+        label="Choose Reference Image"
+        helper="PNG, JPEG, WEBP, or GIF"
       />
       {status ? <p className="text-xs text-studio-300">{status}</p> : null}
       <PrimaryButton icon={UploadCloud} label="Add Reference" />
@@ -3642,8 +3649,23 @@ function DocumentUploadPanel({
             <option key={documentType} value={documentType}>{statusLabel(documentType)}</option>
           ))}
         </select>
-        <input className="block w-full text-xs text-studio-300 file:mr-3 file:rounded file:border-0 file:bg-studio-100 file:px-2.5 file:py-1.5 file:text-xs file:font-semibold file:text-studio-950 disabled:opacity-50" type="file" disabled={busy} accept=".pdf,.fdx,.txt,.md,text/plain,text/markdown,application/pdf" onChange={(event) => { const nextFile = event.target.files?.[0] ?? null; setFile(nextFile); if (nextFile) { setStatus(`Ready to upload ${nextFile.name} (${formatBytes(nextFile.size)}).`); setStatusTone("idle"); } }} />
         <PrimaryButton icon={busy ? Loader2 : UploadCloud} label={busy ? "Uploading..." : documentId ? "Upload Version" : "Create Document"} disabled={busy} />
+      </div>
+      <div className="md:col-span-2">
+        <FileUploadPicker
+          file={file}
+          onFileChange={(nextFile) => {
+            setFile(nextFile);
+            if (nextFile) {
+              setStatus(`Ready to upload ${nextFile.name} (${formatBytes(nextFile.size)}).`);
+              setStatusTone("idle");
+            }
+          }}
+          disabled={busy}
+          accept=".pdf,.fdx,.txt,.md,text/plain,text/markdown,application/pdf"
+          label="Choose Script or Document"
+          helper="PDF, FDX, TXT, or MD"
+        />
       </div>
       {status ? (
         <div className={cn(
@@ -3716,16 +3738,66 @@ function SupportingDocumentUpload({
         ))}
       </select>
       <textarea className="field min-h-16" value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Notes for the team" />
-      <input
-        key={status === "Added." ? "cleared" : "ready"}
-        className="block w-full text-xs text-studio-300 file:mr-3 file:rounded file:border-0 file:bg-studio-100 file:px-2.5 file:py-1.5 file:text-xs file:font-semibold file:text-studio-950"
-        type="file"
+      <FileUploadPicker
+        resetKey={status === "Added." ? "cleared" : "ready"}
+        file={file}
+        onFileChange={setFile}
         accept=".pdf,.docx,.fdx,.txt,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+        label="Choose Context Document"
+        helper="PDF, DOCX, FDX, or TXT"
       />
       {status ? <p className="text-xs text-studio-300">{status}</p> : null}
       <PrimaryButton icon={UploadCloud} label="Add Document" />
     </form>
+  );
+}
+
+function FileUploadPicker({
+  file,
+  onFileChange,
+  accept,
+  label = "Choose File",
+  helper,
+  disabled = false,
+  resetKey
+}: {
+  file: File | null;
+  onFileChange: (file: File | null) => void;
+  accept: string;
+  label?: string;
+  helper?: string;
+  disabled?: boolean;
+  resetKey?: string | number;
+}) {
+  return (
+    <label className={cn(
+      "group block cursor-pointer rounded-lg border border-white/10 bg-white/[0.035] p-3 transition hover:border-amberline/40 hover:bg-white/[0.055]",
+      disabled && "cursor-not-allowed opacity-55"
+    )}>
+      <input
+        key={resetKey}
+        className="sr-only"
+        type="file"
+        disabled={disabled}
+        accept={accept}
+        onChange={(event) => onFileChange(event.target.files?.[0] ?? null)}
+      />
+      <span className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <span className="min-w-0">
+          <span className="block text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">{label}</span>
+          <span className={cn("mt-1 block break-words text-[13px] font-semibold leading-5", file ? "text-studio-100" : "text-studio-500")}>
+            {file ? file.name : "No file selected"}
+          </span>
+          <span className="mt-1 block text-xs text-studio-400">
+            {file ? `${file.type || "file"} / ${formatBytes(file.size)}` : helper}
+          </span>
+        </span>
+        <span className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-xs font-semibold text-studio-950 transition group-hover:bg-emerald-300">
+          <UploadCloud className="h-3.5 w-3.5" />
+          Browse
+        </span>
+      </span>
+    </label>
   );
 }
 
@@ -3848,7 +3920,7 @@ function Collections({
   const slateItemCount = slateItems.length;
   const scriptItemCount = scriptItems.length;
   return (
-    <div className="grid gap-4">
+    <div className="collections-page flex min-h-0 flex-col gap-3 overflow-hidden">
       <Panel>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <SectionHeader eyebrow="Collections" title="Review Packets" />
@@ -3875,11 +3947,13 @@ function Collections({
         </div>
       </Panel>
 
-      {mode === "slate" ? (
-        <SlateCollections collections={slateCollections} items={slateItems} projects={projects} prospects={prospects} users={users} canManage={canManage} onCreateCollection={onCreateSlateCollection} onAddItem={onAddSlateItem} onRemoveItem={onRemoveSlateItem} />
-      ) : (
-        <ScriptCollections collections={scriptCollections} items={scriptItems} documents={documents} versions={versions} projects={projects} canManage={canManage} onCreateCollection={onCreateScriptCollection} onAddDocument={onAddDocument} onRemoveDocument={onRemoveDocument} />
-      )}
+      <div className="collections-body min-h-0 flex-1">
+        {mode === "slate" ? (
+          <SlateCollections collections={slateCollections} items={slateItems} projects={projects} prospects={prospects} users={users} canManage={canManage} onCreateCollection={onCreateSlateCollection} onAddItem={onAddSlateItem} onRemoveItem={onRemoveSlateItem} />
+        ) : (
+          <ScriptCollections collections={scriptCollections} items={scriptItems} documents={documents} versions={versions} projects={projects} canManage={canManage} onCreateCollection={onCreateScriptCollection} onAddDocument={onAddDocument} onRemoveDocument={onRemoveDocument} />
+        )}
+      </div>
     </div>
   );
 }
@@ -3987,11 +4061,11 @@ function SlateCollections({
   }
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[340px_1fr]">
-      <div className="space-y-4">
+    <div className="collections-grid grid h-full min-h-0 gap-4 xl:grid-cols-[400px_minmax(0,1fr)]">
+      <div className="collections-column space-y-4">
         <Panel>
           <SectionHeader eyebrow="Review Packets" title="Slate Collections" />
-          <div className="data-scroll-list mt-3 grid gap-2">
+          <div className="collections-list mt-3 grid gap-2 overflow-y-auto pr-0.5">
             {collections.length ? collections.map((collection) => {
               const count = items.filter((item) => item.collectionId === collection.id).length;
               return (
@@ -4028,51 +4102,26 @@ function SlateCollections({
             {message ? <p className="mt-2 text-xs text-studio-300">{message}</p> : null}
           </Panel>
         ) : null}
-      </div>
-
-      <div className="space-y-4">
-        <Panel>
-          <SectionHeader
-            eyebrow={selectedCollection?.visibility ? statusLabel(selectedCollection.visibility) : "Collection"}
-            title={selectedCollection?.name ?? "Select a Collection"}
-            action={selectedCollection ? <Badge value={selectedCollection.status} /> : undefined}
-          />
-          {selectedCollection ? (
-            <div className="mt-3 grid gap-3 md:grid-cols-4">
-              <SmallStat label="Items" value={`${collectionItems.length}`} />
-              <SmallStat label="Projects" value={`${collectionItems.filter((item) => item.itemType === "PROJECT").length}`} />
-              <SmallStat label="Prospects" value={`${collectionItems.filter((item) => item.itemType === "PROSPECT").length}`} />
-              <SmallStat label="Updated" value={selectedCollection.updatedAt} />
-            </div>
-          ) : null}
-          {selectedCollection?.description ? <p className="mt-3 text-[13px] leading-6 text-studio-300">{selectedCollection.description}</p> : null}
-        </Panel>
 
         {selectedCollection && canManage ? (
           <Panel>
             <SectionHeader eyebrow="Add" title="Add Project or Prospect" />
             <form onSubmit={submitItem} className="mt-3 grid gap-3">
-              <div className="grid gap-2 lg:grid-cols-[180px_1fr_auto]">
-                <select className="field" value={itemType} onChange={(event) => { setItemType(event.target.value as SlateCollectionItemType); setItemId(""); setItemSearch(""); }}>
+              <select className="field" value={itemType} onChange={(event) => { setItemType(event.target.value as SlateCollectionItemType); setItemId(""); setItemSearch(""); }}>
                 <option value="PROJECT">Development Slate</option>
                 <option value="PROSPECT">Prospect</option>
               </select>
-                <div>
-                  <input className="field" value={itemSearch} onChange={(event) => { setItemSearch(event.target.value); setItemId(""); }} placeholder={`Search ${itemType === "PROJECT" ? "development slate" : "prospects"} by title, writer, genre, status`} />
-                  {selectedItem ? (
-                    <p className="mt-1.5 text-xs text-amberline">Selected: {selectedItem.title}</p>
-                  ) : null}
-                </div>
-                <button type="submit" disabled={!itemId} className="inline-flex items-center justify-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-xs font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-40">
-                  <Plus className="h-3.5 w-3.5" />
-                  Add
-                </button>
+              <div>
+                <input className="field" value={itemSearch} onChange={(event) => { setItemSearch(event.target.value); setItemId(""); }} placeholder={`Search ${itemType === "PROJECT" ? "development slate" : "prospects"} by title, writer, genre, status`} />
+                {selectedItem ? (
+                  <p className="mt-1.5 text-xs text-amberline">Selected: {selectedItem.title}</p>
+                ) : null}
               </div>
               <input className="field" value={itemNotes} onChange={(event) => setItemNotes(event.target.value)} placeholder="Optional collection note" />
               <p className="text-xs text-studio-400">
                 Showing {visibleAvailableItems.length} available {itemType === "PROJECT" ? "development slate item" : "prospect"}{visibleAvailableItems.length === 1 ? "" : "s"}.
               </p>
-              <div className="max-h-52 overflow-y-auto rounded-md border border-white/10 bg-white/[0.02] p-1.5">
+              <div className="collections-add-list overflow-y-auto rounded-md border border-white/10 bg-white/[0.02] p-1.5">
                 {visibleAvailableItems.length ? visibleAvailableItems.map((item) => (
                   <button
                     key={item.id}
@@ -4092,14 +4141,37 @@ function SlateCollections({
                   </button>
                 )) : <p className="px-2.5 py-3 text-xs text-studio-400">No available {itemType === "PROJECT" ? "development slate items" : "prospects"} match that search, or every matching item is already in this collection.</p>}
               </div>
+              <button type="submit" disabled={!itemId} className="inline-flex items-center justify-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-xs font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-40">
+                <Plus className="h-3.5 w-3.5" />
+                Add
+              </button>
             </form>
           </Panel>
         ) : null}
+      </div>
 
+      <div className="collections-detail-column flex min-h-0 flex-col gap-4">
         <Panel>
+          <SectionHeader
+            eyebrow={selectedCollection?.visibility ? statusLabel(selectedCollection.visibility) : "Collection"}
+            title={selectedCollection?.name ?? "Select a Collection"}
+            action={selectedCollection ? <Badge value={selectedCollection.status} /> : undefined}
+          />
+          {selectedCollection ? (
+            <div className="mt-3 grid gap-3 md:grid-cols-4">
+              <SmallStat label="Items" value={`${collectionItems.length}`} />
+              <SmallStat label="Projects" value={`${collectionItems.filter((item) => item.itemType === "PROJECT").length}`} />
+              <SmallStat label="Prospects" value={`${collectionItems.filter((item) => item.itemType === "PROSPECT").length}`} />
+              <SmallStat label="Updated" value={selectedCollection.updatedAt} />
+            </div>
+          ) : null}
+          {selectedCollection?.description ? <p className="mt-3 text-[13px] leading-6 text-studio-300">{selectedCollection.description}</p> : null}
+        </Panel>
+
+        <Panel className="flex min-h-0 flex-1 flex-col">
           <SectionHeader eyebrow="Review List" title="Projects and Prospects" />
           {collectionItems.length ? (
-            <div className="data-scroll">
+            <div className="data-scroll collection-review-scroll min-h-0 flex-1">
               <table className="data-table min-w-[900px]">
                 <thead><tr><th>Title</th><th>Type</th><th>Status / Lane</th><th>Genre</th><th>Owner / Creator</th><th>Collection Note</th>{canManage ? <th>Action</th> : null}</tr></thead>
                 <tbody>
@@ -4208,11 +4280,11 @@ function ScriptCollections({
   }
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[340px_1fr]">
-      <div className="space-y-4">
+    <div className="collections-grid grid h-full min-h-0 gap-4 xl:grid-cols-[400px_minmax(0,1fr)]">
+      <div className="collections-column space-y-4">
         <Panel>
           <SectionHeader eyebrow="Review Groups" title="Collections" />
-          <div className="data-scroll-list mt-3 grid gap-2">
+          <div className="collections-list mt-3 grid gap-2 overflow-y-auto pr-0.5">
             {collections.length ? collections.map((collection) => {
               const count = items.filter((item) => item.collectionId === collection.id).length;
               return (
@@ -4249,41 +4321,17 @@ function ScriptCollections({
             {message ? <p className="mt-2 text-xs text-studio-300">{message}</p> : null}
           </Panel>
         ) : null}
-      </div>
-
-      <div className="space-y-4">
-        <Panel>
-          <SectionHeader
-            eyebrow={selectedCollection?.visibility ? statusLabel(selectedCollection.visibility) : "Collection"}
-            title={selectedCollection?.name ?? "Select a Collection"}
-            action={selectedCollection ? <Badge value={selectedCollection.status} /> : undefined}
-          />
-          {selectedCollection ? (
-            <div className="mt-3 grid gap-3 md:grid-cols-3">
-              <SmallStat label="Scripts" value={`${collectionItems.length}`} />
-              <SmallStat label="Owner" value={selectedCollection.ownerId ? userName(selectedCollection.ownerId) : "Unassigned"} />
-              <SmallStat label="Updated" value={selectedCollection.updatedAt} />
-            </div>
-          ) : null}
-          {selectedCollection?.description ? <p className="mt-3 text-[13px] leading-6 text-studio-300">{selectedCollection.description}</p> : null}
-        </Panel>
 
         {selectedCollection && canManage ? (
           <Panel>
             <SectionHeader eyebrow="Add" title="Add Script to Collection" />
             <form onSubmit={submitDocument} className="mt-3 grid gap-3">
-              <div className="grid gap-2 lg:grid-cols-[1fr_auto]">
-                <div>
-                  <input className="field" value={documentSearch} onChange={(event) => { setDocumentSearch(event.target.value); setDocumentId(""); }} placeholder="Search scripts by title, writer, project, status" />
-                  {selectedDocument ? <p className="mt-1.5 text-xs text-amberline">Selected: {selectedDocument.title}</p> : null}
-                </div>
-                <button type="submit" disabled={!documentId} className="inline-flex items-center justify-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-xs font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-40">
-                  <Plus className="h-3.5 w-3.5" />
-                  Add
-                </button>
+              <div>
+                <input className="field" value={documentSearch} onChange={(event) => { setDocumentSearch(event.target.value); setDocumentId(""); }} placeholder="Search scripts by title, writer, project, status" />
+                {selectedDocument ? <p className="mt-1.5 text-xs text-amberline">Selected: {selectedDocument.title}</p> : null}
               </div>
               <input className="field" value={itemNotes} onChange={(event) => setItemNotes(event.target.value)} placeholder="Optional collection note" />
-              <div className="max-h-52 overflow-y-auto rounded-md border border-white/10 bg-white/[0.02] p-1.5">
+              <div className="collections-add-list overflow-y-auto rounded-md border border-white/10 bg-white/[0.02] p-1.5">
                 {visibleAvailableDocuments.length ? visibleAvailableDocuments.map((document) => {
                   const version = currentVersionFor(document.id, documents, versions);
                   return (
@@ -4302,14 +4350,36 @@ function ScriptCollections({
                   );
                 }) : <p className="px-2.5 py-3 text-xs text-studio-400">No available scripts match that search.</p>}
               </div>
+              <button type="submit" disabled={!documentId} className="inline-flex items-center justify-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-xs font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-40">
+                <Plus className="h-3.5 w-3.5" />
+                Add
+              </button>
             </form>
           </Panel>
         ) : null}
+      </div>
 
+      <div className="collections-detail-column flex min-h-0 flex-col gap-4">
         <Panel>
+          <SectionHeader
+            eyebrow={selectedCollection?.visibility ? statusLabel(selectedCollection.visibility) : "Collection"}
+            title={selectedCollection?.name ?? "Select a Collection"}
+            action={selectedCollection ? <Badge value={selectedCollection.status} /> : undefined}
+          />
+          {selectedCollection ? (
+            <div className="mt-3 grid gap-3 md:grid-cols-3">
+              <SmallStat label="Scripts" value={`${collectionItems.length}`} />
+              <SmallStat label="Owner" value={selectedCollection.ownerId ? userName(selectedCollection.ownerId) : "Unassigned"} />
+              <SmallStat label="Updated" value={selectedCollection.updatedAt} />
+            </div>
+          ) : null}
+          {selectedCollection?.description ? <p className="mt-3 text-[13px] leading-6 text-studio-300">{selectedCollection.description}</p> : null}
+        </Panel>
+
+        <Panel className="flex min-h-0 flex-1 flex-col">
           <SectionHeader eyebrow="Review List" title="Scripts in Collection" />
           {collectionItems.length ? (
-            <div className="data-scroll">
+            <div className="data-scroll collection-review-scroll min-h-0 flex-1">
               <table className="data-table min-w-[900px]">
                 <thead><tr><th>Title</th><th>Project</th><th>Status</th><th>Writer</th><th>Collection Note</th>{canManage ? <th>Action</th> : null}</tr></thead>
                 <tbody>
@@ -7091,6 +7161,7 @@ function temporaryPassword() {
 
 type ProjectSortKey = "title" | "logline" | "status" | "owner" | "updatedAt";
 type ProspectSortKey = "title" | "logline" | "lane" | "genre" | "urgency" | "rights" | "owner" | "actionStatus" | "score";
+type TaskSortKey = "title" | "assignee" | "context" | "priority" | "status" | "dueDate";
 
 function ProjectTable({ projects }: { projects: HammerProject[] }) {
   const [sort, setSort] = useState<{ key: ProjectSortKey; direction: "asc" | "desc" }>({ key: "title", direction: "asc" });
@@ -7154,22 +7225,32 @@ function taskContextLabel(task: HammerTask) {
 }
 
 function TaskRows({ tasks, users = hammerUsers, projects = hammerProjects, selectedTaskId, showAssignee = false, showContext = false, onUpdateTask, onDeleteTask }: { tasks: HammerTask[]; users?: HammerUser[]; projects?: HammerProject[]; selectedTaskId?: string; showAssignee?: boolean; showContext?: boolean; onUpdateTask?: (taskId: string, patch: TaskPatch) => void; onDeleteTask?: (taskId: string) => void }) {
+  const [sort, setSort] = useState<{ key: TaskSortKey; direction: "asc" | "desc" }>({ key: "dueDate", direction: "asc" });
   const gridClass = showAssignee
     ? showContext ? "md:grid-cols-[1fr_130px_120px_120px_110px_100px_128px]" : "md:grid-cols-[1fr_130px_120px_110px_100px_128px]"
     : showContext ? "md:grid-cols-[1fr_120px_120px_110px_100px_128px]" : "md:grid-cols-[1fr_120px_110px_100px_128px]";
   const nameForUser = (userId: string) => users.find((user) => user.id === userId)?.name ?? userName(userId);
+  const sortedTasks = useMemo(() => {
+    return [...tasks].sort((a, b) => compareTasks(a, b, sort, users, projects));
+  }, [projects, sort, tasks, users]);
+  function toggleSort(key: TaskSortKey) {
+    setSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === "asc" ? "desc" : "asc"
+    }));
+  }
   return (
     <div className="data-scroll-list grid gap-2">
       <div className={cn("hidden px-2.5 text-[11px] uppercase tracking-[0.12em] text-studio-400 md:grid", gridClass)}>
-        <span>Task</span>
-        {showAssignee ? <span>Assignee</span> : null}
-        {showContext ? <span>Area</span> : null}
-        <span>Priority</span>
-        <span>Progress</span>
-        <span>Due</span>
+        <TaskSortButton label="Task" sortKey="title" activeSort={sort} onSort={toggleSort} />
+        {showAssignee ? <TaskSortButton label="Assignee" sortKey="assignee" activeSort={sort} onSort={toggleSort} /> : null}
+        {showContext ? <TaskSortButton label="Area" sortKey="context" activeSort={sort} onSort={toggleSort} /> : null}
+        <TaskSortButton label="Priority" sortKey="priority" activeSort={sort} onSort={toggleSort} />
+        <TaskSortButton label="Progress" sortKey="status" activeSort={sort} onSort={toggleSort} />
+        <TaskSortButton label="Due" sortKey="dueDate" activeSort={sort} onSort={toggleSort} />
         <span>{onUpdateTask || onDeleteTask ? "Actions" : ""}</span>
       </div>
-      {tasks.map((task) => (
+      {sortedTasks.map((task) => (
         <div
           key={task.id}
           className={cn(
@@ -7211,6 +7292,59 @@ function TaskRows({ tasks, users = hammerUsers, projects = hammerProjects, selec
     </div>
   );
 }
+
+function TaskSortButton({ label, sortKey, activeSort, onSort }: { label: string; sortKey: TaskSortKey; activeSort: { key: TaskSortKey; direction: "asc" | "desc" }; onSort: (key: TaskSortKey) => void }) {
+  const active = activeSort.key === sortKey;
+  return (
+    <button type="button" onClick={() => onSort(sortKey)} className={cn("inline-flex items-center gap-1 text-left font-semibold uppercase tracking-[0.12em] transition hover:text-amberline", active && "text-amberline")}>
+      {label}
+      <ArrowUpDown className="h-3 w-3" />
+      {active ? <span className="text-[10px]">{activeSort.direction === "asc" ? "A-Z" : "Z-A"}</span> : null}
+    </button>
+  );
+}
+
+function compareTasks(a: HammerTask, b: HammerTask, sort: { key: TaskSortKey; direction: "asc" | "desc" }, users: HammerUser[], projects: HammerProject[]) {
+  const aValue = taskSortValue(a, sort.key, users, projects);
+  const bValue = taskSortValue(b, sort.key, users, projects);
+  const comparison = typeof aValue === "number" && typeof bValue === "number"
+    ? aValue - bValue
+    : String(aValue).localeCompare(String(bValue), undefined, { numeric: true, sensitivity: "base" });
+  if (comparison !== 0) return sort.direction === "asc" ? comparison : -comparison;
+  return a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: "base" });
+}
+
+function taskSortValue(task: HammerTask, key: TaskSortKey, users: HammerUser[], projects: HammerProject[]) {
+  if (key === "title") return `${task.title} ${task.description}`;
+  if (key === "assignee") return users.find((user) => user.id === task.assignedToId)?.name ?? userName(task.assignedToId);
+  if (key === "context") return taskContextLabelFromList(task, projects);
+  if (key === "priority") return taskPriorityRank[task.priority] ?? 0;
+  if (key === "status") return taskStatusRank[task.status] ?? 0;
+  return task.dueDate ? Date.parse(task.dueDate) || Number.MAX_SAFE_INTEGER : Number.MAX_SAFE_INTEGER;
+}
+
+function taskContextLabelFromList(task: HammerTask, projects: HammerProject[]) {
+  if (task.targetType === "GENERAL" || !task.projectId) return "General";
+  if (task.targetType === "PROJECT_LEAD") return "Prospect";
+  return projects.find((project) => project.id === task.projectId)?.title ?? projectTitle(task.projectId);
+}
+
+const taskPriorityRank: Record<TaskPriority, number> = {
+  LOW: 1,
+  MEDIUM: 2,
+  HIGH: 3,
+  URGENT: 4
+};
+
+const taskStatusRank: Record<TaskStatus, number> = {
+  TODO: 1,
+  IN_PROGRESS: 2,
+  REVIEW: 3,
+  ON_HOLD: 4,
+  BLOCKED: 5,
+  DONE: 6,
+  ARCHIVED: 7
+};
 
 function EditTaskDialog({ task, users, projects, onUpdateTask }: { task: HammerTask; users: HammerUser[]; projects: HammerProject[]; onUpdateTask: (taskId: string, patch: TaskPatch) => void }) {
   const [open, setOpen] = useState(false);
