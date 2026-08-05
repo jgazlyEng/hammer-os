@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, ArrowUpDown, CheckCircle2, Download, FileDiff, FileText, Gauge, ImagePlus, MessageSquare, PackageCheck, Pencil, Plus, Search, ShieldCheck, Trash2, UploadCloud, UsersRound, X } from "lucide-react";
+import { ArrowLeft, ArrowUpDown, CheckCircle2, Download, FileDiff, FileText, Gauge, ImagePlus, Loader2, MessageSquare, PackageCheck, Pencil, Plus, Search, ShieldCheck, Trash2, UploadCloud, UsersRound, X } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { EmptyState, MetricCard, Panel, SectionHeader } from "@/components/ui";
 import {
@@ -99,6 +99,12 @@ const HAMMER_LOCAL_COMMENTS_STORAGE_KEY = "hammer:comments";
 type HammerView = "dashboard" | "projects" | "prospects" | "collections" | "project-new" | "project-detail" | "project-documents" | "project-assets" | "scripts" | "script-detail" | "script-versions" | "script-diff" | "script-breakdown" | "assets" | "asset-detail" | "tasks" | "contacts" | "reviews" | "reports" | "executive" | "admin-users" | "account";
 type ScriptLibrarySection = "inbox" | "projects" | "all";
 type AppRole = "admin" | "executive" | "producer" | "department_lead";
+
+interface DocumentUploadResponse {
+  document?: HammerDocument;
+  version?: HammerDocumentVersion;
+  warning?: string;
+}
 
 const emptyProject: HammerProject = {
   id: "no-project",
@@ -754,8 +760,20 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
         const data = await response.json().catch(() => null) as { error?: string } | null;
         throw new Error(data?.error ?? "Document upload failed.");
       }
-      const data = await response.json().catch(() => null) as { warning?: string } | null;
-      await loadDatabaseWorkspace({ force: true });
+      const data = await response.json().catch(() => null) as DocumentUploadResponse | null;
+      if (data?.document) {
+        setLocalDocuments((current) => [data.document!, ...current.filter((document) => document.id !== data.document!.id)]);
+      }
+      if (data?.version) {
+        setLocalVersions((current) => [data.version!, ...current.filter((version) => version.id !== data.version!.id)]);
+      }
+      hammerWorkspaceCache = null;
+      try {
+        await loadDatabaseWorkspace({ force: true });
+      } catch (error) {
+        const refreshWarning = `Upload saved, but the workspace list could not refresh automatically. Reload the page if the new document is not visible. Details: ${error instanceof Error ? error.message : "Unknown refresh error."}`;
+        return { warning: data?.warning ? `${data.warning} ${refreshWarning}` : refreshWarning };
+      }
       return { warning: data?.warning };
     }
     let extractedText = "";
@@ -3261,7 +3279,7 @@ function Scripts({
         <SectionHeader
           eyebrow={projectName ? `Showing ${projectName}` : "Repository"}
           title={compact ? "Documents" : "Scripts and Treatments"}
-          action={onUpload ? <PrimaryButton icon={UploadCloud} label="Upload Script" onClick={() => setUploadOpen((open) => !open)} /> : undefined}
+          action={onUpload ? <PrimaryButton icon={UploadCloud} label="Create Document" onClick={() => setUploadOpen((open) => !open)} /> : undefined}
         />
         {uploadOpen && onUpload ? <DocumentUploadPanel projectId={scopedProjectId} documents={docs} onUpload={onUpload} onDone={() => setUploadOpen(false)} /> : null}
         <DocumentRows docs={docs} versions={versions} projects={projects} omitProject={Boolean(projectId)} onDelete={onDelete} onAssignToProject={canManageLibrary ? onAssignToProject : undefined} assignableProjects={projects} defaultProjectId={scopedProjectId} emptyLabel={projectName ? `No documents for ${projectName} yet. Upload a script, treatment, outline, or coverage document.` : "No documents match this view."} />
@@ -3277,8 +3295,8 @@ function Scripts({
           title="Scripts"
           action={onUpload ? (
             <div className="flex flex-wrap gap-1.5">
-              {canManageLibrary ? <button type="button" onClick={() => { setUploadTarget("INBOX"); setUploadOpen((open) => uploadTarget === "INBOX" ? !open : true); }} className="inline-flex items-center gap-1.5 rounded-md bg-amberline px-2.5 py-1.5 text-xs font-semibold text-studio-950 transition hover:bg-emerald-300"><UploadCloud className="h-3.5 w-3.5" />Incoming</button> : null}
-              <button type="button" onClick={() => { setUploadTarget("ACTIVE"); setUploadOpen((open) => uploadTarget === "ACTIVE" ? !open : true); }} className={cn("inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold transition", canManageLibrary ? "border border-white/10 bg-white/[0.025] text-studio-200 hover:border-amberline/40 hover:text-amberline" : "bg-amberline text-studio-950 hover:bg-emerald-300")}><UploadCloud className="h-3.5 w-3.5" />To Project</button>
+              {canManageLibrary ? <button type="button" onClick={() => { setUploadTarget("INBOX"); setUploadOpen((open) => uploadTarget === "INBOX" ? !open : true); }} className="ui-button inline-flex items-center gap-1.5 rounded-md bg-amberline px-2.5 py-1.5 text-xs font-semibold text-studio-950 transition hover:bg-emerald-300"><UploadCloud className="h-3.5 w-3.5" />Create Incoming Document</button> : null}
+              <button type="button" onClick={() => { setUploadTarget("ACTIVE"); setUploadOpen((open) => uploadTarget === "ACTIVE" ? !open : true); }} className={cn("ui-button inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold transition", canManageLibrary ? "border border-white/10 bg-white/[0.025] text-studio-200 hover:border-amberline/40 hover:text-amberline" : "bg-amberline text-studio-950 hover:bg-emerald-300")}><UploadCloud className="h-3.5 w-3.5" />Create Project Document</button>
             </div>
           ) : undefined}
         />
@@ -3429,6 +3447,8 @@ function DocumentUploadPanel({
   const [notes, setNotes] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState("");
+  const [statusTone, setStatusTone] = useState<"idle" | "working" | "success" | "warning" | "error">("idle");
+  const [busy, setBusy] = useState(false);
   const selectedDocument = documents.find((document) => document.id === documentId);
 
   useEffect(() => {
@@ -3442,15 +3462,20 @@ function DocumentUploadPanel({
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (busy) return;
     if (!file) {
       setStatus("Choose a PDF, FDX, TXT, or MD file first.");
+      setStatusTone("error");
       return;
     }
     if (!isAllowedScriptUploadFile(file)) {
       setStatus("DOCX script parsing is disabled for now. Upload PDF, FDX, TXT, or MD instead.");
+      setStatusTone("error");
       return;
     }
-    setStatus("Extracting text and creating version...");
+    setBusy(true);
+    setStatusTone("working");
+    setStatus(`Uploading ${file.name} (${formatBytes(file.size)}). Large PDFs can take a moment while GreenLight extracts script text.`);
     try {
       const result = await onUpload({
         projectId,
@@ -3464,42 +3489,66 @@ function DocumentUploadPanel({
       });
       if (result?.warning) {
         setStatus(`Uploaded with warning: ${result.warning}`);
+        setStatusTone("warning");
         return;
       }
-      setStatus("Uploaded.");
-      onDone();
+      setStatus("Uploaded. Refreshing the script list...");
+      setStatusTone("success");
+      setFile(null);
+      window.setTimeout(onDone, 700);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Upload failed.");
+      setStatusTone("error");
+    } finally {
+      setBusy(false);
     }
   }
 
   return (
     <form onSubmit={submit} className="mb-3 grid gap-3 rounded-lg border border-amberline/20 bg-amberline/5 p-3 md:grid-cols-[1fr_160px]">
+      <div className="md:col-span-2">
+        <p className="text-[13px] font-semibold text-studio-100">{selectedDocument ? "Upload New Version" : "Create Document"}</p>
+        <p className="mt-1 text-xs leading-5 text-studio-300">
+          {selectedDocument ? `Attach a new file version to ${selectedDocument.title}.` : "Create a script, treatment, outline, coverage, or supporting document record by attaching its file here."}
+        </p>
+      </div>
       <div className="space-y-2">
-        <select className="field" value={documentId} onChange={(event) => setDocumentId(event.target.value)}>
+        <select className="field" value={documentId} disabled={busy} onChange={(event) => setDocumentId(event.target.value)}>
           <option value="">Create new document</option>
           {documents.map((document) => (
             <option key={document.id} value={document.id}>New version of {document.title}</option>
           ))}
         </select>
-        <input className="field" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Document title" />
-        <input className="field" list="writer-contact-options" value={writerName} onChange={(event) => setWriterName(event.target.value)} placeholder="Writer" />
-        <input className="field" value={source} onChange={(event) => setSource(event.target.value)} placeholder="Source: agency, contest, list, manager, referral" />
+        <input className="field" value={title} disabled={busy} onChange={(event) => setTitle(event.target.value)} placeholder="Document title" />
+        <input className="field" list="writer-contact-options" value={writerName} disabled={busy} onChange={(event) => setWriterName(event.target.value)} placeholder="Writer" />
+        <input className="field" value={source} disabled={busy} onChange={(event) => setSource(event.target.value)} placeholder="Source: agency, contest, list, manager, referral" />
         <datalist id="writer-contact-options">
           {hammerContacts.filter((contact) => contact.type === "WRITER").map((contact) => <option key={contact.id} value={contact.name} />)}
         </datalist>
-        <textarea className="field min-h-16" value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Version notes" />
-        {status ? <p className="text-xs text-studio-300">{status}</p> : null}
+        <textarea className="field min-h-16" value={notes} disabled={busy} onChange={(event) => setNotes(event.target.value)} placeholder="Version notes" />
       </div>
       <div className="space-y-2">
-        <select className="field" value={type} onChange={(event) => setType(event.target.value as DocumentType)}>
+        <select className="field" value={type} disabled={busy} onChange={(event) => setType(event.target.value as DocumentType)}>
           {(["SCRIPT", "TREATMENT", "OUTLINE", "NOTES", "COVERAGE", "BUSINESS_DOCUMENT"] as DocumentType[]).map((documentType) => (
             <option key={documentType} value={documentType}>{statusLabel(documentType)}</option>
           ))}
         </select>
-        <input className="block w-full text-xs text-studio-300 file:mr-3 file:rounded file:border-0 file:bg-studio-100 file:px-2.5 file:py-1.5 file:text-xs file:font-semibold file:text-studio-950" type="file" accept=".pdf,.fdx,.txt,.md,text/plain,text/markdown,application/pdf" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
-        <PrimaryButton icon={UploadCloud} label={documentId ? "Upload Version" : "Create Document"} />
+        <input className="block w-full text-xs text-studio-300 file:mr-3 file:rounded file:border-0 file:bg-studio-100 file:px-2.5 file:py-1.5 file:text-xs file:font-semibold file:text-studio-950 disabled:opacity-50" type="file" disabled={busy} accept=".pdf,.fdx,.txt,.md,text/plain,text/markdown,application/pdf" onChange={(event) => { const nextFile = event.target.files?.[0] ?? null; setFile(nextFile); if (nextFile) { setStatus(`Ready to upload ${nextFile.name} (${formatBytes(nextFile.size)}).`); setStatusTone("idle"); } }} />
+        <PrimaryButton icon={busy ? Loader2 : UploadCloud} label={busy ? "Uploading..." : documentId ? "Upload Version" : "Create Document"} disabled={busy} />
       </div>
+      {status ? (
+        <div className={cn(
+          "md:col-span-2 flex items-start gap-2 rounded-md border px-3 py-2 text-xs leading-5",
+          statusTone === "working" && "border-emerald-300/25 bg-emerald-400/10 text-emerald-100",
+          statusTone === "success" && "border-emerald-300/30 bg-emerald-400/12 text-emerald-100",
+          statusTone === "warning" && "border-yellow-300/30 bg-yellow-300/10 text-yellow-100",
+          statusTone === "error" && "border-rose-300/30 bg-rose-500/10 text-rose-100",
+          statusTone === "idle" && "border-white/10 bg-white/[0.03] text-studio-300"
+        )}>
+          {statusTone === "working" ? <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" /> : null}
+          <span>{status}</span>
+        </div>
+      ) : null}
     </form>
   );
 }
@@ -7541,12 +7590,12 @@ function escapeHtmlAttribute(value: string) {
   return escapeHtmlText(value).replaceAll('"', "&quot;");
 }
 
-function PrimaryButton({ icon: Icon, label, onClick }: { icon: React.ComponentType<{ className?: string }>; label: string; onClick?: () => void }) {
-  return <button onClick={onClick} className="inline-flex items-center gap-1.5 rounded-md bg-amberline px-2.5 py-1.5 text-xs font-semibold text-studio-950 transition hover:bg-emerald-300"><Icon className="h-3.5 w-3.5" />{label}</button>;
+function PrimaryButton({ icon: Icon, label, onClick, disabled = false }: { icon: React.ComponentType<{ className?: string }>; label: string; onClick?: () => void; disabled?: boolean }) {
+  return <button onClick={onClick} disabled={disabled} className="ui-button inline-flex items-center gap-1.5 rounded-md bg-amberline px-2.5 py-1.5 text-xs font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-wait disabled:opacity-65"><Icon className={cn("h-3.5 w-3.5", label.toLowerCase().includes("uploading") && "animate-spin")} />{label}</button>;
 }
 
 function GhostButton({ icon: Icon, label }: { icon: React.ComponentType<{ className?: string }>; label: string }) {
-  return <button className="inline-flex items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline"><Icon className="h-3.5 w-3.5" />{label}</button>;
+  return <button className="ui-button inline-flex items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline"><Icon className="h-3.5 w-3.5" />{label}</button>;
 }
 
 function DangerButton({ label, onClick }: { label: string; onClick: () => void }) {
