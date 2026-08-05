@@ -305,6 +305,8 @@ export interface HammerTask {
   status: TaskStatus;
   targetType: string;
   targetId: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface HammerAuditEvent {

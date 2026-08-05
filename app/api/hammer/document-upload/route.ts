@@ -1,16 +1,14 @@
 import { NextResponse } from "next/server";
-import { createRequire } from "node:module";
-import { pathToFileURL } from "node:url";
 import type { DocumentType, Prisma } from "@prisma/client";
 import { forbidden, isDatabaseConfigured, requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { storeUpload } from "@/lib/server-file-storage";
+import { extractPdfTextWithFallback } from "@/lib/server-pdf-text";
 
 export const runtime = "nodejs";
 
 const documentTypes: DocumentType[] = ["SCRIPT", "TREATMENT", "OUTLINE", "NOTES", "COVERAGE", "BUSINESS_DOCUMENT"];
 const MAX_UPLOAD_BYTES = 250 * 1024 * 1024;
-const requireFromHere = createRequire(import.meta.url);
 
 export async function POST(request: Request) {
   const auth = requireUser(request);
@@ -134,7 +132,7 @@ async function extractUploadText(fileName: string, fileType: string, bytes: Buff
   const lowerName = fileName.toLowerCase();
   if (lowerName.endsWith(".pdf") || fileType === "application/pdf") {
     try {
-      return await extractPdfText(bytes);
+      return await extractPdfTextWithFallback(bytes);
     } catch (error) {
       const detail = error instanceof Error ? error.message : "Unknown extraction error.";
       return {
@@ -156,32 +154,6 @@ async function extractUploadText(fileName: string, fileType: string, bytes: Buff
 function isAllowedScriptUploadFile(file: File) {
   const lowerName = file.name.toLowerCase();
   return lowerName.endsWith(".pdf") || lowerName.endsWith(".fdx") || lowerName.endsWith(".txt") || lowerName.endsWith(".md") || file.type === "application/pdf" || file.type === "text/plain" || file.type === "text/markdown";
-}
-
-async function extractPdfText(bytes: Buffer) {
-  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  pdfjs.GlobalWorkerOptions.workerSrc = pathToFileURL(requireFromHere.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs")).href;
-  const pdf = await pdfjs.getDocument({ data: new Uint8Array(bytes), disableWorker: true } as Parameters<typeof pdfjs.getDocument>[0]).promise;
-  const pages: string[] = [];
-  let imageOnlyPageCount = 0;
-  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-    const page = await pdf.getPage(pageNumber);
-    const content = await page.getTextContent();
-    const pageText = content.items.map((item) => ("str" in item ? item.str : "")).filter(Boolean).join("\n").trim();
-    if (!pageText) imageOnlyPageCount += 1;
-    pages.push(pageText);
-  }
-  const text = pages.join("\n\n").trim();
-  if (!text) {
-    return {
-      text: "",
-      warning: "Uploaded successfully, but no selectable text was found. This PDF appears to be image-only or scanned; OCR is needed before breakdown or diff can run."
-    };
-  }
-  const warning = imageOnlyPageCount
-    ? `Uploaded successfully. ${imageOnlyPageCount} of ${pdf.numPages} page${imageOnlyPageCount === 1 ? "" : "s"} had no selectable text and may be image-only; those pages were skipped.`
-    : undefined;
-  return { text, warning };
 }
 
 function combineUploadNotes(notes: string | undefined, warning: string | undefined) {

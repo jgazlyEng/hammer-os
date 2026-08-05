@@ -1169,7 +1169,9 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       priority: input.priority,
       status: input.status ?? "TODO",
       targetType: input.targetType,
-      targetId: input.targetId || input.projectId || ""
+      targetId: input.targetId || input.projectId || "",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
     };
     const nextTasks = [nextTask, ...localTasks];
     setLocalTasks(nextTasks);
@@ -5942,6 +5944,7 @@ function Reports({
   const [scope, setScope] = useState("ALL");
   const [recipient, setRecipient] = useState("");
   const [copied, setCopied] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const windowStart = parseReportDateInput(fromDate);
   const windowEnd = parseReportDateInput(toDate);
   const selectedProject = projects.find((project) => project.id === scope);
@@ -5970,6 +5973,9 @@ function Reports({
   const dueTasks = scopedTasks
     .filter((task) => task.status !== "DONE" && task.status !== "ARCHIVED" && isWithinReportWindow(task.dueDate, windowStart, windowEnd))
     .sort((a, b) => priorityRank(b.priority) - priorityRank(a.priority) || a.dueDate.localeCompare(b.dueDate));
+  const createdTasks = scopedTasks
+    .filter((task) => isWithinReportWindow(task.createdAt, windowStart, windowEnd))
+    .sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
   const urgentTasks = scopedTasks.filter((task) => task.status !== "DONE" && task.status !== "ARCHIVED" && (task.priority === "URGENT" || task.status === "BLOCKED" || task.status === "ON_HOLD"));
   const scopedApprovals = approvals.filter((approval) => {
     if (scope === "ALL") return true;
@@ -5991,6 +5997,13 @@ function Reports({
   });
   const greenlightProjects = scopedProjects.filter((project) => project.status === "GREENLIGHT_REVIEW");
   const onHoldProjects = scopedProjects.filter((project) => project.status === "ON_HOLD");
+  const changedItemCount = updatedProjects.length + updatedProspects.length + newVersions.length + newSupportingDocs.length;
+  const reportSignals = [
+    { label: "Changed items", value: changedItemCount, detail: "Projects, prospects, scripts, and support docs updated in the window." },
+    { label: "Tasks created", value: createdTasks.length, detail: "Tasks opened during the selected report window." },
+    { label: "Pending decisions", value: pendingApprovals.length, detail: "Approvals requested or waiting on changes." },
+    { label: "Notes", value: commentActivity.length, detail: "Comments and notes added during the report window." }
+  ];
   const subject = `GreenLight Executive Report - ${scopeLabel} - ${formatReportWindow(windowStart, windowEnd)}`;
   const emailBody = buildExecutiveReportEmail({
     subject,
@@ -6005,6 +6018,7 @@ function Reports({
     newSupportingDocs,
     documents,
     dueTasks,
+    createdTasks,
     urgentTasks,
     approvalActivity,
     pendingApprovals,
@@ -6029,24 +6043,37 @@ function Reports({
     );
   }
 
+  function applyPreset(preset: "TODAY" | "24H" | "WEEK") {
+    const end = new Date();
+    const start = new Date();
+    if (preset === "TODAY") start.setHours(0, 0, 0, 0);
+    if (preset === "24H") start.setDate(start.getDate() - 1);
+    if (preset === "WEEK") start.setDate(start.getDate() - 7);
+    setFromDate(reportDateInput(start));
+    setToDate(reportDateInput(end));
+  }
+
   return (
     <div className="space-y-4">
       <Panel className="border-amberline/20 bg-amberline/[0.045]">
-        <div className="grid gap-4 xl:grid-cols-[1fr_auto] xl:items-end">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
-            <p className="font-display text-[10px] uppercase tracking-[0.16em] text-amberline">Executive Email Report</p>
-            <h2 className="mt-1 text-xl font-semibold text-studio-100">Generate a studio-ready update</h2>
-            <p className="mt-1 max-w-3xl text-[13px] leading-5 text-studio-300">Choose a date/time window and GreenLight will assemble changes, task pressure, material uploads, approvals, and decision points into a concise email draft.</p>
+            <p className="font-display text-[10px] uppercase tracking-[0.16em] text-amberline">Reports</p>
+            <h2 className="mt-1 text-xl font-semibold text-studio-100">Send an Executive Update</h2>
+            <p className="mt-1 text-[13px] leading-5 text-studio-300">Pick a scope and window. GreenLight turns tasks, decisions, and material changes into an email draft.</p>
           </div>
-          <div className="grid gap-2 sm:grid-cols-3 xl:w-[620px]">
-            <label className="grid gap-1">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-400">From</span>
-              <input className="field" type="datetime-local" value={fromDate} onChange={(event) => setFromDate(event.target.value)} />
-            </label>
-            <label className="grid gap-1">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-400">To</span>
-              <input className="field" type="datetime-local" value={toDate} onChange={(event) => setToDate(event.target.value)} />
-            </label>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => applyPreset("TODAY")} className="rounded-md border border-white/10 px-2.5 py-1.5 text-xs font-semibold text-studio-300 hover:border-amberline/40 hover:text-amberline">Today</button>
+            <button type="button" onClick={() => applyPreset("24H")} className="rounded-md border border-white/10 px-2.5 py-1.5 text-xs font-semibold text-studio-300 hover:border-amberline/40 hover:text-amberline">Last 24h</button>
+            <button type="button" onClick={() => applyPreset("WEEK")} className="rounded-md border border-white/10 px-2.5 py-1.5 text-xs font-semibold text-studio-300 hover:border-amberline/40 hover:text-amberline">Last 7 days</button>
+          </div>
+        </div>
+      </Panel>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(360px,460px)_minmax(0,1fr)]">
+        <Panel>
+          <SectionHeader eyebrow="Compose" title="Report Settings" />
+          <div className="space-y-3">
             <label className="grid gap-1">
               <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-400">Scope</span>
               <select className="field" value={scope} onChange={(event) => setScope(event.target.value)}>
@@ -6055,91 +6082,89 @@ function Reports({
                 {projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
               </select>
             </label>
-          </div>
-        </div>
-      </Panel>
-
-      <div className="grid gap-3 md:grid-cols-4">
-        <SmallStat label="Changed Items" value={`${updatedProjects.length + updatedProspects.length + newVersions.length + newSupportingDocs.length}`} />
-        <SmallStat label="Tasks Due" value={`${dueTasks.length}`} />
-        <SmallStat label="Pending Decisions" value={`${pendingApprovals.length}`} />
-        <SmallStat label="Comments / Notes" value={`${commentActivity.length}`} />
-      </div>
-
-      <div className="grid gap-4 xl:grid-cols-[0.82fr_1.18fr]">
-        <div className="space-y-4">
-          <Panel>
-            <SectionHeader eyebrow="Attention" title="What Matters" />
-            <ReportList
-              emptyLabel="No urgent items in this window."
-              items={[
-                ...urgentTasks.slice(0, 5).map((task) => ({ label: "Task", title: task.title, detail: `${nameForUserFromList(task.assignedToId, users)} / ${task.priority} / ${task.status}` })),
-                ...greenlightProjects.slice(0, 3).map((project) => ({ label: "Greenlight", title: project.title, detail: project.logline })),
-                ...onHoldProjects.slice(0, 3).map((project) => ({ label: "On Hold", title: project.title, detail: project.logline })),
-                ...assetReviews.slice(0, 3).map((asset) => ({ label: "Asset", title: asset.title, detail: `${projectTitleFromList(asset.projectId, projects)} / ${statusLabel(asset.status)}` }))
-              ]}
-            />
-          </Panel>
-          <Panel>
-            <SectionHeader eyebrow="Window Activity" title="Changes" />
-            <ReportList
-              emptyLabel="No project, prospect, or material changes in this window."
-              items={[
-                ...updatedProjects.map((project) => ({ label: "Project", title: project.title, detail: `${statusLabel(project.status)} / updated ${project.updatedAt}` })),
-                ...updatedProspects.map((prospect) => ({ label: "Prospect", title: prospect.title, detail: `${prospect.creator || "Writer TBD"} / ${prospect.lastUpdated || "updated"}` })),
-                ...newVersions.map((version) => {
-                  const document = documents.find((item) => item.id === version.documentId);
-                  return { label: "Version", title: document ? `${document.title} v${version.versionNumber}` : `Version ${version.versionNumber}`, detail: `${version.fileName} / ${statusLabel(version.status)}` };
-                }),
-                ...newSupportingDocs.map((document) => ({ label: "Support", title: document.title, detail: `${document.fileName} / ${statusLabel(document.type)}` }))
-              ]}
-            />
-          </Panel>
-          <Panel>
-            <SectionHeader eyebrow="This Window" title="Tasks and Approvals" />
-            <ReportList
-              emptyLabel="No tasks due or approval changes in this window."
-              items={[
-                ...dueTasks.map((task) => ({ label: "Task Due", title: task.title, detail: `${nameForUserFromList(task.assignedToId, users)} / due ${task.dueDate} / ${statusLabel(task.status)}` })),
-                ...approvalActivity.map((approval) => ({ label: "Approval", title: approval.targetId, detail: `${statusLabel(approval.status)} / reviewer ${nameForUserFromList(approval.reviewerId, users)}` }))
-              ]}
-            />
-          </Panel>
-        </div>
-
-        <Panel>
-          <SectionHeader eyebrow="Email Draft" title="Executive Summary" />
-          <label className="grid gap-1">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-400">Recipient</span>
-            <input className="field" type="email" value={recipient} onChange={(event) => setRecipient(event.target.value)} placeholder="executive@example.com" />
-          </label>
-          <label className="mt-3 grid gap-1">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-400">Subject</span>
-            <input className="field" value={subject} readOnly />
-          </label>
-          <textarea className="field mt-3 min-h-[640px] font-mono text-[12px] leading-5" value={emailBody} readOnly />
-          <div className="mt-3 flex flex-wrap gap-2">
-            <button type="button" onClick={copyReport} className="rounded-md bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300">{copied ? "Copied" : "Copy Email"}</button>
-            <button type="button" onClick={downloadReport} className="rounded-md border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:border-amberline/40 hover:text-amberline">Download TXT</button>
-            <a href={mailtoHref} className="rounded-md border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:border-amberline/40 hover:text-amberline">Open Email Draft</a>
+            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+              <label className="grid gap-1">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-400">From</span>
+                <input className="field" type="datetime-local" value={fromDate} onChange={(event) => setFromDate(event.target.value)} />
+              </label>
+              <label className="grid gap-1">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-400">To</span>
+                <input className="field" type="datetime-local" value={toDate} onChange={(event) => setToDate(event.target.value)} />
+              </label>
+            </div>
+            <label className="grid gap-1">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-400">Recipient</span>
+              <input className="field" type="email" value={recipient} onChange={(event) => setRecipient(event.target.value)} placeholder="executive@example.com" />
+            </label>
+            <label className="grid gap-1">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-400">Subject</span>
+              <input className="field" value={subject} readOnly />
+            </label>
+            <div className="flex flex-wrap gap-2 pt-1">
+              <button type="button" onClick={copyReport} className="rounded-md bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300">{copied ? "Copied" : "Copy Email"}</button>
+              <a href={mailtoHref} className="rounded-md border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:border-amberline/40 hover:text-amberline">Open Email</a>
+              <button type="button" onClick={downloadReport} className="rounded-md border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:border-amberline/40 hover:text-amberline">Download</button>
+              <button type="button" onClick={() => setPreviewOpen((open) => !open)} className="rounded-md border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:border-amberline/40 hover:text-amberline">{previewOpen ? "Hide Preview" : "Preview"}</button>
+            </div>
           </div>
         </Panel>
-      </div>
-    </div>
-  );
-}
 
-function ReportList({ items, emptyLabel }: { items: Array<{ label: string; title: string; detail: string }>; emptyLabel: string }) {
-  if (!items.length) return <EmptyState label={emptyLabel} />;
-  return (
-    <div className="space-y-2">
-      {items.slice(0, 10).map((item, index) => (
-        <div key={`${item.label}-${item.title}-${index}`} className="rounded-md border border-white/10 bg-white/[0.03] p-2.5">
-          <p className="font-display text-[10px] uppercase tracking-[0.12em] text-amberline">{item.label}</p>
-          <p className="mt-1 text-[13px] font-semibold text-studio-100">{item.title}</p>
-          <p className="mt-0.5 text-xs leading-5 text-studio-400">{item.detail}</p>
+        <div>
+          <Panel>
+            <SectionHeader eyebrow="Included" title="Report Snapshot" />
+            <div className="grid gap-2 md:grid-cols-2">
+              {reportSignals.map((signal) => (
+                <div key={signal.label} className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
+                  <p className="text-2xl font-semibold text-studio-100">{signal.value}</p>
+                  <p className="mt-1 text-[12px] font-semibold text-studio-300">{signal.label}</p>
+                  <p className="mt-1 text-[11px] leading-4 text-studio-500">{signal.detail}</p>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 grid gap-2">
+              {urgentTasks.slice(0, 3).map((task) => (
+                <Link key={task.id} href={`/tasks?task=${encodeURIComponent(task.id)}`} className="rounded-md border border-ember/20 bg-ember/10 p-2.5 transition hover:border-ember/40">
+                  <p className="text-[13px] font-semibold text-studio-100">{task.title}</p>
+                  <p className="mt-0.5 text-xs text-studio-300">{nameForUserFromList(task.assignedToId, users)} / {statusLabel(task.status)} / {task.priority}</p>
+                </Link>
+              ))}
+              {!urgentTasks.length && !changedItemCount && !dueTasks.length && !createdTasks.length ? <EmptyState label="No major report signals in this window." /> : null}
+            </div>
+            <div className="mt-4 border-t border-white/10 pt-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="font-display text-[10px] uppercase tracking-[0.16em] text-amberline">Tasks Created</p>
+                  <h3 className="text-sm font-semibold text-studio-100">Included In Report</h3>
+                </div>
+                <TableLink href="/tasks">Open Tasks</TableLink>
+              </div>
+              <div className="mt-3 grid gap-2">
+                {createdTasks.length ? createdTasks.slice(0, 6).map((task) => (
+                  <Link key={task.id} href={`/tasks?task=${encodeURIComponent(task.id)}`} className="rounded-md border border-white/10 bg-white/[0.03] p-2.5 transition hover:border-amberline/35">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-[13px] font-semibold text-studio-100">{task.title}</p>
+                        <p className="mt-0.5 truncate text-xs text-studio-400">{taskContextLabel(task)} / {nameForUserFromList(task.assignedToId, users)} / created {formatShortDateTime(task.createdAt)}</p>
+                      </div>
+                      <div className="shrink-0 space-y-1 text-right">
+                        <Badge value={task.priority} subtle />
+                        <Badge value={task.status} subtle />
+                      </div>
+                    </div>
+                  </Link>
+                )) : <EmptyState label="No tasks were created in this report window." />}
+              </div>
+            </div>
+          </Panel>
         </div>
-      ))}
+      </div>
+
+      {previewOpen ? (
+        <Panel>
+          <SectionHeader eyebrow="Preview" title="Email Draft" />
+          <textarea className="field min-h-[520px] font-mono text-[12px] leading-5" value={emailBody} readOnly />
+        </Panel>
+      ) : null}
     </div>
   );
 }
@@ -7651,6 +7676,11 @@ function formatReportWindow(start: Date, end: Date) {
   return `${start.toLocaleString()} to ${end.toLocaleString()}`;
 }
 
+function formatShortDateTime(value?: string) {
+  const parsed = parseReportRecordDate(value);
+  return parsed ? parsed.toLocaleString() : "unknown";
+}
+
 function reportSection(title: string, lines: string[]) {
   return [`${title}:`, ...(lines.length ? lines.map((line) => `- ${line}`) : ["- None"]), ""].join("\n");
 }
@@ -7668,6 +7698,7 @@ function buildExecutiveReportEmail(input: {
   newSupportingDocs: SupportingDocument[];
   documents: HammerDocument[];
   dueTasks: HammerTask[];
+  createdTasks: HammerTask[];
   urgentTasks: HammerTask[];
   approvalActivity: HammerApproval[];
   pendingApprovals: HammerApproval[];
@@ -7681,7 +7712,7 @@ function buildExecutiveReportEmail(input: {
   const summaryLines = [
     `${input.updatedProjects.length + input.updatedProspects.length} slate/prospect update${input.updatedProjects.length + input.updatedProspects.length === 1 ? "" : "s"}`,
     `${input.newVersions.length + input.newSupportingDocs.length} material upload${input.newVersions.length + input.newSupportingDocs.length === 1 ? "" : "s"}`,
-    `${input.dueTasks.length} task${input.dueTasks.length === 1 ? "" : "s"} due in the selected window`,
+    `${input.createdTasks.length} task${input.createdTasks.length === 1 ? "" : "s"} created in the selected window`,
     `${input.pendingApprovals.length} pending approval${input.pendingApprovals.length === 1 ? "" : "s"}`
   ];
   const attentionLines = [
@@ -7701,7 +7732,12 @@ function buildExecutiveReportEmail(input: {
     }),
     ...input.newSupportingDocs.map((document) => `${document.title}: ${document.fileName} (${statusLabel(document.type)})${document.source ? ` / Source: ${document.source}` : ""}`)
   ];
-  const taskLines = input.dueTasks.map((task) => `${task.title} - ${nameForUserFromList(task.assignedToId, input.users)} - due ${task.dueDate} - ${statusLabel(task.status)} / ${task.priority}`);
+  const taskLines = [
+    ...input.createdTasks.map((task) => `${task.title} - created ${formatShortDateTime(task.createdAt)} - ${nameForUserFromList(task.assignedToId, input.users)} - ${statusLabel(task.status)} / ${task.priority}${task.dueDate ? ` - due ${task.dueDate}` : ""}`),
+    ...input.dueTasks
+      .filter((task) => !input.createdTasks.some((createdTask) => createdTask.id === task.id))
+      .map((task) => `${task.title} - due ${task.dueDate} - ${nameForUserFromList(task.assignedToId, input.users)} - ${statusLabel(task.status)} / ${task.priority}`)
+  ];
   const approvalLines = [
     ...input.pendingApprovals.map((approval) => `${approval.targetType} ${approval.targetId}: ${statusLabel(approval.status)} - reviewer ${nameForUserFromList(approval.reviewerId, input.users)}`),
     ...input.approvalActivity.map((approval) => `${approval.targetType} ${approval.targetId}: activity ${statusLabel(approval.status)}`)

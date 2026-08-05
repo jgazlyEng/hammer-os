@@ -724,8 +724,8 @@ function toAsset(asset: { id: string; projectId: string; title: string; descript
   return { id: asset.id, projectId: asset.projectId, title: asset.title, description: asset.description ?? "", source: asset.source ?? undefined, assetType: asset.assetType, fileName: asset.fileName, fileType: asset.fileType, fileSize: asset.fileSize, storagePath: asset.storagePath, thumbnailPath: asset.thumbnailPath ?? undefined, status: asset.status, uploadedById: asset.uploadedById ?? "", imageUrl: asset.dataUrl ?? undefined };
 }
 
-function toTask(task: { id: string; projectId: string | null; title: string; description: string | null; assignedToId: string | null; createdById: string | null; dueDate: Date | null; priority: TaskPriority; status: TaskStatus; targetType: TaskTargetType | null; targetId: string | null }) {
-  return { id: task.id, projectId: task.projectId ?? "", title: task.title, description: task.description ?? "", assignedToId: task.assignedToId ?? "", createdById: task.createdById ?? "", dueDate: task.dueDate ? dateString(task.dueDate) : "", priority: task.priority, status: task.status, targetType: task.targetType ?? "GENERAL", targetId: task.targetId ?? task.projectId ?? "" };
+function toTask(task: { id: string; projectId: string | null; title: string; description: string | null; assignedToId: string | null; createdById: string | null; dueDate: Date | null; priority: TaskPriority; status: TaskStatus; targetType: TaskTargetType | null; targetId: string | null; createdAt?: Date; updatedAt?: Date }) {
+  return { id: task.id, projectId: task.projectId ?? "", title: task.title, description: task.description ?? "", assignedToId: task.assignedToId ?? "", createdById: task.createdById ?? "", dueDate: task.dueDate ? dateString(task.dueDate) : "", priority: task.priority, status: task.status, targetType: task.targetType ?? "GENERAL", targetId: task.targetId ?? task.projectId ?? "", createdAt: task.createdAt ? dateTimeString(task.createdAt) : undefined, updatedAt: task.updatedAt ? dateTimeString(task.updatedAt) : undefined };
 }
 
 function toContact(contact: { id: string; name: string; company: string | null; type: ContactType; title: string | null; email: string | null; phone: string | null; location: string | null; website: string | null; status: ContactStatus; ownerId: string | null; tags: string[]; lastContacted: Date | null; nextFollowUp: Date | null; projectIds: string[]; notes: string | null }) {
@@ -823,6 +823,10 @@ function audit(actorUserId: string, actor: string, action: string, entityType: s
 
 function dateString(date: Date) {
   return date.toISOString().slice(0, 10);
+}
+
+function dateTimeString(date: Date) {
+  return date.toISOString();
 }
 
 function stringField(value: unknown) {
