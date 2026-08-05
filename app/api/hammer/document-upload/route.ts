@@ -15,7 +15,9 @@ export async function POST(request: Request) {
   if ("error" in auth) return NextResponse.json({ error: auth.error }, { status: auth.status });
   if (!isDatabaseConfigured()) return NextResponse.json({ error: "Database mode is not configured." }, { status: 503 });
 
+  let uploadStage = "preparing upload";
   try {
+    uploadStage = "reading form data";
     const formData = await request.formData();
     const file = formData.get("file");
     if (!(file instanceof File)) return NextResponse.json({ error: "Choose a PDF, FDX, TXT, or MD file first." }, { status: 400 });
@@ -50,12 +52,15 @@ export async function POST(request: Request) {
     const fileName = file.name || "uploaded-document";
     const fileType = file.type || inferFileType(fileName);
     const bytes = Buffer.from(await file.arrayBuffer());
+    uploadStage = "storing uploaded file";
     const storedUpload = await storeUpload(projectId ?? "inbox", fileName, bytes);
+    uploadStage = "extracting script text";
     const extraction = await extractUploadText(fileName, fileType, bytes);
     const extractedText = extraction.text;
     const uploadNotes = combineUploadNotes(optionalString(formData.get("notes")), extraction.warning);
     const now = new Date();
 
+    uploadStage = "saving document metadata";
     const result = await prisma.$transaction(async (tx) => {
       const document = existingDocument ?? await tx.document.create({
         data: {
@@ -118,7 +123,7 @@ export async function POST(request: Request) {
       warning: extraction.warning
     }, { status: 201 });
   } catch (error) {
-    return NextResponse.json({ error: uploadErrorMessage(error) }, { status: 500 });
+    return NextResponse.json({ error: `Document upload failed while ${uploadStage}: ${uploadErrorMessage(error)}` }, { status: 500 });
   }
 }
 
