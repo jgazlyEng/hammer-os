@@ -1804,7 +1804,8 @@ function Projects({
   const [slatePage, setSlatePage] = useState(1);
   const [slateImportMessage, setSlateImportMessage] = useState("");
   const [prospectSort, setProspectSort] = useState<{ key: ProspectSortKey; direction: "asc" | "desc" }>({ key: "title", direction: "asc" });
-  const filteredLeads = projectLeads.filter((lead) => {
+  const displayProjectLeads = useMemo(() => dedupeProjectLeads(projectLeads), [projectLeads]);
+  const filteredLeads = displayProjectLeads.filter((lead) => {
     const matchesSearch = `${lead.title} ${lead.logline ?? ""} ${lead.creator ?? ""} ${lead.genre ?? ""} ${lead.lane ?? ""} ${lead.notes ?? ""} ${lead.searchKeywords ?? ""} ${lead.contactRep ?? ""}`.toLowerCase().includes(slateSearch.toLowerCase());
     return matchesSearch
       && matchesFilter(filters.lane, lead.lane)
@@ -1817,10 +1818,10 @@ function Projects({
       && matchesFilter(filters.format, lead.format);
   });
   const slateStats = {
-    total: projectLeads.length,
-    urgent: projectLeads.filter((lead) => lead.urgencyLabel === "Urgent").length,
-    picks: projectLeads.filter((lead) => lead.myPicks).length,
-    promoted: projectLeads.filter((lead) => lead.promotedProjectId).length
+    total: displayProjectLeads.length,
+    urgent: displayProjectLeads.filter((lead) => lead.urgencyLabel === "Urgent").length,
+    picks: displayProjectLeads.filter((lead) => lead.myPicks).length,
+    promoted: displayProjectLeads.filter((lead) => lead.promotedProjectId).length
   };
   const slatePageSize = 100;
   const sortedLeads = useMemo(() => {
@@ -1837,8 +1838,8 @@ function Projects({
   const selectedLead = selectedLeadId
     ? pagedLeads.find((lead) => lead.id === selectedLeadId && lead.title === selectedLeadTitle)
       ?? filteredLeads.find((lead) => lead.id === selectedLeadId && lead.title === selectedLeadTitle)
-      ?? projectLeads.find((lead) => lead.id === selectedLeadId && lead.title === selectedLeadTitle)
-      ?? projectLeads.find((lead) => lead.id === selectedLeadId)
+      ?? displayProjectLeads.find((lead) => lead.id === selectedLeadId && lead.title === selectedLeadTitle)
+      ?? displayProjectLeads.find((lead) => lead.id === selectedLeadId)
     : undefined;
   const selectedLeadAssets = selectedLead ? prospectAssets.filter((asset) => asset.prospectId === selectedLead.id) : [];
 
@@ -1866,7 +1867,7 @@ function Projects({
         ownerIds: lead.ownerIds?.length ? lead.ownerIds : resolveCsvOwnerIds(lead.owner, users)
       }));
       await onImportLeads(parsed);
-      setSlateImportMessage(`Processed ${parsed.length} prospect row${parsed.length === 1 ? "" : "s"}. Existing IDs were ignored.`);
+      setSlateImportMessage(`Processed ${parsed.length} prospect row${parsed.length === 1 ? "" : "s"}. Existing prospects were updated, restored, or skipped.`);
     } catch (error) {
       setSlateImportMessage(error instanceof Error ? error.message : "Could not import slate CSV.");
     }
@@ -1912,19 +1913,19 @@ function Projects({
                   <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-studio-400" />
                   <input className="field pl-8" value={slateSearch} onChange={(event) => setSlateSearch(event.target.value)} placeholder="Search title, creator, logline, vendor, contact, notes" />
                 </div>
-                <SlateFilter label="Lane" value={filters.lane} options={uniqueLeadOptions(projectLeads, "lane")} onChange={(value) => setFilter("lane", value)} />
-                <SlateFilter label="Genre" value={filters.genre} options={uniqueLeadOptions(projectLeads, "genre")} onChange={(value) => setFilter("genre", value)} />
-                <SlateFilter label="Rights" value={filters.rights} options={uniqueLeadOptions(projectLeads, "rightsStatus")} onChange={(value) => setFilter("rights", value)} />
-                <ProspectOwnerFilter label="Owner" value={filters.owner} users={users} leads={projectLeads} onChange={(value) => setFilter("owner", value)} />
+                <SlateFilter label="Lane" value={filters.lane} options={uniqueLeadOptions(displayProjectLeads, "lane")} onChange={(value) => setFilter("lane", value)} />
+                <SlateFilter label="Genre" value={filters.genre} options={uniqueLeadOptions(displayProjectLeads, "genre")} onChange={(value) => setFilter("genre", value)} />
+                <SlateFilter label="Rights" value={filters.rights} options={uniqueLeadOptions(displayProjectLeads, "rightsStatus")} onChange={(value) => setFilter("rights", value)} />
+                <ProspectOwnerFilter label="Owner" value={filters.owner} users={users} leads={displayProjectLeads} onChange={(value) => setFilter("owner", value)} />
               </div>
               <div className="mb-3 grid gap-2 md:grid-cols-4">
-                <SlateFilter label="Urgency" value={filters.urgency} options={uniqueLeadOptions(projectLeads, "urgencyLabel")} onChange={(value) => setFilter("urgency", value)} />
-                <SlateFilter label="Action Status" value={filters.nextAction} options={uniqueLeadOptions(projectLeads, "nextActionStatus")} onChange={(value) => setFilter("nextAction", value)} />
-                <SlateFilter label="Script Status" value={filters.scriptStatus} options={uniqueLeadOptions(projectLeads, "scriptStatus")} onChange={(value) => setFilter("scriptStatus", value)} />
-                <SlateFilter label="Format" value={filters.format} options={uniqueLeadOptions(projectLeads, "format")} onChange={(value) => setFilter("format", value)} />
+                <SlateFilter label="Urgency" value={filters.urgency} options={uniqueLeadOptions(displayProjectLeads, "urgencyLabel")} onChange={(value) => setFilter("urgency", value)} />
+                <SlateFilter label="Action Status" value={filters.nextAction} options={uniqueLeadOptions(displayProjectLeads, "nextActionStatus")} onChange={(value) => setFilter("nextAction", value)} />
+                <SlateFilter label="Script Status" value={filters.scriptStatus} options={uniqueLeadOptions(displayProjectLeads, "scriptStatus")} onChange={(value) => setFilter("scriptStatus", value)} />
+                <SlateFilter label="Format" value={filters.format} options={uniqueLeadOptions(displayProjectLeads, "format")} onChange={(value) => setFilter("format", value)} />
               </div>
               <div className="mb-2 flex items-center justify-between text-xs text-studio-400">
-                <span>{filteredLeads.length} of {projectLeads.length} prospects</span>
+                <span>{filteredLeads.length} of {displayProjectLeads.length} prospects</span>
                 <button type="button" className="font-semibold text-amberline" onClick={() => { setSlateSearch(""); setFilters({ lane: "ALL", genre: "ALL", urgency: "ALL", rights: "ALL", nextAction: "ALL", owner: "ALL", scriptStatus: "ALL", format: "ALL" }); }}>Clear filters</button>
               </div>
               {slateImportMessage ? <p className="mb-2 text-xs text-studio-300">{slateImportMessage}</p> : null}
@@ -8012,6 +8013,43 @@ function parseProjectLeadCsv(csv: string): HammerProjectLead[] {
       scriptPdf: record.scriptpdf
     };
   });
+}
+
+function dedupeProjectLeads(leads: HammerProjectLead[]) {
+  const byKey = new Map<string, HammerProjectLead>();
+  for (const lead of leads) {
+    const key = prospectDisplayKey(lead);
+    const existing = byKey.get(key);
+    if (!existing || prospectDisplayScore(lead) > prospectDisplayScore(existing)) {
+      byKey.set(key, lead);
+    }
+  }
+  return Array.from(byKey.values());
+}
+
+function prospectDisplayKey(lead: HammerProjectLead) {
+  const externalId = normalizeProspectDisplayKeyPart(lead.externalId);
+  if (externalId) return `external:${externalId}`;
+  return [
+    "natural",
+    normalizeProspectDisplayKeyPart(lead.title),
+    normalizeProspectDisplayKeyPart(lead.creator),
+    normalizeProspectDisplayKeyPart(lead.sourceLink),
+    normalizeProspectDisplayKeyPart(lead.logline)
+  ].join(":");
+}
+
+function prospectDisplayScore(lead: HammerProjectLead) {
+  let score = 0;
+  if (lead.promotedProjectId) score += 10_000;
+  if (lead.scriptPdf) score += 1_000;
+  if (lead.notes) score += 100;
+  if (lead.lastUpdated) score += 10;
+  return score;
+}
+
+function normalizeProspectDisplayKeyPart(value?: string) {
+  return (value ?? "").trim().toLowerCase().replace(/\s+/g, " ").slice(0, 180);
 }
 
 function resolveCsvOwnerIds(owner: string | undefined, users: HammerUser[]) {

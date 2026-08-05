@@ -1,6 +1,6 @@
 {
   "name": "hammer-production-tracker",
-  "version": "1.39.0",
+  "version": "1.40.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -14,7 +14,8 @@
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
     "db:seed": "tsx prisma/seed.ts",
-    "db:cleanup-demo": "tsx prisma/cleanup-demo-data.ts"
+    "db:cleanup-demo": "tsx prisma/cleanup-demo-data.ts",
+    "db:dedupe-prospects": "tsx prisma/dedupe-prospects.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
