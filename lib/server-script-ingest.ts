@@ -1,12 +1,9 @@
 import type { Prisma } from "@prisma/client";
-import { createRequire } from "node:module";
-import { pathToFileURL } from "node:url";
 import { prisma } from "@/lib/db";
 import { buildScriptDiff, parseFdxText, parseScriptText } from "@/lib/script-parser";
 import { storeUpload } from "@/lib/server-file-storage";
+import { extractPdfTextWithFallback } from "@/lib/server-pdf-text";
 import type { ParsedScriptVersion, RiskLevel, ScriptProductionDiff } from "@/lib/types";
-
-const requireFromHere = createRequire(import.meta.url);
 
 export interface IngestScriptInput {
   projectId: string;
@@ -240,29 +237,12 @@ async function persistScriptDiff(projectId: string, fromScriptVersionId: string,
 async function extractUploadText(fileName: string, mimeType: string, bytes: Buffer) {
   const lowerName = fileName.toLowerCase();
   if (lowerName.endsWith(".pdf") || mimeType === "application/pdf") {
-    return extractPdfTextOnServer(bytes);
+    const extraction = await extractPdfTextWithFallback(bytes);
+    if (!extraction.text.trim()) throw new OcrRequiredError(extraction.warning);
+    return extraction.text;
   }
 
   return bytes.toString("utf8");
-}
-
-async function extractPdfTextOnServer(bytes: Buffer) {
-  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  pdfjs.GlobalWorkerOptions.workerSrc = pathToFileURL(requireFromHere.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs")).href;
-  const pdf = await pdfjs.getDocument({ data: new Uint8Array(bytes), disableWorker: true } as Parameters<typeof pdfjs.getDocument>[0]).promise;
-  const pages: string[] = [];
-
-  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-    const page = await pdf.getPage(pageNumber);
-    const content = await page.getTextContent();
-    pages.push(content.items.map((item) => ("str" in item ? item.str : "")).filter(Boolean).join("\n"));
-  }
-
-  const text = pages.join("\n\n").trim();
-  if (!text) {
-    throw new OcrRequiredError();
-  }
-  return text;
 }
 
 function parseUploadedScript(text: string, options: { projectId: string; versionName: string; fileName: string }) {
