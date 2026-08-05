@@ -1454,12 +1454,12 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   const isScriptDetailView = scriptDetailViews.includes(view);
   const scriptAccessLoading = isScriptDetailView && !sessionLoaded;
   const scriptAccessDenied = isScriptDetailView && sessionLoaded && !canAccessScriptDocument(currentUser, document);
-  const showWorkspaceSync = !sessionLoaded || !workspaceLoaded || workspaceSyncing;
+  const showWorkspaceSync = workspaceLoaded && workspaceSyncing;
   const showInitialWorkspaceLoading = !sessionLoaded || !workspaceLoaded;
 
   const content = (() => {
     if (showInitialWorkspaceLoading) {
-      return <InitialWorkspaceLoading />;
+      return <WorkspaceRouteSkeleton view={view} />;
     }
     if (scriptAccessLoading) {
       return <Panel><EmptyState label="Checking script access..." /></Panel>;
@@ -1552,16 +1552,16 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
           <input className="field pl-8" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search" />
         </div>
       </div>
-      {showWorkspaceSync && !showInitialWorkspaceLoading ? <WorkspaceSyncNotice workspaceLoaded={workspaceLoaded} /> : null}
+      {showWorkspaceSync ? <WorkspaceSyncNotice /> : null}
       {content}
     </AppShell>
   );
 }
 
-function WorkspaceSyncNotice({ workspaceLoaded }: { workspaceLoaded: boolean }) {
+function WorkspaceSyncNotice() {
   return (
     <div className="mb-3 flex items-center justify-between gap-3 rounded-md border border-emerald-400/15 bg-emerald-400/[0.04] px-3 py-2 text-xs text-emerald-100">
-      <span>{workspaceLoaded ? "Syncing latest changes..." : "Opening workspace..."}</span>
+      <span>Syncing latest changes...</span>
       <span className="h-1.5 w-24 overflow-hidden rounded-full bg-white/10">
         <span className="block h-full w-1/2 animate-pulse rounded-full bg-emerald-400" />
       </span>
@@ -1569,20 +1569,38 @@ function WorkspaceSyncNotice({ workspaceLoaded }: { workspaceLoaded: boolean }) 
   );
 }
 
-function InitialWorkspaceLoading() {
+function WorkspaceRouteSkeleton({ view }: { view: HammerView }) {
+  const rows = view === "dashboard" ? 3 : 7;
   return (
-    <Panel>
-      <div className="flex min-h-[320px] flex-col justify-center gap-5">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">GreenLight</p>
-          <h2 className="mt-2 text-2xl font-semibold text-studio-100">Opening workspace</h2>
-          <p className="mt-2 max-w-xl text-sm leading-6 text-studio-300">Loading your production slate, documents, contacts, and assignments from the database.</p>
+    <div className="space-y-3">
+      {view === "dashboard" ? (
+        <div className="grid gap-3 md:grid-cols-3">
+          {Array.from({ length: 3 }).map((_, index) => (
+            <Panel key={index} className="min-h-[112px]">
+              <div className="h-3 w-24 animate-pulse rounded bg-white/10" />
+              <div className="mt-5 h-7 w-16 animate-pulse rounded bg-white/10" />
+              <div className="mt-3 h-2 w-32 animate-pulse rounded bg-white/5" />
+            </Panel>
+          ))}
         </div>
-        <div className="h-1.5 w-full max-w-md overflow-hidden rounded-full bg-white/10">
-          <div className="h-full w-1/2 animate-pulse rounded-full bg-emerald-400" />
+      ) : null}
+      <Panel>
+        <div className="mb-4 flex items-center justify-between">
+          <div className="h-4 w-36 animate-pulse rounded bg-white/10" />
+          <div className="h-8 w-28 animate-pulse rounded-md bg-white/5" />
         </div>
-      </div>
-    </Panel>
+        <div className="space-y-2">
+          {Array.from({ length: rows }).map((_, index) => (
+            <div key={index} className="grid grid-cols-[1.4fr_0.8fr_0.7fr] gap-3 rounded-md border border-white/5 bg-white/[0.018] px-3 py-3">
+              <div className="h-3 animate-pulse rounded bg-white/10" />
+              <div className="h-3 animate-pulse rounded bg-white/5" />
+              <div className="h-3 animate-pulse rounded bg-white/5" />
+            </div>
+          ))}
+        </div>
+        <p className="mt-4 text-xs text-studio-500">Loading latest data...</p>
+      </Panel>
+    </div>
   );
 }
 
