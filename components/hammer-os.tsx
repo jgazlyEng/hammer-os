@@ -127,6 +127,20 @@ const emptyDocument: HammerDocument = {
   updatedAt: ""
 };
 
+const emptyAsset: HammerAsset = {
+  id: "no-asset",
+  projectId: "",
+  title: "No Asset Selected",
+  description: "",
+  assetType: "OTHER",
+  fileName: "",
+  fileType: "",
+  fileSize: 0,
+  storagePath: "",
+  status: "UPLOADED",
+  uploadedById: ""
+};
+
 interface SessionUser {
   email: string;
   name: string;
@@ -336,9 +350,43 @@ function toSessionUser(user: HammerUser): SessionUser {
   };
 }
 
+function sessionUserToHammerUser(user: SessionUser | null, mode: "demo" | "database"): HammerUser {
+  if (!user) return mode === "demo" ? hammerUserByEmail(undefined) : productionFallbackUser();
+  if (mode === "demo") return hammerUserByEmail(user.email);
+  return {
+    id: user.email,
+    email: user.email,
+    name: user.name || user.email,
+    googleId: "",
+    role: hammerRoleForSessionRole(user.appRole)
+  };
+}
+
+function productionFallbackUser(): HammerUser {
+  return {
+    id: "loading-user",
+    email: "",
+    name: "Loading",
+    googleId: "",
+    role: "VIEWER"
+  };
+}
+
+function hammerRoleForSessionRole(role?: string): HammerUser["role"] {
+  const normalized = (role ?? "").toLowerCase();
+  if (normalized === "admin" || normalized === "administrator") return "ADMIN";
+  if (normalized === "executive" || normalized === "exec") return "EXECUTIVE";
+  if (normalized === "producer") return "PRODUCER";
+  if (normalized === "department_lead" || normalized === "development") return "DEVELOPMENT";
+  if (normalized === "artist") return "ARTIST";
+  if (normalized === "writer") return "WRITER";
+  if (normalized === "contractor") return "CONTRACTOR";
+  return "VIEWER";
+}
+
 export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: HammerView; id?: string; selectedTaskId?: string; scriptSection?: string }) {
   const router = useRouter();
-  const [projects, setProjects] = useState(hammerProjects);
+  const [projects, setProjects] = useState<HammerProject[]>([]);
   const [localProjects, setLocalProjects] = useState<HammerProject[]>([]);
   const [workspaceMode, setWorkspaceMode] = useState<"demo" | "database">("demo");
   const [workspaceUsers, setWorkspaceUsers] = useState<HammerUser[]>([]);
@@ -358,7 +406,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   const [sessionLoaded, setSessionLoaded] = useState(false);
   const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
   const [workspaceSyncing, setWorkspaceSyncing] = useState(false);
-  const [activeProjectId, setActiveProjectId] = useState(hammerProjects[0]?.id ?? "");
+  const [activeProjectId, setActiveProjectId] = useState("");
   const [localDocuments, setLocalDocuments] = useState<HammerDocument[]>([]);
   const [localVersions, setLocalVersions] = useState<HammerDocumentVersion[]>([]);
   const [versionStatuses, setVersionStatuses] = useState<Record<string, ScriptStatus>>({});
@@ -383,7 +431,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   )), [documentProjectOverrides, localDocuments, workspaceMode]);
   const versions = useMemo(() => (workspaceMode === "database" ? localVersions : [...hammerVersions, ...localVersions]).filter(isValidVersion).map((version) => ({ ...version, ...(versionStatuses[version.id] ? { status: versionStatuses[version.id] } : {}), ...(Object.prototype.hasOwnProperty.call(versionNotes, version.id) ? { notes: versionNotes[version.id] } : {}), ...(Object.prototype.hasOwnProperty.call(versionMarkdownNotes, version.id) ? { markdownNotes: versionMarkdownNotes[version.id] } : {}) })), [localVersions, versionMarkdownNotes, versionNotes, versionStatuses, workspaceMode]);
   const tasks = useMemo(() => (workspaceMode === "database" ? localTasks : [...localTasks, ...hammerTasks]).filter(isValidTask).map((task) => ({ ...task, ...taskUpdates[task.id] })), [localTasks, taskUpdates, workspaceMode]);
-  const users = (workspaceMode === "database" && workspaceUsers.length ? workspaceUsers : hammerUsers).filter(isValidUser);
+  const users = (workspaceMode === "database" ? workspaceUsers : hammerUsers).filter(isValidUser);
   const assets = (workspaceMode === "database" ? workspaceAssets : hammerAssets).filter(isValidAsset);
   const contacts = workspaceMode === "database" ? workspaceContacts : hammerContacts;
   const contactRelationships = workspaceMode === "database" ? workspaceContactRelationships : [...hammerContactRelationships, ...localContactRelationships];
@@ -396,10 +444,10 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   const prospectAssets = workspaceMode === "database" ? workspaceProspectAssets : localProspectAssets;
   const project = projects.find((item) => item.id === id) ?? projects[0] ?? emptyProject;
   const document = documents.find((item) => item.id === id) ?? documents[0] ?? emptyDocument;
-  const asset = assets.find((item) => item.id === id) ?? assets[0] ?? hammerAssets[0];
+  const asset = assets.find((item) => item.id === id) ?? assets[0] ?? emptyAsset;
   const activeProject = projects.find((item) => item.id === activeProjectId) ?? projects[0] ?? emptyProject;
   const filteredProjects = projects.filter(isValidProject).filter((item) => `${item.title} ${item.logline} ${item.genre} ${item.status} ${item.type}`.toLowerCase().includes(query.toLowerCase()));
-  const currentUser = users.find((user) => user.email.toLowerCase() === sessionUser?.email?.toLowerCase()) ?? hammerUserByEmail(sessionUser?.email);
+  const currentUser = users.find((user) => user.email.toLowerCase() === sessionUser?.email?.toLowerCase()) ?? sessionUserToHammerUser(sessionUser, workspaceMode);
 
   function applyDatabaseWorkspace(data: HammerWorkspacePayload) {
     if (data.mode !== "database") return;
@@ -427,6 +475,23 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     setVersionMarkdownNotes({});
     setDocumentProjectOverrides({});
     setTaskUpdates({});
+  }
+
+  function applyDemoWorkspace() {
+    setWorkspaceMode("demo");
+    setProjects(hammerProjects);
+    setWorkspaceUsers([]);
+    setWorkspaceAssets([]);
+    setWorkspaceContacts([]);
+    setWorkspaceContactRelationships([]);
+    setWorkspaceApprovals([]);
+    setWorkspaceComments([]);
+    setWorkspaceScriptCollections([]);
+    setWorkspaceScriptCollectionItems([]);
+    setWorkspaceSlateCollections([]);
+    setWorkspaceSlateCollectionItems([]);
+    setWorkspaceProspectAssets([]);
+    setActiveProjectId((current) => current || hammerProjects[0]?.id || "");
   }
 
   async function loadDatabaseWorkspace(options: { force?: boolean; userEmail?: string | null } = {}) {
@@ -461,7 +526,11 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
         const response = await fetch("/api/auth/session", { cache: "no-store" });
         const data = await response.json();
         const mode = data.mode === "database" ? "database" : "demo";
-        setWorkspaceMode(mode);
+        if (mode === "database") {
+          setWorkspaceMode("database");
+        } else {
+          applyDemoWorkspace();
+        }
         const storedDemoEmail = data.mode === "database" ? null : window.localStorage.getItem(HAMMER_DEMO_USER_STORAGE_KEY);
         const storedDemoUser = hammerUsers.find((item) => item.email === storedDemoEmail);
         const nextSessionUser = storedDemoUser ? toSessionUser(storedDemoUser) : data.user ?? data.demoUser ?? null;
@@ -484,7 +553,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
         }
         setWorkspaceLoaded(true);
       } catch {
-        setWorkspaceMode("demo");
+        applyDemoWorkspace();
         setSessionUser(toSessionUser(hammerUsers[0]));
         setWorkspaceLoaded(true);
       } finally {
@@ -1386,8 +1455,12 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   const scriptAccessLoading = isScriptDetailView && !sessionLoaded;
   const scriptAccessDenied = isScriptDetailView && sessionLoaded && !canAccessScriptDocument(currentUser, document);
   const showWorkspaceSync = !sessionLoaded || !workspaceLoaded || workspaceSyncing;
+  const showInitialWorkspaceLoading = !sessionLoaded || !workspaceLoaded;
 
   const content = (() => {
+    if (showInitialWorkspaceLoading) {
+      return <InitialWorkspaceLoading />;
+    }
     if (scriptAccessLoading) {
       return <Panel><EmptyState label="Checking script access..." /></Panel>;
     }
@@ -1479,7 +1552,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
           <input className="field pl-8" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search" />
         </div>
       </div>
-      {showWorkspaceSync ? <WorkspaceSyncNotice workspaceLoaded={workspaceLoaded} /> : null}
+      {showWorkspaceSync && !showInitialWorkspaceLoading ? <WorkspaceSyncNotice workspaceLoaded={workspaceLoaded} /> : null}
       {content}
     </AppShell>
   );
@@ -1493,6 +1566,23 @@ function WorkspaceSyncNotice({ workspaceLoaded }: { workspaceLoaded: boolean }) 
         <span className="block h-full w-1/2 animate-pulse rounded-full bg-emerald-400" />
       </span>
     </div>
+  );
+}
+
+function InitialWorkspaceLoading() {
+  return (
+    <Panel>
+      <div className="flex min-h-[320px] flex-col justify-center gap-5">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">GreenLight</p>
+          <h2 className="mt-2 text-2xl font-semibold text-studio-100">Opening workspace</h2>
+          <p className="mt-2 max-w-xl text-sm leading-6 text-studio-300">Loading your production slate, documents, contacts, and assignments from the database.</p>
+        </div>
+        <div className="h-1.5 w-full max-w-md overflow-hidden rounded-full bg-white/10">
+          <div className="h-full w-1/2 animate-pulse rounded-full bg-emerald-400" />
+        </div>
+      </div>
+    </Panel>
   );
 }
 
