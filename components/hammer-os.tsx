@@ -749,15 +749,22 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       });
       if (!response.ok) {
         if (response.status === 413) {
-          throw new Error("Upload is larger than the production server allows. Increase the Nginx client_max_body_size setting, then try again.");
+          throw new Error("Upload is larger than the production server allows. Increase the Nginx client_max_body_size setting to 250M, then try again.");
         }
         const data = await response.json().catch(() => null) as { error?: string } | null;
         throw new Error(data?.error ?? "Document upload failed.");
       }
+      const data = await response.json().catch(() => null) as { warning?: string } | null;
       await loadDatabaseWorkspace({ force: true });
-      return;
+      return { warning: data?.warning };
     }
-    const extractedText = await extractTextFromUpload(input.file);
+    let extractedText = "";
+    let extractionWarning: string | undefined;
+    try {
+      extractedText = await extractTextFromUpload(input.file);
+    } catch (error) {
+      extractionWarning = `Uploaded successfully, but no readable script text could be extracted. This file may be image-only or scanned; OCR may be needed before breakdown or diff can run. Details: ${error instanceof Error ? error.message : "Unknown extraction error."}`;
+    }
     const dataUrl = await fileToDataUrl(input.file);
     const existingDocument = input.documentId ? documents.find((item) => item.id === input.documentId) : undefined;
     const documentId = existingDocument?.id ?? `doc-local-${Date.now()}`;
@@ -777,7 +784,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       dataUrl,
       uploadedById: currentUser.id,
       createdAt: now,
-      notes: input.notes || `Uploaded ${input.file.name}.`,
+      notes: combineVersionNotes(input.notes || `Uploaded ${input.file.name}.`, extractionWarning),
       extractedText
     };
     const nextDocuments = existingDocument
@@ -803,6 +810,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     window.localStorage.setItem(HAMMER_LOCAL_DOCUMENTS_STORAGE_KEY, JSON.stringify(nextDocuments));
     window.localStorage.setItem(HAMMER_LOCAL_VERSIONS_STORAGE_KEY, JSON.stringify(nextVersions));
     window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_DOCUMENTS_EVENT));
+    return { warning: extractionWarning };
   }
 
   async function updateDocumentStatus(versionId: string, status: ScriptStatus) {
@@ -2594,6 +2602,10 @@ type DocumentUploadInput = {
   notes: string;
 };
 
+type DocumentUploadResult = {
+  warning?: string;
+};
+
 function ProjectWorkspace({
   project,
   activeTab,
@@ -2626,7 +2638,7 @@ function ProjectWorkspace({
   referenceImages?: ProjectReferenceImage[];
   assets?: HammerAsset[];
   approvals?: HammerApproval[];
-  onUpload?: (input: DocumentUploadInput) => Promise<void>;
+  onUpload?: (input: DocumentUploadInput) => Promise<DocumentUploadResult | void>;
   onDelete?: (documentId: string) => void;
   onAssignToProject?: (documentId: string, projectId: string) => void;
   onReferenceUpload?: (input: { projectId: string; title: string; description: string; source: string; category: AssetType; file: File }) => Promise<void>;
@@ -3143,7 +3155,7 @@ function Scripts({
   compact?: boolean;
   documents?: HammerDocument[];
   versions?: HammerDocumentVersion[];
-  onUpload?: (input: DocumentUploadInput) => Promise<void>;
+  onUpload?: (input: DocumentUploadInput) => Promise<DocumentUploadResult | void>;
   onDelete?: (documentId: string) => void;
   onAssignToProject?: (documentId: string, projectId: string) => void;
   selectedSection?: ScriptLibrarySection;
@@ -3355,7 +3367,7 @@ function DocumentUploadPanel({
 }: {
   projectId?: string;
   documents: HammerDocument[];
-  onUpload: (input: DocumentUploadInput) => Promise<void>;
+  onUpload: (input: DocumentUploadInput) => Promise<DocumentUploadResult | void>;
   onDone: () => void;
 }) {
   const [documentId, setDocumentId] = useState("");
@@ -3389,7 +3401,7 @@ function DocumentUploadPanel({
     }
     setStatus("Extracting text and creating version...");
     try {
-      await onUpload({
+      const result = await onUpload({
         projectId,
         documentId: documentId || undefined,
         title: title.trim() || file.name.replace(/\.[^.]+$/, ""),
@@ -3399,6 +3411,10 @@ function DocumentUploadPanel({
         file,
         notes
       });
+      if (result?.warning) {
+        setStatus(`Uploaded with warning: ${result.warning}`);
+        return;
+      }
       setStatus("Uploaded.");
       onDone();
     } catch (error) {
@@ -4135,7 +4151,7 @@ function ScriptDetail({
   comments?: HammerComment[];
   currentUser?: HammerUser;
   supportingDocuments?: SupportingDocument[];
-  onUpload?: (input: DocumentUploadInput) => Promise<void>;
+  onUpload?: (input: DocumentUploadInput) => Promise<DocumentUploadResult | void>;
   onSupportingUpload?: (input: { scriptDocumentId: string; title: string; type: SupportingDocumentType; source: string; notes: string; file: File }) => Promise<void>;
   onSupportingDelete?: (documentId: string) => void;
   onStatusChange?: (versionId: string, status: ScriptStatus) => void;
@@ -4524,7 +4540,7 @@ function ScriptVersions({
   document: HammerDocument;
   versions?: HammerDocumentVersion[];
   currentUser?: HammerUser;
-  onUpload?: (input: DocumentUploadInput) => Promise<void>;
+  onUpload?: (input: DocumentUploadInput) => Promise<DocumentUploadResult | void>;
 }) {
   const [uploadOpen, setUploadOpen] = useState(false);
   const textState = useDocumentVersionsWithText(documentId, versions);
@@ -7899,6 +7915,12 @@ function escapeCsvCell(value: string) {
 function currentVersionFor(documentId: string, documents: HammerDocument[], versions: HammerDocumentVersion[]) {
   const doc = documents.find((item) => item.id === documentId);
   return versions.find((version) => version.id === doc?.currentVersionId) ?? versions.filter((version) => version.documentId === documentId).sort((a, b) => b.versionNumber - a.versionNumber)[0];
+}
+
+function combineVersionNotes(notes: string, warning?: string) {
+  if (!warning) return notes;
+  const warningNote = `Upload warning: ${warning}`;
+  return notes.trim() ? `${notes.trim()}\n\n${warningNote}` : warningNote;
 }
 
 async function extractTextFromUpload(file: File) {

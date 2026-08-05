@@ -1,8 +1,12 @@
 import type { Prisma } from "@prisma/client";
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
 import { prisma } from "@/lib/db";
 import { buildScriptDiff, parseFdxText, parseScriptText } from "@/lib/script-parser";
 import { storeUpload } from "@/lib/server-file-storage";
 import type { ParsedScriptVersion, RiskLevel, ScriptProductionDiff } from "@/lib/types";
+
+const requireFromHere = createRequire(import.meta.url);
 
 export interface IngestScriptInput {
   projectId: string;
@@ -244,6 +248,7 @@ async function extractUploadText(fileName: string, mimeType: string, bytes: Buff
 
 async function extractPdfTextOnServer(bytes: Buffer) {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  pdfjs.GlobalWorkerOptions.workerSrc = pathToFileURL(requireFromHere.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs")).href;
   const pdf = await pdfjs.getDocument({ data: new Uint8Array(bytes), disableWorker: true } as Parameters<typeof pdfjs.getDocument>[0]).promise;
   const pages: string[] = [];
 
