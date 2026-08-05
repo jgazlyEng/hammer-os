@@ -1374,7 +1374,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     if (scriptAccessDenied) {
       return <AccessDenied title="Script access required" detail="You can only open scripts attached to Development Slate items you can access. Producers, executives, and admins can review broader prospect materials from the slate." />;
     }
-    if (view === "dashboard") return <Dashboard currentUser={currentUser} projects={projects} documents={documents} versions={versions} approvals={approvals} />;
+    if (view === "dashboard") return <Dashboard currentUser={currentUser} projects={projects} documents={documents} versions={versions} approvals={approvals} scriptCollections={scriptCollections} scriptCollectionItems={scriptCollectionItems} slateCollections={slateCollections} slateCollectionItems={slateCollectionItems} />;
     if (view === "projects") return <Projects mode="development" projects={filteredProjects} projectLeads={projectLeads} prospectAssets={prospectAssets} users={users} tasks={tasks} currentUser={currentUser} canCreateProject={canManageScriptLibrary(currentUser.role)} onCreateProject={addProject} onUpdateLead={updateProjectLead} onCreateLead={createProjectLead} onImportLeads={importProjectLeads} onPromoteLead={promoteProjectLead} onCreateTask={createTask} onUploadProspectAsset={uploadProspectAsset} onDeleteProspectAsset={deleteProspectAsset} />;
     if (view === "prospects") return <Projects mode="prospects" projects={filteredProjects} projectLeads={projectLeads} prospectAssets={prospectAssets} users={users} tasks={tasks} currentUser={currentUser} canCreateProject={canManageScriptLibrary(currentUser.role)} onCreateProject={addProject} onUpdateLead={updateProjectLead} onCreateLead={createProjectLead} onImportLeads={importProjectLeads} onPromoteLead={promoteProjectLead} onCreateTask={createTask} onUploadProspectAsset={uploadProspectAsset} onDeleteProspectAsset={deleteProspectAsset} />;
     if (view === "collections") return (
@@ -1481,13 +1481,21 @@ function Dashboard({
   projects,
   documents,
   versions,
-  approvals = hammerApprovals
+  approvals = hammerApprovals,
+  scriptCollections = hammerScriptCollections,
+  scriptCollectionItems = hammerScriptCollectionItems,
+  slateCollections = hammerSlateCollections,
+  slateCollectionItems = hammerSlateCollectionItems
 }: {
   currentUser: ReturnType<typeof hammerUserByEmail>;
   projects: HammerProject[];
   documents: HammerDocument[];
   versions: HammerDocumentVersion[];
   approvals?: HammerApproval[];
+  scriptCollections?: HammerScriptCollection[];
+  scriptCollectionItems?: HammerScriptCollectionItem[];
+  slateCollections?: HammerSlateCollection[];
+  slateCollectionItems?: HammerSlateCollectionItem[];
 }) {
   const canSeeLibrary = canManageScriptLibrary(currentUser.role);
   const assignedProjectIds = new Set(assignedProjectsForUser(currentUser.id).map((project) => project.id));
@@ -1510,6 +1518,24 @@ function Dashboard({
   const focusReview = reviewItems[0];
   const focusDocument = focusReview?.document ?? incomingScripts[0] ?? recentScripts[0];
   const focusVersion = focusReview?.version ?? (focusDocument ? currentVersionFor(focusDocument.id, documents, versions) : undefined);
+  const visibleDocumentIds = new Set(visibleDocuments.map((document) => document.id));
+  const visibleProjectIds = new Set(projects.map((project) => project.id));
+  const reviewPackets = [
+    ...scriptCollections
+      .map((collection) => {
+        const items = scriptCollectionItems.filter((item) => item.collectionId === collection.id && visibleDocumentIds.has(item.documentId));
+        return { id: collection.id, kind: "Scripts", name: collection.name, description: collection.description, status: collection.status, updatedAt: collection.updatedAt, itemCount: items.length };
+      })
+      .filter((collection) => canSeeLibrary || collection.itemCount > 0),
+    ...slateCollections
+      .map((collection) => {
+        const items = slateCollectionItems.filter((item) => item.collectionId === collection.id && ((item.projectId && visibleProjectIds.has(item.projectId)) || item.prospectId));
+        return { id: collection.id, kind: "Slate", name: collection.name, description: collection.description, status: collection.status, updatedAt: collection.updatedAt, itemCount: items.length };
+      })
+      .filter((collection) => canSeeLibrary || collection.itemCount > 0)
+  ]
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, 5);
 
   return (
     <div className="space-y-4">
@@ -1577,6 +1603,29 @@ function Dashboard({
           </div>
         </Panel>
       </div>
+
+      <Panel>
+        <SectionHeader eyebrow="Collections" title="Review Packets" action={<TableLink href="/collections">Open Collections</TableLink>} />
+        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+          {reviewPackets.length ? reviewPackets.map((packet) => (
+            <Link key={`${packet.kind}-${packet.id}`} href="/collections" className="block rounded-md border border-white/10 bg-white/[0.03] p-3 transition hover:border-amberline/35">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-[13px] font-semibold text-studio-100">{packet.name}</p>
+                    <span className="rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-studio-400">{packet.kind}</span>
+                  </div>
+                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-studio-400">{packet.description || `${packet.itemCount} item${packet.itemCount === 1 ? "" : "s"} grouped for review.`}</p>
+                </div>
+                <div className="shrink-0 text-right">
+                  <Badge value={packet.status || "ACTIVE"} />
+                  <p className="mt-1 text-[11px] text-studio-500">{packet.itemCount} item{packet.itemCount === 1 ? "" : "s"}</p>
+                </div>
+              </div>
+            </Link>
+          )) : <EmptyState label="No review packets yet. Create collections to group scripts, prospects, or slate items for quick review." />}
+        </div>
+      </Panel>
     </div>
   );
 }
