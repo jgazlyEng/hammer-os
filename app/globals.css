@@ -123,6 +123,49 @@ a {
     padding-right: 2px;
   }
 
+  .collections-page {
+    height: calc(100vh - 7rem);
+  }
+
+  .collections-body,
+  .collections-grid,
+  .collections-detail-column {
+    min-height: 0;
+  }
+
+  .collections-column {
+    max-height: 100%;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-right: 2px;
+  }
+
+  .collections-list {
+    max-height: min(24vh, 13rem);
+    overscroll-behavior: contain;
+  }
+
+  .collections-add-list {
+    max-height: min(28vh, 15rem);
+    overscroll-behavior: contain;
+  }
+
+  .collection-review-scroll {
+    max-height: none;
+  }
+
+  @media (max-width: 1279px) {
+    .collections-page {
+      height: auto;
+      overflow: visible;
+    }
+
+    .collections-column {
+      max-height: none;
+      overflow: visible;
+    }
+  }
+
   .data-table {
     width: 100%;
     border-collapse: separate;
