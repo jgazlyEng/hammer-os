@@ -84,7 +84,7 @@ export async function GET(request: Request) {
     return NextResponse.json({
       mode: "database",
       projects: projects.map(toProject),
-      projectLeads: projectLeads.map(toProjectLead),
+      projectLeads: dedupeProspects(projectLeads).map(toProjectLead),
       prospectAssets: prospectAssets.map(toProspectAsset),
       documents: documents.map(toDocument),
       versions: versions.map(toVersion),
@@ -174,25 +174,59 @@ export async function POST(request: Request) {
         const users = await prisma.user.findMany({ select: { id: true, name: true, email: true } });
         const preparedLeads = leads.map((lead) => projectLeadCreate({ ...lead, ownerIds: resolveProspectOwnerIds(lead, users) }));
         const preparedIds = preparedLeads.map((lead) => lead.id).filter((id): id is string => Boolean(id));
+        const preparedExternalIds = preparedLeads.map((lead) => lead.externalId).filter((id): id is string => Boolean(id));
         const existingLeads = await prisma.prospect.findMany({
-          where: { id: { in: preparedIds } },
-          select: { id: true, deletedAt: true }
+          where: {
+            OR: [
+              { id: { in: preparedIds } },
+              { externalId: { in: preparedExternalIds } }
+            ]
+          },
+          select: { id: true, externalId: true, title: true, creator: true, sourceLink: true, logline: true, deletedAt: true }
+        });
+        const existingAllLeads = await prisma.prospect.findMany({
+          select: { id: true, externalId: true, title: true, creator: true, sourceLink: true, logline: true, deletedAt: true }
         });
         const existingById = new Map(existingLeads.map((lead) => [lead.id, lead]));
-        const newLeads = preparedLeads.filter((lead) => !(lead.id && existingById.has(lead.id)));
-        const restoreLeads = preparedLeads.filter((lead) => lead.id && existingById.get(lead.id)?.deletedAt);
-        if (!newLeads.length && !restoreLeads.length) return NextResponse.json({ projectLeads: [], skipped: leads.length, restored: 0 });
+        const existingByExternalId = new Map(existingLeads.filter((lead) => lead.externalId).map((lead) => [lead.externalId as string, lead]));
+        const existingByNaturalKey = new Map(existingAllLeads.map((lead) => [prospectNaturalKey(lead), lead]));
+        const matchedLeads = preparedLeads.map((lead) => {
+          const existing = lead.id && existingById.get(lead.id)
+            ? existingById.get(lead.id)
+            : lead.externalId && existingByExternalId.get(lead.externalId)
+              ? existingByExternalId.get(lead.externalId)
+              : existingByNaturalKey.get(prospectNaturalKey(lead));
+          return { lead, existing };
+        });
+        const seenExistingIds = new Set<string>();
+        const uniqueMatches = matchedLeads.filter(({ existing }) => {
+          if (!existing) return true;
+          if (seenExistingIds.has(existing.id)) return false;
+          seenExistingIds.add(existing.id);
+          return true;
+        });
+        const newLeads = uniqueMatches.filter(({ existing }) => !existing).map(({ lead }) => lead);
+        const updateLeads = uniqueMatches.filter(({ existing }) => existing && !existing.deletedAt);
+        const restoreLeads = uniqueMatches.filter(({ existing }) => existing?.deletedAt);
+        if (!newLeads.length && !updateLeads.length && !restoreLeads.length) return NextResponse.json({ projectLeads: [], skipped: leads.length, updated: 0, restored: 0 });
         const changed = await prisma.$transaction([
           ...newLeads.map((lead) => prisma.prospect.create({ data: lead })),
-          ...restoreLeads.map((lead) => {
+          ...updateLeads.map(({ lead, existing }) => {
             const { id, ...data } = lead;
             return prisma.prospect.update({
-              where: { id: id as string },
+              where: { id: existing!.id },
+              data
+            });
+          }),
+          ...restoreLeads.map(({ lead, existing }) => {
+            const { id, ...data } = lead;
+            return prisma.prospect.update({
+              where: { id: existing!.id },
               data: { ...data, deletedAt: null }
             });
           })
         ]);
-        return NextResponse.json({ projectLeads: changed.map(toProjectLead), skipped: leads.length - changed.length, restored: restoreLeads.length });
+        return NextResponse.json({ projectLeads: changed.map(toProjectLead), skipped: leads.length - uniqueMatches.length, updated: updateLeads.length, restored: restoreLeads.length });
       }
 
       case "promoteProjectLead": {
@@ -698,6 +732,45 @@ function toProjectLead(lead: Prospect) {
     scriptPdf: lead.scriptPdf ?? undefined,
     promotedProjectId: lead.promotedProjectId ?? undefined
   };
+}
+
+function dedupeProspects(prospects: Prospect[]) {
+  const byKey = new Map<string, Prospect>();
+  for (const prospect of prospects) {
+    const key = prospectNaturalKey(prospect);
+    const existing = byKey.get(key);
+    if (!existing || prospectScore(prospect) > prospectScore(existing)) {
+      byKey.set(key, prospect);
+    }
+  }
+  return Array.from(byKey.values()).sort((left, right) => {
+    if (Boolean(left.promotedProjectId) !== Boolean(right.promotedProjectId)) return left.promotedProjectId ? -1 : 1;
+    return right.updatedAt.getTime() - left.updatedAt.getTime();
+  });
+}
+
+function prospectNaturalKey(prospect: Pick<Prospect, "externalId" | "title" | "creator" | "sourceLink" | "logline"> | Prisma.ProspectCreateInput) {
+  const externalId = typeof prospect.externalId === "string" ? normalizeProspectKeyPart(prospect.externalId) : "";
+  if (externalId) return `external:${externalId}`;
+  return [
+    "natural",
+    normalizeProspectKeyPart(typeof prospect.title === "string" ? prospect.title : ""),
+    normalizeProspectKeyPart(typeof prospect.creator === "string" ? prospect.creator : ""),
+    normalizeProspectKeyPart(typeof prospect.sourceLink === "string" ? prospect.sourceLink : ""),
+    normalizeProspectKeyPart(typeof prospect.logline === "string" ? prospect.logline : "")
+  ].join(":");
+}
+
+function prospectScore(prospect: Prospect) {
+  let score = prospect.updatedAt.getTime();
+  if (prospect.promotedProjectId) score += 10_000_000_000_000;
+  if (prospect.scriptPdf) score += 1_000;
+  if (prospect.notes) score += 100;
+  return score;
+}
+
+function normalizeProspectKeyPart(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 180);
 }
 
 function toUser(user: { id: string; email: string; name: string; avatarUrl: string | null; googleId: string | null; role: UserRole; appRole?: string }) {
