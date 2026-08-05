@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
 import type { DocumentType, Prisma } from "@prisma/client";
 import { forbidden, isDatabaseConfigured, requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
@@ -7,7 +9,8 @@ import { storeUpload } from "@/lib/server-file-storage";
 export const runtime = "nodejs";
 
 const documentTypes: DocumentType[] = ["SCRIPT", "TREATMENT", "OUTLINE", "NOTES", "COVERAGE", "BUSINESS_DOCUMENT"];
-const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = 250 * 1024 * 1024;
+const requireFromHere = createRequire(import.meta.url);
 
 export async function POST(request: Request) {
   const auth = requireUser(request);
@@ -18,7 +21,7 @@ export async function POST(request: Request) {
     const formData = await request.formData();
     const file = formData.get("file");
     if (!(file instanceof File)) return NextResponse.json({ error: "Choose a PDF, FDX, TXT, or MD file first." }, { status: 400 });
-    if (file.size > MAX_UPLOAD_BYTES) return NextResponse.json({ error: "Uploads must be 100MB or smaller." }, { status: 400 });
+    if (file.size > MAX_UPLOAD_BYTES) return NextResponse.json({ error: "Uploads must be 250MB or smaller." }, { status: 400 });
     if (!isAllowedScriptUploadFile(file)) {
       return NextResponse.json({ error: "DOCX script parsing is disabled for now. Upload PDF, FDX, TXT, or MD instead." }, { status: 400 });
     }
@@ -50,7 +53,9 @@ export async function POST(request: Request) {
     const fileType = file.type || inferFileType(fileName);
     const bytes = Buffer.from(await file.arrayBuffer());
     const storedUpload = await storeUpload(projectId ?? "inbox", fileName, bytes);
-    const extractedText = await extractUploadText(fileName, fileType, bytes);
+    const extraction = await extractUploadText(fileName, fileType, bytes);
+    const extractedText = extraction.text;
+    const uploadNotes = combineUploadNotes(optionalString(formData.get("notes")), extraction.warning);
     const now = new Date();
 
     const result = await prisma.$transaction(async (tx) => {
@@ -79,7 +84,7 @@ export async function POST(request: Request) {
           storagePath: storedUpload.storagePath,
           extractedText,
           uploadedById: auth.user.id,
-          notes: optionalString(formData.get("notes"))
+          notes: uploadNotes
         }
       });
 
@@ -102,7 +107,7 @@ export async function POST(request: Request) {
           action: existingDocument ? "document.version_uploaded" : "document.created",
           entityType: "Document",
           entityId: document.id,
-          detailJson: { fileName, projectId, versionNumber: nextVersionNumber } as Prisma.InputJsonValue
+          detailJson: { fileName, projectId, versionNumber: nextVersionNumber, extractionWarning: extraction.warning } as Prisma.InputJsonValue
         }
       });
 
@@ -111,7 +116,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       document: toDocument(result.document),
-      version: toVersion(result.version)
+      version: toVersion(result.version),
+      warning: extraction.warning
     }, { status: 201 });
   } catch (error) {
     return NextResponse.json({ error: uploadErrorMessage(error) }, { status: 500 });
@@ -126,11 +132,23 @@ function canUploadDocument(role: string, projectRoles: Record<string, string>, p
 
 async function extractUploadText(fileName: string, fileType: string, bytes: Buffer) {
   const lowerName = fileName.toLowerCase();
-  if (lowerName.endsWith(".pdf") || fileType === "application/pdf") return extractPdfText(bytes);
+  if (lowerName.endsWith(".pdf") || fileType === "application/pdf") {
+    try {
+      return await extractPdfText(bytes);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown extraction error.";
+      return {
+        text: "",
+        warning: `Uploaded successfully, but no readable script text could be extracted. This PDF may be image-only or include scanned pages; OCR may be needed before breakdown or diff can run. Details: ${detail}`
+      };
+    }
+  }
   if (lowerName.endsWith(".fdx") || lowerName.endsWith(".txt") || lowerName.endsWith(".md") || fileType.startsWith("text/")) {
     const text = bytes.toString("utf8").trim();
-    if (!text) throw new Error("No text found in uploaded file.");
-    return text;
+    return {
+      text,
+      warning: text ? undefined : "Uploaded successfully, but the file did not contain readable text. Add a text-based version before running breakdown or diff."
+    };
   }
   throw new Error("Unsupported file type. Upload PDF, FDX, TXT, or MD.");
 }
@@ -142,16 +160,34 @@ function isAllowedScriptUploadFile(file: File) {
 
 async function extractPdfText(bytes: Buffer) {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  pdfjs.GlobalWorkerOptions.workerSrc = pathToFileURL(requireFromHere.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs")).href;
   const pdf = await pdfjs.getDocument({ data: new Uint8Array(bytes), disableWorker: true } as Parameters<typeof pdfjs.getDocument>[0]).promise;
   const pages: string[] = [];
+  let imageOnlyPageCount = 0;
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber);
     const content = await page.getTextContent();
-    pages.push(content.items.map((item) => ("str" in item ? item.str : "")).filter(Boolean).join("\n"));
+    const pageText = content.items.map((item) => ("str" in item ? item.str : "")).filter(Boolean).join("\n").trim();
+    if (!pageText) imageOnlyPageCount += 1;
+    pages.push(pageText);
   }
   const text = pages.join("\n\n").trim();
-  if (!text) throw new Error("No selectable text found in PDF. Scanned PDFs need OCR before parsing.");
-  return text;
+  if (!text) {
+    return {
+      text: "",
+      warning: "Uploaded successfully, but no selectable text was found. This PDF appears to be image-only or scanned; OCR is needed before breakdown or diff can run."
+    };
+  }
+  const warning = imageOnlyPageCount
+    ? `Uploaded successfully. ${imageOnlyPageCount} of ${pdf.numPages} page${imageOnlyPageCount === 1 ? "" : "s"} had no selectable text and may be image-only; those pages were skipped.`
+    : undefined;
+  return { text, warning };
+}
+
+function combineUploadNotes(notes: string | undefined, warning: string | undefined) {
+  if (!warning) return notes;
+  const warningNote = `Upload warning: ${warning}`;
+  return notes ? `${notes}\n\n${warningNote}` : warningNote;
 }
 
 function uploadErrorMessage(error: unknown) {

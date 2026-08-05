@@ -111,7 +111,7 @@ server {
   listen 80;
   server_name YOUR_STATIC_IP_OR_DOMAIN;
 
-  client_max_body_size 50M;
+  client_max_body_size 250M;
 
   location / {
     proxy_pass http://127.0.0.1:3000;
