@@ -1,6 +1,6 @@
 {
   "name": "hammer-production-tracker",
-  "version": "1.44.0",
+  "version": "1.53.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -8,7 +8,7 @@
     "build": "next build",
     "lint": "next lint",
     "test": "tsx --test tests/**/*.test.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit --incremental false",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",

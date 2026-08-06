@@ -11,6 +11,7 @@ const documentTypes: DocumentType[] = ["SCRIPT", "TREATMENT", "OUTLINE", "NOTES"
 const MAX_UPLOAD_BYTES = 250 * 1024 * 1024;
 
 export async function POST(request: Request) {
+  const requestId = crypto.randomUUID();
   const auth = requireUser(request);
   if ("error" in auth) return NextResponse.json({ error: auth.error }, { status: auth.status });
   if (!isDatabaseConfigured()) return NextResponse.json({ error: "Database mode is not configured." }, { status: 503 });
@@ -123,7 +124,16 @@ export async function POST(request: Request) {
       warning: extraction.warning
     }, { status: 201 });
   } catch (error) {
-    return NextResponse.json({ error: `Document upload failed while ${uploadStage}: ${uploadErrorMessage(error)}` }, { status: 500 });
+    const detail = uploadErrorMessage(error);
+    const hint = uploadErrorHint(uploadStage, detail);
+    console.error("[document-upload]", { requestId, uploadStage, detail, hint, error });
+    return NextResponse.json({
+      error: "Document upload failed.",
+      stage: uploadStage,
+      detail,
+      hint,
+      requestId
+    }, { status: 500 });
   }
 }
 
@@ -170,6 +180,23 @@ function combineUploadNotes(notes: string | undefined, warning: string | undefin
 function uploadErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   return "Document upload failed.";
+}
+
+function uploadErrorHint(stage: string, detail: string) {
+  const normalized = detail.toLowerCase();
+  if (stage.includes("form data") || normalized.includes("body exceeded") || normalized.includes("request entity too large")) {
+    return "The request body was rejected before GreenLight could process it. Check Nginx client_max_body_size and any proxy/body-size limits.";
+  }
+  if (stage.includes("storing") || normalized.includes("gcs") || normalized.includes("bucket") || normalized.includes("credential") || normalized.includes("permission")) {
+    return "GreenLight could not store the uploaded file. Check UPLOAD_STORAGE_DRIVER, GCS bucket name, service account credentials, and bucket write permissions.";
+  }
+  if (stage.includes("extracting") || normalized.includes("pdf") || normalized.includes("worker") || normalized.includes("tesseract") || normalized.includes("pdftoppm")) {
+    return "The file was accepted but text extraction failed. The original file may still be valid; check PDF parser/OCR dependencies in the container.";
+  }
+  if (stage.includes("metadata") || normalized.includes("foreign key") || normalized.includes("constraint") || normalized.includes("prisma")) {
+    return "The file was processed but database metadata could not be saved. Check that migrations are deployed and the selected project/document still exists.";
+  }
+  return "Check the app container logs for the matching request ID, then retry the upload.";
 }
 
 function toDocument(document: { id: string; projectId: string | null; title: string; type: DocumentType; currentVersionId: string | null; createdById: string | null; updatedAt: Date; writerName: string | null; source: string | null; contactId: string | null; submittedAt: Date | null }) {

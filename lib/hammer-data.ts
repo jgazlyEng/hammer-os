@@ -303,8 +303,20 @@ export interface HammerTask {
   dueDate: string;
   priority: TaskPriority;
   status: TaskStatus;
+  sortOrder?: number;
   targetType: string;
   targetId: string;
+  subtasks?: HammerTaskSubtask[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface HammerTaskSubtask {
+  id: string;
+  taskId: string;
+  title: string;
+  completed: boolean;
+  createdById?: string;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -578,10 +590,13 @@ export const hammerApprovals: HammerApproval[] = [
 ];
 
 export const hammerTasks: HammerTask[] = [
-  { id: "task-admin", projectId: "project-hammer", title: "Review role assignments", description: "Confirm producer and executive access before the greenlight review.", assignedToId: "user-admin", createdById: "user-producer", dueDate: "2026-06-24", priority: "MEDIUM", status: "TODO", targetType: "PROJECT", targetId: "project-hammer" },
-  { id: "task-breakdown", projectId: "project-hammer", title: "Approve green draft breakdown", description: "Review parsed scenes and entity links before greenlight packet.", assignedToId: "user-dev", createdById: "user-producer", dueDate: "2026-06-25", priority: "HIGH", status: "REVIEW", targetType: "DOCUMENT_VERSION", targetId: "ver-hammer-3" },
-  { id: "task-rooftop", projectId: "project-hammer", title: "Revise rooftop mood frames", description: "Address producer note and relink approved candidate.", assignedToId: "user-artist", createdById: "user-producer", dueDate: "2026-06-27", priority: "MEDIUM", status: "IN_PROGRESS", targetType: "ASSET", targetId: "asset-rooftop" },
-  { id: "task-orchid", projectId: "project-orchid", title: "Pilot cold open notes", description: "Send first-pass coverage notes to writer.", assignedToId: "user-dev", createdById: "user-producer", dueDate: "2026-06-24", priority: "URGENT", status: "TODO", targetType: "DOCUMENT", targetId: "doc-orchid-script" }
+  { id: "task-admin", projectId: "project-hammer", title: "Review role assignments", description: "Confirm producer and executive access before the greenlight review.", assignedToId: "user-admin", createdById: "user-producer", dueDate: "2026-06-24", priority: "MEDIUM", status: "TODO", sortOrder: 1, targetType: "PROJECT", targetId: "project-hammer", subtasks: [
+    { id: "subtask-admin-roles", taskId: "task-admin", title: "Confirm producer role can create projects", completed: true, createdById: "user-producer", createdAt: "2026-06-21", updatedAt: "2026-06-21" },
+    { id: "subtask-admin-exec", taskId: "task-admin", title: "Verify executive can see all assigned review material", completed: false, createdById: "user-producer", createdAt: "2026-06-21", updatedAt: "2026-06-21" }
+  ] },
+  { id: "task-breakdown", projectId: "project-hammer", title: "Approve green draft breakdown", description: "Review parsed scenes and entity links before greenlight packet.", assignedToId: "user-dev", createdById: "user-producer", dueDate: "2026-06-25", priority: "HIGH", status: "REVIEW", sortOrder: 2, targetType: "DOCUMENT_VERSION", targetId: "ver-hammer-3" },
+  { id: "task-rooftop", projectId: "project-hammer", title: "Revise rooftop mood frames", description: "Address producer note and relink approved candidate.", assignedToId: "user-artist", createdById: "user-producer", dueDate: "2026-06-27", priority: "MEDIUM", status: "IN_PROGRESS", sortOrder: 3, targetType: "ASSET", targetId: "asset-rooftop" },
+  { id: "task-orchid", projectId: "project-orchid", title: "Pilot cold open notes", description: "Send first-pass coverage notes to writer.", assignedToId: "user-dev", createdById: "user-producer", dueDate: "2026-06-24", priority: "URGENT", status: "TODO", sortOrder: 4, targetType: "DOCUMENT", targetId: "doc-orchid-script" }
 ];
 
 export const hammerAuditEvents: HammerAuditEvent[] = [

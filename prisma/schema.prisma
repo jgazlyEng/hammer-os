@@ -1062,6 +1062,7 @@ model Task {
   dueDate      DateTime?
   priority     TaskPriority    @default(MEDIUM)
   status       TaskStatus      @default(TODO)
+  sortOrder    Int             @default(0)
   targetType   TaskTargetType?
   targetId     String?
   deletedAt    DateTime?
@@ -1071,11 +1072,29 @@ model Task {
   project      Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
   assignedTo   User?           @relation("TaskAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
   createdBy    User?           @relation("TaskCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  subtasks     TaskSubtask[]
 
   @@index([projectId])
   @@index([assignedToId])
   @@index([status])
+  @@index([sortOrder])
   @@index([dueDate])
+}
+
+model TaskSubtask {
+  id          String   @id @default(cuid())
+  taskId      String
+  title       String
+  completed   Boolean  @default(false)
+  createdById String?
+  deletedAt   DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  task        Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@index([completed])
 }
 
 model AuditEvent {
