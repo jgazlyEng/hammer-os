@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, ArrowUpDown, CheckCircle2, Download, FileDiff, FileText, Gauge, ImagePlus, Loader2, MessageSquare, PackageCheck, Pencil, Plus, Search, ShieldCheck, Trash2, UploadCloud, UsersRound, X } from "lucide-react";
+import { Archive, ArrowLeft, ArrowUpDown, CheckCircle2, ChevronDown, Download, FileDiff, FileText, Gauge, GripVertical, ImagePlus, Loader2, MessageSquare, PackageCheck, Pencil, Plus, Search, ShieldCheck, Trash2, UploadCloud, UsersRound, X } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { EmptyState, MetricCard, Panel, SectionHeader } from "@/components/ui";
 import {
@@ -55,6 +55,7 @@ import {
   statusLabel,
   userName,
   type HammerTask,
+  type HammerTaskSubtask,
   type TaskPriority,
   type TaskStatus,
   type HammerApproval,
@@ -104,6 +105,14 @@ interface DocumentUploadResponse {
   document?: HammerDocument;
   version?: HammerDocumentVersion;
   warning?: string;
+}
+
+interface DocumentUploadErrorResponse {
+  error?: string;
+  detail?: string;
+  stage?: string;
+  hint?: string;
+  requestId?: string;
 }
 
 const emptyProject: HammerProject = {
@@ -341,6 +350,7 @@ interface ProspectAsset {
 }
 
 type TaskPatch = Partial<Pick<HammerTask, "projectId" | "title" | "description" | "assignedToId" | "dueDate" | "priority" | "status" | "targetType" | "targetId">>;
+type TaskSubtaskPatch = Partial<Pick<HammerTaskSubtask, "title" | "completed">>;
 
 function toSessionUser(user: HammerUser): SessionUser {
   return {
@@ -423,7 +433,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   const [localSlateCollectionItems, setLocalSlateCollectionItems] = useState<HammerSlateCollectionItem[]>([]);
   const [localProspectAssets, setLocalProspectAssets] = useState<ProspectAsset[]>([]);
   const [localTasks, setLocalTasks] = useState<HammerTask[]>([]);
-  const [taskUpdates, setTaskUpdates] = useState<Record<string, TaskPatch>>({});
+  const [taskUpdates, setTaskUpdates] = useState<Record<string, Partial<HammerTask>>>({});
   const documents = useMemo(() => (workspaceMode === "database" ? localDocuments : [...hammerDocuments, ...localDocuments]).filter(isValidDocument).map((document) => (
     Object.prototype.hasOwnProperty.call(documentProjectOverrides, document.id)
       ? { ...document, projectId: documentProjectOverrides[document.id] ?? undefined }
@@ -632,7 +642,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       if (storedSlateCollectionItems) setLocalSlateCollectionItems(JSON.parse(storedSlateCollectionItems) as HammerSlateCollectionItem[]);
       if (storedProspectAssets) setLocalProspectAssets(JSON.parse(storedProspectAssets) as ProspectAsset[]);
       if (storedTasks) setLocalTasks(JSON.parse(storedTasks) as HammerTask[]);
-      if (storedTaskUpdates) setTaskUpdates(JSON.parse(storedTaskUpdates) as Record<string, Partial<Pick<HammerTask, "priority" | "status">>>);
+      if (storedTaskUpdates) setTaskUpdates(JSON.parse(storedTaskUpdates) as Record<string, Partial<HammerTask>>);
     } catch {
       setLocalDocuments([]);
       setLocalVersions([]);
@@ -826,8 +836,8 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
         if (response.status === 413) {
           throw new Error("Upload is larger than the production server allows. Increase the Nginx client_max_body_size setting to 250M, then try again.");
         }
-        const data = await response.json().catch(() => null) as { error?: string } | null;
-        throw new Error(data?.error ?? "Document upload failed.");
+        const data = await readUploadErrorResponse(response);
+        throw new Error(formatUploadError(data, response.status));
       }
       const data = await response.json().catch(() => null) as DocumentUploadResponse | null;
       if (data?.document) {
@@ -1014,6 +1024,49 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     });
   }
 
+  async function reorderScriptCollectionItems(collectionId: string, collectionItemIds: string[]) {
+    if (!collectionItemIds.length) return;
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("reorderScriptCollectionItems", { collectionItemIds });
+      return;
+    }
+    setLocalScriptCollectionItems((current) => {
+      const orderById = new Map(collectionItemIds.map((itemId, index) => [itemId, index + 1]));
+      const next = current.map((item) => item.collectionId === collectionId && orderById.has(item.id) ? { ...item, sortOrder: orderById.get(item.id)! } : item);
+      window.localStorage.setItem(HAMMER_LOCAL_SCRIPT_COLLECTION_ITEMS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  async function archiveScriptCollection(collectionId: string) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("archiveScriptCollection", { collectionId });
+      return;
+    }
+    setLocalScriptCollections((current) => {
+      const next = current.map((collection) => collection.id === collectionId ? { ...collection, status: "ARCHIVED", updatedAt: new Date().toISOString().slice(0, 10) } : collection);
+      window.localStorage.setItem(HAMMER_LOCAL_SCRIPT_COLLECTIONS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  async function deleteScriptCollection(collectionId: string) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("deleteScriptCollection", { collectionId });
+      return;
+    }
+    setLocalScriptCollections((current) => {
+      const next = current.filter((collection) => collection.id !== collectionId);
+      window.localStorage.setItem(HAMMER_LOCAL_SCRIPT_COLLECTIONS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+    setLocalScriptCollectionItems((current) => {
+      const next = current.filter((item) => item.collectionId !== collectionId);
+      window.localStorage.setItem(HAMMER_LOCAL_SCRIPT_COLLECTION_ITEMS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
   async function createSlateCollection(input: { name: string; description?: string; visibility?: HammerSlateCollection["visibility"] }) {
     if (workspaceMode === "database") {
       await runWorkspaceAction("createSlateCollection", input);
@@ -1068,6 +1121,49 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     }
     setLocalSlateCollectionItems((current) => {
       const next = current.filter((item) => item.id !== collectionItemId);
+      window.localStorage.setItem(HAMMER_LOCAL_SLATE_COLLECTION_ITEMS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  async function reorderSlateCollectionItems(collectionId: string, collectionItemIds: string[]) {
+    if (!collectionItemIds.length) return;
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("reorderSlateCollectionItems", { collectionItemIds });
+      return;
+    }
+    setLocalSlateCollectionItems((current) => {
+      const orderById = new Map(collectionItemIds.map((itemId, index) => [itemId, index + 1]));
+      const next = current.map((item) => item.collectionId === collectionId && orderById.has(item.id) ? { ...item, sortOrder: orderById.get(item.id)! } : item);
+      window.localStorage.setItem(HAMMER_LOCAL_SLATE_COLLECTION_ITEMS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  async function archiveSlateCollection(collectionId: string) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("archiveSlateCollection", { collectionId });
+      return;
+    }
+    setLocalSlateCollections((current) => {
+      const next = current.map((collection) => collection.id === collectionId ? { ...collection, status: "ARCHIVED", updatedAt: new Date().toISOString().slice(0, 10) } : collection);
+      window.localStorage.setItem(HAMMER_LOCAL_SLATE_COLLECTIONS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  async function deleteSlateCollection(collectionId: string) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("deleteSlateCollection", { collectionId });
+      return;
+    }
+    setLocalSlateCollections((current) => {
+      const next = current.filter((collection) => collection.id !== collectionId);
+      window.localStorage.setItem(HAMMER_LOCAL_SLATE_COLLECTIONS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+    setLocalSlateCollectionItems((current) => {
+      const next = current.filter((item) => item.collectionId !== collectionId);
       window.localStorage.setItem(HAMMER_LOCAL_SLATE_COLLECTION_ITEMS_STORAGE_KEY, JSON.stringify(next));
       return next;
     });
@@ -1255,6 +1351,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       dueDate: input.dueDate || new Date().toISOString().slice(0, 10),
       priority: input.priority,
       status: input.status ?? "TODO",
+      sortOrder: Math.max(0, ...tasks.map((task) => task.sortOrder ?? 0)) + 1,
       targetType: input.targetType,
       targetId: input.targetId || input.projectId || "",
       createdAt: new Date().toISOString(),
@@ -1264,6 +1361,23 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     setLocalTasks(nextTasks);
     window.localStorage.setItem(HAMMER_LOCAL_TASKS_STORAGE_KEY, JSON.stringify(nextTasks));
     window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_TASKS_EVENT));
+  }
+
+  async function reorderTasks(taskIds: string[]) {
+    if (!taskIds.length) return;
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("reorderTasks", { taskIds });
+      return;
+    }
+    setTaskUpdates((current) => {
+      const next = { ...current };
+      taskIds.forEach((taskId, index) => {
+        next[taskId] = { ...next[taskId], sortOrder: index + 1, updatedAt: new Date().toISOString() };
+      });
+      window.localStorage.setItem(HAMMER_LOCAL_TASK_UPDATES_STORAGE_KEY, JSON.stringify(next));
+      window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_TASKS_EVENT));
+      return next;
+    });
   }
 
   async function updateTask(taskId: string, patch: TaskPatch) {
@@ -1288,6 +1402,63 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     setLocalTasks(nextTasks);
     window.localStorage.setItem(HAMMER_LOCAL_TASKS_STORAGE_KEY, JSON.stringify(nextTasks));
     window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_TASKS_EVENT));
+  }
+
+  async function createTaskSubtask(taskId: string, title: string) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("createTaskSubtask", { taskId, title });
+      return;
+    }
+    updateLocalTaskSubtasks(taskId, (subtasks) => [
+      ...subtasks,
+      {
+        id: `subtask-local-${Date.now()}`,
+        taskId,
+        title: title.trim() || "Untitled subtask",
+        completed: false,
+        createdById: currentUser.id,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }
+    ]);
+  }
+
+  async function updateTaskSubtask(subtaskId: string, patch: TaskSubtaskPatch) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("updateTaskSubtask", { subtaskId, ...patch });
+      return;
+    }
+    const task = tasks.find((item) => item.subtasks?.some((subtask) => subtask.id === subtaskId));
+    if (!task) return;
+    updateLocalTaskSubtasks(task.id, (subtasks) => subtasks.map((subtask) => subtask.id === subtaskId ? { ...subtask, ...patch, updatedAt: new Date().toISOString() } : subtask));
+  }
+
+  async function deleteTaskSubtask(subtaskId: string) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("deleteTaskSubtask", { subtaskId });
+      return;
+    }
+    const task = tasks.find((item) => item.subtasks?.some((subtask) => subtask.id === subtaskId));
+    if (!task) return;
+    updateLocalTaskSubtasks(task.id, (subtasks) => subtasks.filter((subtask) => subtask.id !== subtaskId));
+  }
+
+  function updateLocalTaskSubtasks(taskId: string, updater: (subtasks: HammerTaskSubtask[]) => HammerTaskSubtask[]) {
+    const sourceTask = tasks.find((task) => task.id === taskId);
+    if (!sourceTask) return;
+    setTaskUpdates((current) => {
+      const baseSubtasks = current[taskId]?.subtasks ?? sourceTask.subtasks ?? [];
+      const next = {
+        ...current,
+        [taskId]: {
+          ...current[taskId],
+          subtasks: updater(baseSubtasks)
+        }
+      };
+      window.localStorage.setItem(HAMMER_LOCAL_TASK_UPDATES_STORAGE_KEY, JSON.stringify(next));
+      window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_TASKS_EVENT));
+      return next;
+    });
   }
 
   async function updateContact(contactId: string, patch: Partial<Omit<HammerContact, "id">>) {
@@ -1485,9 +1656,15 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
         onCreateSlateCollection={createSlateCollection}
         onAddSlateItem={addSlateItemToCollection}
         onRemoveSlateItem={removeSlateItemFromCollection}
+        onReorderSlateItems={reorderSlateCollectionItems}
+        onArchiveSlateCollection={archiveSlateCollection}
+        onDeleteSlateCollection={deleteSlateCollection}
         onCreateScriptCollection={createScriptCollection}
         onAddDocument={addDocumentToCollection}
         onRemoveDocument={removeDocumentFromCollection}
+        onReorderScriptItems={reorderScriptCollectionItems}
+        onArchiveScriptCollection={archiveScriptCollection}
+        onDeleteScriptCollection={deleteScriptCollection}
       />
     );
     if (view === "project-new") {
@@ -1506,7 +1683,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     if (view === "script-breakdown") return <ScriptBreakdown documentId={document.id} documents={documents} versions={versions} />;
     if (view === "assets") return <Assets projectId={projects.length ? activeProject.id : ""} assets={assets} currentUser={currentUser} />;
     if (view === "asset-detail") return <AssetDetail assetId={asset.id} assets={assets} currentUser={currentUser} />;
-    if (view === "tasks") return <Tasks selectedTaskId={selectedTaskId} currentUser={currentUser} users={users} tasks={tasks} projects={projects} onCreateTask={createTask} onUpdateTask={updateTask} onDeleteTask={deleteTask} />;
+    if (view === "tasks") return <Tasks selectedTaskId={selectedTaskId} currentUser={currentUser} users={users} tasks={tasks} projects={projects} onCreateTask={createTask} onUpdateTask={updateTask} onDeleteTask={deleteTask} onReorderTasks={reorderTasks} onCreateSubtask={createTaskSubtask} onUpdateSubtask={updateTaskSubtask} onDeleteSubtask={deleteTaskSubtask} />;
     if (view === "contacts") {
       if (!canViewContacts(currentUser.role)) return <AccessDenied title="Contacts access required" detail="Only admins, producers, and executives can view the studio contact directory." />;
       return <Contacts initialContacts={contacts} contactRelationships={contactRelationships} currentUser={currentUser} users={users} projects={projects} documents={documents} tasks={tasks} databaseMode={workspaceMode === "database"} onDatabaseImport={(importedContacts) => runWorkspaceAction("importContacts", { contacts: importedContacts })} onCreateContact={createContact} onUpdateContact={updateContact} onDeleteContact={deleteContact} onCreateRelationship={createContactRelationship} onDeleteRelationship={deleteContactRelationship} />;
@@ -3895,9 +4072,15 @@ function Collections({
   onCreateSlateCollection,
   onAddSlateItem,
   onRemoveSlateItem,
+  onReorderSlateItems,
+  onArchiveSlateCollection,
+  onDeleteSlateCollection,
   onCreateScriptCollection,
   onAddDocument,
-  onRemoveDocument
+  onRemoveDocument,
+  onReorderScriptItems,
+  onArchiveScriptCollection,
+  onDeleteScriptCollection
 }: {
   slateCollections: HammerSlateCollection[];
   slateItems: HammerSlateCollectionItem[];
@@ -3912,19 +4095,33 @@ function Collections({
   onCreateSlateCollection: (input: { name: string; description?: string; visibility?: HammerSlateCollection["visibility"] }) => Promise<void>;
   onAddSlateItem: (collectionId: string, itemType: SlateCollectionItemType, itemId: string, notes?: string) => Promise<void>;
   onRemoveSlateItem: (collectionItemId: string) => Promise<void>;
+  onReorderSlateItems: (collectionId: string, collectionItemIds: string[]) => Promise<void>;
+  onArchiveSlateCollection: (collectionId: string) => Promise<void>;
+  onDeleteSlateCollection: (collectionId: string) => Promise<void>;
   onCreateScriptCollection: (input: { name: string; description?: string; visibility?: HammerScriptCollection["visibility"] }) => Promise<void>;
   onAddDocument: (collectionId: string, documentId: string, notes?: string) => Promise<void>;
   onRemoveDocument: (collectionItemId: string) => Promise<void>;
+  onReorderScriptItems: (collectionId: string, collectionItemIds: string[]) => Promise<void>;
+  onArchiveScriptCollection: (collectionId: string) => Promise<void>;
+  onDeleteScriptCollection: (collectionId: string) => Promise<void>;
 }) {
   const [mode, setMode] = useState<"slate" | "scripts">("slate");
-  const slateItemCount = slateItems.length;
-  const scriptItemCount = scriptItems.length;
+  const [showArchived, setShowArchived] = useState(false);
+  const visibleSlateCollections = showArchived ? slateCollections : slateCollections.filter((collection) => collection.status !== "ARCHIVED");
+  const visibleScriptCollections = showArchived ? scriptCollections : scriptCollections.filter((collection) => collection.status !== "ARCHIVED");
+  const slateItemCount = slateItems.filter((item) => visibleSlateCollections.some((collection) => collection.id === item.collectionId)).length;
+  const scriptItemCount = scriptItems.filter((item) => visibleScriptCollections.some((collection) => collection.id === item.collectionId)).length;
   return (
     <div className="collections-page flex min-h-0 flex-col gap-3 overflow-hidden">
       <Panel>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <SectionHeader eyebrow="Collections" title="Review Packets" />
-          <div className="inline-flex w-fit rounded-md border border-white/10 bg-white/[0.025] p-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="inline-flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300">
+              <input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />
+              Show archived
+            </label>
+            <div className="inline-flex w-fit rounded-md border border-white/10 bg-white/[0.025] p-1">
             <button
               type="button"
               onClick={() => setMode("slate")}
@@ -3939,19 +4136,20 @@ function Collections({
             >
               Script Groups
             </button>
+            </div>
           </div>
         </div>
         <div className="mt-3 grid gap-2 md:grid-cols-2">
-          <CompactStat label="Slate packets" value={`${slateCollections.length}`} sub={`${slateItemCount} project/prospect item${slateItemCount === 1 ? "" : "s"}`} active={mode === "slate"} onClick={() => setMode("slate")} />
-          <CompactStat label="Script groups" value={`${scriptCollections.length}`} sub={`${scriptItemCount} script/doc item${scriptItemCount === 1 ? "" : "s"}`} active={mode === "scripts"} onClick={() => setMode("scripts")} />
+          <CompactStat label="Slate packets" value={`${visibleSlateCollections.length}`} sub={`${slateItemCount} project/prospect item${slateItemCount === 1 ? "" : "s"}`} active={mode === "slate"} onClick={() => setMode("slate")} />
+          <CompactStat label="Script groups" value={`${visibleScriptCollections.length}`} sub={`${scriptItemCount} script/doc item${scriptItemCount === 1 ? "" : "s"}`} active={mode === "scripts"} onClick={() => setMode("scripts")} />
         </div>
       </Panel>
 
       <div className="collections-body min-h-0 flex-1">
         {mode === "slate" ? (
-          <SlateCollections collections={slateCollections} items={slateItems} projects={projects} prospects={prospects} users={users} canManage={canManage} onCreateCollection={onCreateSlateCollection} onAddItem={onAddSlateItem} onRemoveItem={onRemoveSlateItem} />
+          <SlateCollections collections={visibleSlateCollections} items={slateItems} projects={projects} prospects={prospects} users={users} canManage={canManage} onCreateCollection={onCreateSlateCollection} onAddItem={onAddSlateItem} onRemoveItem={onRemoveSlateItem} onReorderItems={onReorderSlateItems} onArchiveCollection={onArchiveSlateCollection} onDeleteCollection={onDeleteSlateCollection} />
         ) : (
-          <ScriptCollections collections={scriptCollections} items={scriptItems} documents={documents} versions={versions} projects={projects} canManage={canManage} onCreateCollection={onCreateScriptCollection} onAddDocument={onAddDocument} onRemoveDocument={onRemoveDocument} />
+          <ScriptCollections collections={visibleScriptCollections} items={scriptItems} documents={documents} versions={versions} projects={projects} canManage={canManage} onCreateCollection={onCreateScriptCollection} onAddDocument={onAddDocument} onRemoveDocument={onRemoveDocument} onReorderItems={onReorderScriptItems} onArchiveCollection={onArchiveScriptCollection} onDeleteCollection={onDeleteScriptCollection} />
         )}
       </div>
     </div>
@@ -3983,7 +4181,10 @@ function SlateCollections({
   canManage,
   onCreateCollection,
   onAddItem,
-  onRemoveItem
+  onRemoveItem,
+  onReorderItems,
+  onArchiveCollection,
+  onDeleteCollection
 }: {
   collections: HammerSlateCollection[];
   items: HammerSlateCollectionItem[];
@@ -3994,6 +4195,9 @@ function SlateCollections({
   onCreateCollection: (input: { name: string; description?: string; visibility?: HammerSlateCollection["visibility"] }) => Promise<void>;
   onAddItem: (collectionId: string, itemType: SlateCollectionItemType, itemId: string, notes?: string) => Promise<void>;
   onRemoveItem: (collectionItemId: string) => Promise<void>;
+  onReorderItems: (collectionId: string, collectionItemIds: string[]) => Promise<void>;
+  onArchiveCollection: (collectionId: string) => Promise<void>;
+  onDeleteCollection: (collectionId: string) => Promise<void>;
 }) {
   const [selectedCollectionId, setSelectedCollectionId] = useState(collections[0]?.id ?? "");
   const [name, setName] = useState("");
@@ -4004,6 +4208,8 @@ function SlateCollections({
   const [itemSearch, setItemSearch] = useState("");
   const [itemNotes, setItemNotes] = useState("");
   const [message, setMessage] = useState("");
+  const [draggedItemId, setDraggedItemId] = useState("");
+  const [dragOverItemId, setDragOverItemId] = useState("");
   const selectedCollection = collections.find((collection) => collection.id === selectedCollectionId) ?? collections[0];
   const collectionItems = selectedCollection ? items.filter((item) => item.collectionId === selectedCollection.id).sort((a, b) => a.sortOrder - b.sortOrder || a.addedAt.localeCompare(b.addedAt)) : [];
   const collectionProjectIds = new Set(collectionItems.map((item) => item.projectId).filter(Boolean));
@@ -4060,8 +4266,36 @@ function SlateCollections({
     setMessage(`${itemType === "PROJECT" ? "Development Slate item" : "Prospect"} added to collection.`);
   }
 
+  async function dropReviewItem(targetItemId: string) {
+    if (!selectedCollection || !draggedItemId || draggedItemId === targetItemId) {
+      setDraggedItemId("");
+      setDragOverItemId("");
+      return;
+    }
+    const orderedIds = collectionItems.map((item) => item.id);
+    await onReorderItems(selectedCollection.id, moveId(orderedIds, draggedItemId, targetItemId));
+    setDraggedItemId("");
+    setDragOverItemId("");
+  }
+
+  async function archiveSelectedCollection() {
+    if (!selectedCollection) return;
+    if (window.confirm(`Archive "${selectedCollection.name}"? This hides the collection from active review packets but does not delete any projects or prospects.`)) {
+      await onArchiveCollection(selectedCollection.id);
+      setMessage("Collection archived. Projects and prospects were not deleted.");
+    }
+  }
+
+  async function deleteSelectedCollection() {
+    if (!selectedCollection) return;
+    if (window.confirm(`Delete "${selectedCollection.name}"? This removes only the collection grouping and its membership list. Projects and prospects stay in GreenLight.`)) {
+      await onDeleteCollection(selectedCollection.id);
+      setMessage("Collection deleted. Projects and prospects were not deleted.");
+    }
+  }
+
   return (
-    <div className="collections-grid grid h-full min-h-0 gap-4 xl:grid-cols-[400px_minmax(0,1fr)]">
+    <div className="collections-grid grid h-full min-h-0 gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
       <div className="collections-column space-y-4">
         <Panel>
           <SectionHeader eyebrow="Review Packets" title="Slate Collections" />
@@ -4155,7 +4389,7 @@ function SlateCollections({
           <SectionHeader
             eyebrow={selectedCollection?.visibility ? statusLabel(selectedCollection.visibility) : "Collection"}
             title={selectedCollection?.name ?? "Select a Collection"}
-            action={selectedCollection ? <Badge value={selectedCollection.status} /> : undefined}
+            action={selectedCollection ? <CollectionActions collection={selectedCollection} canManage={canManage} onArchive={archiveSelectedCollection} onDelete={deleteSelectedCollection} /> : undefined}
           />
           {selectedCollection ? (
             <div className="mt-3 grid gap-3 md:grid-cols-4">
@@ -4172,14 +4406,48 @@ function SlateCollections({
           <SectionHeader eyebrow="Review List" title="Projects and Prospects" />
           {collectionItems.length ? (
             <div className="data-scroll collection-review-scroll min-h-0 flex-1">
-              <table className="data-table min-w-[900px]">
-                <thead><tr><th>Title</th><th>Type</th><th>Status / Lane</th><th>Genre</th><th>Owner / Creator</th><th>Collection Note</th>{canManage ? <th>Action</th> : null}</tr></thead>
+              <table className="data-table min-w-[760px]">
+                <thead><tr>{canManage ? <th className="w-10">Order</th> : null}<th>Title</th><th>Type</th><th>Status / Lane</th><th>Genre</th><th>Owner / Creator</th><th>Collection Note</th>{canManage ? <th>Action</th> : null}</tr></thead>
                 <tbody>
                   {collectionItems.map((item) => {
                     const project = item.projectId ? projects.find((entry) => entry.id === item.projectId) : undefined;
                     const prospect = item.prospectId ? prospects.find((entry) => entry.id === item.prospectId) : undefined;
                     return (
-                      <tr key={item.id}>
+                      <tr
+                        key={item.id}
+                        onDragOver={(event) => {
+                          if (!canManage || !draggedItemId) return;
+                          event.preventDefault();
+                          setDragOverItemId(item.id);
+                        }}
+                        onDragLeave={() => setDragOverItemId((current) => current === item.id ? "" : current)}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          dropReviewItem(item.id);
+                        }}
+                        className={cn(dragOverItemId === item.id && "outline outline-1 outline-amberline/45")}
+                      >
+                        {canManage ? (
+                          <td>
+                            <button
+                              type="button"
+                              draggable
+                              onDragStart={(event) => {
+                                setDraggedItemId(item.id);
+                                event.dataTransfer.effectAllowed = "move";
+                                event.dataTransfer.setData("text/plain", item.id);
+                              }}
+                              onDragEnd={() => {
+                                setDraggedItemId("");
+                                setDragOverItemId("");
+                              }}
+                              className="inline-flex h-7 w-7 cursor-grab items-center justify-center rounded border border-white/10 text-studio-400 transition hover:border-amberline/40 hover:text-amberline active:cursor-grabbing"
+                              aria-label={`Reorder ${project?.title ?? prospect?.title ?? "collection item"}`}
+                            >
+                              <GripVertical className="h-4 w-4" />
+                            </button>
+                          </td>
+                        ) : null}
                         <td className="py-2.5">
                           {project ? <Link className="font-semibold text-studio-100 hover:text-amberline" href={`/projects/${project.id}`}>{project.title}</Link> : null}
                           {prospect ? <span className="font-semibold text-studio-100">{prospect.title}</span> : null}
@@ -4190,7 +4458,7 @@ function SlateCollections({
                         <td>{project?.genre || prospect?.genre || "-"}</td>
                         <td>{project ? userName(project.ownerId) : prospect ? prospectOwnerLabel(prospect, users) : "-"}</td>
                         <td className="max-w-[260px] text-studio-300">{item.notes || "-"}</td>
-                        {canManage ? <td><DangerButton label="Remove" onClick={() => onRemoveItem(item.id)} /></td> : null}
+                        {canManage ? <td className="sticky right-0 z-10 bg-studio-950/95 text-right shadow-[-8px_0_12px_rgba(0,0,0,0.18)]"><CollectionRemoveButton label="Remove" itemName={project?.title ?? prospect?.title ?? "this item"} itemKind="item" onRemove={() => onRemoveItem(item.id)} /></td> : null}
                       </tr>
                     );
                   })}
@@ -4204,6 +4472,52 @@ function SlateCollections({
   );
 }
 
+
+
+function CollectionRemoveButton({ label, itemName, itemKind, onRemove }: { label: string; itemName: string; itemKind: "script" | "item"; onRemove: () => void }) {
+  function confirmRemove() {
+    const retained = itemKind === "script" ? "The script/document will stay in GreenLight." : "The project or prospect will stay in GreenLight.";
+    if (window.confirm(`Remove "${itemName}" from this collection? ${retained}`)) onRemove();
+  }
+
+  return (
+    <button type="button" onClick={confirmRemove} className="inline-flex items-center gap-1 rounded border border-rose-400/25 bg-rose-500/5 px-1.5 py-1 text-[11px] font-semibold text-rose-300 hover:border-rose-300/50 hover:text-rose-200" title="Remove from this collection only">
+      <X className="h-3 w-3" />
+      {label}
+    </button>
+  );
+}
+
+function CollectionActions({
+  collection,
+  canManage,
+  onArchive,
+  onDelete
+}: {
+  collection: HammerScriptCollection | HammerSlateCollection;
+  canManage: boolean;
+  onArchive: () => void;
+  onDelete: () => void;
+}) {
+  if (!canManage) return <Badge value={collection.status} />;
+  const archived = collection.status === "ARCHIVED";
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <Badge value={collection.status} />
+      {!archived ? (
+        <button type="button" onClick={onArchive} className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/[0.025] px-2 py-1 text-[11px] font-semibold text-studio-300 transition hover:border-amberline/40 hover:text-amberline" title="Archive this grouping only. Projects, prospects, scripts, and documents are not deleted.">
+          <Archive className="h-3 w-3" />
+          Archive
+        </button>
+      ) : null}
+      <button type="button" onClick={onDelete} className="inline-flex items-center gap-1 rounded border border-rose-400/25 bg-rose-500/5 px-2 py-1 text-[11px] font-semibold text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200" title="Delete this grouping only. Projects, prospects, scripts, and documents are not deleted.">
+        <Trash2 className="h-3 w-3" />
+        Delete
+      </button>
+    </div>
+  );
+}
+
 function ScriptCollections({
   collections,
   items,
@@ -4213,7 +4527,10 @@ function ScriptCollections({
   canManage,
   onCreateCollection,
   onAddDocument,
-  onRemoveDocument
+  onRemoveDocument,
+  onReorderItems,
+  onArchiveCollection,
+  onDeleteCollection
 }: {
   collections: HammerScriptCollection[];
   items: HammerScriptCollectionItem[];
@@ -4224,6 +4541,9 @@ function ScriptCollections({
   onCreateCollection: (input: { name: string; description?: string; visibility?: HammerScriptCollection["visibility"] }) => Promise<void>;
   onAddDocument: (collectionId: string, documentId: string, notes?: string) => Promise<void>;
   onRemoveDocument: (collectionItemId: string) => Promise<void>;
+  onReorderItems: (collectionId: string, collectionItemIds: string[]) => Promise<void>;
+  onArchiveCollection: (collectionId: string) => Promise<void>;
+  onDeleteCollection: (collectionId: string) => Promise<void>;
 }) {
   const [selectedCollectionId, setSelectedCollectionId] = useState(collections[0]?.id ?? "");
   const [name, setName] = useState("");
@@ -4233,6 +4553,8 @@ function ScriptCollections({
   const [documentSearch, setDocumentSearch] = useState("");
   const [itemNotes, setItemNotes] = useState("");
   const [message, setMessage] = useState("");
+  const [draggedItemId, setDraggedItemId] = useState("");
+  const [dragOverItemId, setDragOverItemId] = useState("");
   const selectedCollection = collections.find((collection) => collection.id === selectedCollectionId) ?? collections[0];
   const collectionItems = selectedCollection ? items.filter((item) => item.collectionId === selectedCollection.id).sort((a, b) => a.sortOrder - b.sortOrder || a.addedAt.localeCompare(b.addedAt)) : [];
   const collectionDocumentIds = new Set(collectionItems.map((item) => item.documentId));
@@ -4279,8 +4601,36 @@ function ScriptCollections({
     setMessage("Script added to collection.");
   }
 
+  async function dropReviewItem(targetItemId: string) {
+    if (!selectedCollection || !draggedItemId || draggedItemId === targetItemId) {
+      setDraggedItemId("");
+      setDragOverItemId("");
+      return;
+    }
+    const orderedIds = collectionItems.map((item) => item.id);
+    await onReorderItems(selectedCollection.id, moveId(orderedIds, draggedItemId, targetItemId));
+    setDraggedItemId("");
+    setDragOverItemId("");
+  }
+
+  async function archiveSelectedCollection() {
+    if (!selectedCollection) return;
+    if (window.confirm(`Archive "${selectedCollection.name}"? This hides the script group from active review packets but does not delete any scripts or documents.`)) {
+      await onArchiveCollection(selectedCollection.id);
+      setMessage("Collection archived. Scripts and documents were not deleted.");
+    }
+  }
+
+  async function deleteSelectedCollection() {
+    if (!selectedCollection) return;
+    if (window.confirm(`Delete "${selectedCollection.name}"? This removes only the collection grouping and its membership list. Scripts and documents stay in GreenLight.`)) {
+      await onDeleteCollection(selectedCollection.id);
+      setMessage("Collection deleted. Scripts and documents were not deleted.");
+    }
+  }
+
   return (
-    <div className="collections-grid grid h-full min-h-0 gap-4 xl:grid-cols-[400px_minmax(0,1fr)]">
+    <div className="collections-grid grid h-full min-h-0 gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
       <div className="collections-column space-y-4">
         <Panel>
           <SectionHeader eyebrow="Review Groups" title="Collections" />
@@ -4364,7 +4714,7 @@ function ScriptCollections({
           <SectionHeader
             eyebrow={selectedCollection?.visibility ? statusLabel(selectedCollection.visibility) : "Collection"}
             title={selectedCollection?.name ?? "Select a Collection"}
-            action={selectedCollection ? <Badge value={selectedCollection.status} /> : undefined}
+            action={selectedCollection ? <CollectionActions collection={selectedCollection} canManage={canManage} onArchive={archiveSelectedCollection} onDelete={deleteSelectedCollection} /> : undefined}
           />
           {selectedCollection ? (
             <div className="mt-3 grid gap-3 md:grid-cols-3">
@@ -4380,20 +4730,54 @@ function ScriptCollections({
           <SectionHeader eyebrow="Review List" title="Scripts in Collection" />
           {collectionItems.length ? (
             <div className="data-scroll collection-review-scroll min-h-0 flex-1">
-              <table className="data-table min-w-[900px]">
-                <thead><tr><th>Title</th><th>Project</th><th>Status</th><th>Writer</th><th>Collection Note</th>{canManage ? <th>Action</th> : null}</tr></thead>
+              <table className="data-table min-w-[760px]">
+                <thead><tr>{canManage ? <th className="w-10">Order</th> : null}<th>Title</th><th>Project</th><th>Status</th><th>Writer</th><th>Collection Note</th>{canManage ? <th className="sticky right-0 z-10 bg-studio-950/95 text-right shadow-[-8px_0_12px_rgba(0,0,0,0.18)]">Action</th> : null}</tr></thead>
                 <tbody>
                   {collectionItems.map((item) => {
                     const document = documents.find((entry) => entry.id === item.documentId);
                     const version = document ? currentVersionFor(document.id, documents, versions) : undefined;
                     return (
-                      <tr key={item.id}>
+                      <tr
+                        key={item.id}
+                        onDragOver={(event) => {
+                          if (!canManage || !draggedItemId) return;
+                          event.preventDefault();
+                          setDragOverItemId(item.id);
+                        }}
+                        onDragLeave={() => setDragOverItemId((current) => current === item.id ? "" : current)}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          dropReviewItem(item.id);
+                        }}
+                        className={cn(dragOverItemId === item.id && "outline outline-1 outline-amberline/45")}
+                      >
+                        {canManage ? (
+                          <td>
+                            <button
+                              type="button"
+                              draggable
+                              onDragStart={(event) => {
+                                setDraggedItemId(item.id);
+                                event.dataTransfer.effectAllowed = "move";
+                                event.dataTransfer.setData("text/plain", item.id);
+                              }}
+                              onDragEnd={() => {
+                                setDraggedItemId("");
+                                setDragOverItemId("");
+                              }}
+                              className="inline-flex h-7 w-7 cursor-grab items-center justify-center rounded border border-white/10 text-studio-400 transition hover:border-amberline/40 hover:text-amberline active:cursor-grabbing"
+                              aria-label={`Reorder ${document?.title ?? "script"}`}
+                            >
+                              <GripVertical className="h-4 w-4" />
+                            </button>
+                          </td>
+                        ) : null}
                         <td className="py-2.5">{document ? <Link className="font-semibold text-studio-100 hover:text-amberline" href={`/scripts/${document.id}`}>{document.title}</Link> : <span className="text-studio-400">Missing document</span>}</td>
                         <td>{document?.projectId ? projectTitleFromList(document.projectId, projects) : "Inbox"}</td>
                         <td><Badge value={version?.status ?? "DRAFT"} /></td>
                         <td>{document?.writerName ?? (document?.createdById ? userName(document.createdById) : "Unassigned")}</td>
                         <td className="max-w-[260px] text-studio-300">{item.notes || "-"}</td>
-                        {canManage ? <td><DangerButton label="Remove" onClick={() => onRemoveDocument(item.id)} /></td> : null}
+                        {canManage ? <td className="sticky right-0 z-10 bg-studio-950/95 text-right shadow-[-8px_0_12px_rgba(0,0,0,0.18)]"><CollectionRemoveButton label="Remove" itemName={document?.title ?? "this script"} itemKind="script" onRemove={() => onRemoveDocument(item.id)} /></td> : null}
                       </tr>
                     );
                   })}
@@ -5289,7 +5673,11 @@ function Tasks({
   projects = hammerProjects,
   onCreateTask,
   onUpdateTask,
-  onDeleteTask
+  onDeleteTask,
+  onReorderTasks,
+  onCreateSubtask,
+  onUpdateSubtask,
+  onDeleteSubtask
 }: {
   projectId?: string;
   compact?: boolean;
@@ -5301,6 +5689,10 @@ function Tasks({
   onCreateTask?: (input: { projectId?: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
   onUpdateTask?: (taskId: string, patch: TaskPatch) => void;
   onDeleteTask?: (taskId: string) => void;
+  onReorderTasks?: (taskIds: string[]) => void;
+  onCreateSubtask?: (taskId: string, title: string) => void;
+  onUpdateSubtask?: (subtaskId: string, patch: TaskSubtaskPatch) => void;
+  onDeleteSubtask?: (subtaskId: string) => void;
 }) {
   const canViewAllTasks = canViewAllProjectTasks(currentUser?.role);
   const canDeleteTasks = currentUser?.role === "ADMIN";
@@ -5314,7 +5706,7 @@ function Tasks({
       <Panel>
         <SectionHeader eyebrow="Flexible Tracking" title={compact ? "Tasks" : canViewAllTasks ? "General Tasks" : "My General Tasks"} action={onCreateTask ? <NewTaskDialog projects={projects} users={users} onCreateTask={onCreateTask} /> : undefined} />
         {generalTasks.length ? (
-          <TaskRows tasks={generalTasks} users={users} projects={projects} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} showContext onUpdateTask={onUpdateTask} onDeleteTask={canDeleteTasks ? onDeleteTask : undefined} />
+          <TaskRows tasks={generalTasks} users={users} projects={projects} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} showContext onUpdateTask={onUpdateTask} onDeleteTask={canDeleteTasks ? onDeleteTask : undefined} onReorderTasks={onReorderTasks} onCreateSubtask={onCreateSubtask} onUpdateSubtask={onUpdateSubtask} onDeleteSubtask={onDeleteSubtask} />
         ) : (
           <EmptyState label={canViewAllTasks ? "No general tasks yet. Create one for follow-ups that are not tied to a slate item or prospect." : "No general tasks assigned to you."} />
         )}
@@ -5322,7 +5714,7 @@ function Tasks({
       <Panel>
         <SectionHeader eyebrow={projectName ? `Showing ${projectName}` : "Development Slate"} title={compact ? "Slate Tasks" : canViewAllTasks ? "Development Slate Tasks" : "My Development Slate Tasks"} />
         {projectTasks.length ? (
-          <TaskRows tasks={projectTasks} users={users} projects={projects} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} showContext onUpdateTask={onUpdateTask} onDeleteTask={canDeleteTasks ? onDeleteTask : undefined} />
+          <TaskRows tasks={projectTasks} users={users} projects={projects} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} showContext onUpdateTask={onUpdateTask} onDeleteTask={canDeleteTasks ? onDeleteTask : undefined} onReorderTasks={onReorderTasks} onCreateSubtask={onCreateSubtask} onUpdateSubtask={onUpdateSubtask} onDeleteSubtask={onDeleteSubtask} />
         ) : (
           <EmptyState label={projectName ? (canViewAllTasks ? `No Development Slate tasks for ${projectName}. Create one when there is a next step.` : `No Development Slate tasks assigned to you for ${projectName}.`) : "No Development Slate tasks match this view."} />
         )}
@@ -5330,7 +5722,7 @@ function Tasks({
       <Panel>
         <SectionHeader eyebrow="Prospects" title={canViewAllTasks ? "Prospect Tasks" : "My Prospect Tasks"} />
         {slateTasks.length ? (
-          <TaskRows tasks={slateTasks} users={users} projects={projects} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} showContext onUpdateTask={onUpdateTask} onDeleteTask={canDeleteTasks ? onDeleteTask : undefined} />
+          <TaskRows tasks={slateTasks} users={users} projects={projects} selectedTaskId={selectedTaskId} showAssignee={canViewAllTasks} showContext onUpdateTask={onUpdateTask} onDeleteTask={canDeleteTasks ? onDeleteTask : undefined} onReorderTasks={onReorderTasks} onCreateSubtask={onCreateSubtask} onUpdateSubtask={onUpdateSubtask} onDeleteSubtask={onDeleteSubtask} />
         ) : (
           <EmptyState label={projectName ? (canViewAllTasks ? `No prospect tasks for ${projectName}.` : `No prospect tasks assigned to you for ${projectName}.`) : "No prospect tasks match this view."} />
         )}
@@ -5472,7 +5864,7 @@ function Contacts({
   const [status, setStatus] = useState<ContactStatus | "ALL">("ALL");
   const [ownerId, setOwnerId] = useState("ALL");
   const [localContacts, setLocalContacts] = useState<HammerContact[]>([]);
-  const [selectedContactId, setSelectedContactId] = useState(initialContacts[0]?.id ?? "");
+  const [selectedContactId, setSelectedContactId] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [importMessage, setImportMessage] = useState("");
   const [draft, setDraft] = useState({
@@ -5508,7 +5900,7 @@ function Contacts({
     const haystack = `${contact.name} ${contact.company} ${contact.title} ${contact.email} ${contact.location} ${contact.notes} ${(contact.tags ?? []).join(" ")}`.toLowerCase();
     return matchesType && matchesStatus && matchesOwner && haystack.includes(search.toLowerCase());
   });
-  const selectedContact = contacts.find((contact) => contact.id === selectedContactId) ?? filteredContacts[0] ?? contacts[0];
+  const selectedContact = contacts.find((contact) => contact.id === selectedContactId);
   const relationshipProjects = selectedContact ? projects.filter((project) => draft.projectIds.includes(project.id)) : [];
   const relationshipScripts = selectedContact ? documents.filter((document) => document.contactId === selectedContact.id || document.source === selectedContact.company || document.writerName === selectedContact.name) : [];
   const relationshipTasks = selectedContact ? tasks.filter((task) => task.targetType === "CONTACT" && task.targetId === selectedContact.id) : [];
@@ -5654,7 +6046,7 @@ function Contacts({
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+      <div className={cn("grid gap-4", selectedContact ? "xl:grid-cols-[minmax(0,1fr)_420px]" : "xl:grid-cols-1")}>
         <Panel>
           <SectionHeader eyebrow="Collaborative CRM" title="Contacts" action={<div className="flex flex-wrap gap-2"><PrimaryButton icon={Plus} label="Add Contact" onClick={() => setCreateOpen(true)} /><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline"><UploadCloud className="h-3.5 w-3.5" />Import CSV<input className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => importContacts(event.target.files?.[0])} /></label><button type="button" className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 hover:border-amberline/40 hover:text-amberline" onClick={exportContacts}>Export CSV</button></div>} />
           <div className="mb-3 grid gap-2 lg:grid-cols-[1fr_180px_180px_180px]">
@@ -5674,7 +6066,7 @@ function Contacts({
           </div>
           {importMessage ? <p className="mb-3 text-xs text-studio-300">{importMessage}</p> : null}
           {filteredContacts.length ? (
-            <div className="data-scroll">
+            <div className="data-scroll contacts-list-scroll">
               <table className="data-table min-w-[940px]">
                 <thead className="text-[11px] uppercase tracking-[0.12em] text-studio-400">
                   <tr><th className="py-2">Name</th><th>Type</th><th>Company</th><th>Email</th><th>Phone</th><th>Development Slate</th><th>Notes</th></tr>
@@ -5700,8 +6092,8 @@ function Contacts({
           ) : <EmptyState label="No contacts match this search." />}
         </Panel>
 
-        <Panel>
-          {selectedContact ? (
+        {selectedContact ? (
+          <Panel>
             <div className="space-y-3">
               <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -5713,9 +6105,10 @@ function Contacts({
                     <h3 className="mt-2 text-xl font-semibold text-studio-100">{selectedContact.name}</h3>
                     <p className="mt-1 text-[13px] text-studio-300">{selectedContact.title} / {selectedContact.company}</p>
                   </div>
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="flex flex-wrap items-center gap-1.5">
                     {selectedContact.email ? <TableLink href={`mailto:${selectedContact.email}`}>Email</TableLink> : null}
                     {selectedContact.website ? <TableLink href={selectedContact.website}>Website</TableLink> : null}
+                    <button type="button" onClick={() => setSelectedContactId("")} className="rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-xs font-semibold text-studio-300 transition hover:border-amberline/40 hover:text-studio-100">Collapse</button>
                   </div>
                 </div>
                 <div className="mt-4 grid gap-3 md:grid-cols-2">
@@ -5855,8 +6248,8 @@ function Contacts({
                 <RelationshipList title="Follow-Ups" empty="No contact tasks yet." items={relationshipTasks.map((task) => ({ id: task.id, title: task.title, detail: `${statusLabel(task.status)} / ${task.dueDate || "No due date"}`, href: `/tasks?task=${task.id}` }))} />
               </div>
             </div>
-          ) : <EmptyState label="Select a contact to view relationship details." />}
-        </Panel>
+          </Panel>
+        ) : null}
       </div>
       <Panel>
         <SectionHeader eyebrow="Relationship Queue" title="Upcoming Follow-Ups" />
@@ -7161,7 +7554,7 @@ function temporaryPassword() {
 
 type ProjectSortKey = "title" | "logline" | "status" | "owner" | "updatedAt";
 type ProspectSortKey = "title" | "logline" | "lane" | "genre" | "urgency" | "rights" | "owner" | "actionStatus" | "score";
-type TaskSortKey = "title" | "assignee" | "context" | "priority" | "status" | "dueDate";
+type TaskSortKey = "manual" | "title" | "assignee" | "context" | "priority" | "status" | "dueDate";
 
 function ProjectTable({ projects }: { projects: HammerProject[] }) {
   const [sort, setSort] = useState<{ key: ProjectSortKey; direction: "asc" | "desc" }>({ key: "title", direction: "asc" });
@@ -7224,11 +7617,48 @@ function taskContextLabel(task: HammerTask) {
   return projectTitle(task.projectId);
 }
 
-function TaskRows({ tasks, users = hammerUsers, projects = hammerProjects, selectedTaskId, showAssignee = false, showContext = false, onUpdateTask, onDeleteTask }: { tasks: HammerTask[]; users?: HammerUser[]; projects?: HammerProject[]; selectedTaskId?: string; showAssignee?: boolean; showContext?: boolean; onUpdateTask?: (taskId: string, patch: TaskPatch) => void; onDeleteTask?: (taskId: string) => void }) {
-  const [sort, setSort] = useState<{ key: TaskSortKey; direction: "asc" | "desc" }>({ key: "dueDate", direction: "asc" });
+function moveId(ids: string[], fromId: string, toId: string) {
+  const next = ids.filter((id) => id !== fromId);
+  const targetIndex = next.indexOf(toId);
+  if (targetIndex === -1) return ids;
+  next.splice(targetIndex, 0, fromId);
+  return next;
+}
+
+function TaskRows({
+  tasks,
+  users = hammerUsers,
+  projects = hammerProjects,
+  selectedTaskId,
+  showAssignee = false,
+  showContext = false,
+  onUpdateTask,
+  onDeleteTask,
+  onReorderTasks,
+  onCreateSubtask,
+  onUpdateSubtask,
+  onDeleteSubtask
+}: {
+  tasks: HammerTask[];
+  users?: HammerUser[];
+  projects?: HammerProject[];
+  selectedTaskId?: string;
+  showAssignee?: boolean;
+  showContext?: boolean;
+  onUpdateTask?: (taskId: string, patch: TaskPatch) => void;
+  onDeleteTask?: (taskId: string) => void;
+  onReorderTasks?: (taskIds: string[]) => void;
+  onCreateSubtask?: (taskId: string, title: string) => void;
+  onUpdateSubtask?: (subtaskId: string, patch: TaskSubtaskPatch) => void;
+  onDeleteSubtask?: (subtaskId: string) => void;
+}) {
+  const [sort, setSort] = useState<{ key: TaskSortKey; direction: "asc" | "desc" }>({ key: "manual", direction: "asc" });
+  const [draggedTaskId, setDraggedTaskId] = useState("");
+  const [dragOverTaskId, setDragOverTaskId] = useState("");
+  const [expandedSubtasks, setExpandedSubtasks] = useState<Record<string, boolean>>({});
   const gridClass = showAssignee
-    ? showContext ? "md:grid-cols-[1fr_130px_120px_120px_110px_100px_128px]" : "md:grid-cols-[1fr_130px_120px_110px_100px_128px]"
-    : showContext ? "md:grid-cols-[1fr_120px_120px_110px_100px_128px]" : "md:grid-cols-[1fr_120px_110px_100px_128px]";
+    ? showContext ? "md:grid-cols-[34px_1fr_130px_120px_120px_110px_100px_128px]" : "md:grid-cols-[34px_1fr_130px_120px_110px_100px_128px]"
+    : showContext ? "md:grid-cols-[34px_1fr_120px_120px_110px_100px_128px]" : "md:grid-cols-[34px_1fr_120px_110px_100px_128px]";
   const nameForUser = (userId: string) => users.find((user) => user.id === userId)?.name ?? userName(userId);
   const sortedTasks = useMemo(() => {
     return [...tasks].sort((a, b) => compareTasks(a, b, sort, users, projects));
@@ -7239,9 +7669,25 @@ function TaskRows({ tasks, users = hammerUsers, projects = hammerProjects, selec
       direction: current.key === key && current.direction === "asc" ? "desc" : "asc"
     }));
   }
+  function dropTask(targetTaskId: string) {
+    if (!draggedTaskId || draggedTaskId === targetTaskId) {
+      setDraggedTaskId("");
+      setDragOverTaskId("");
+      return;
+    }
+    const orderedIds = sortedTasks.map((task) => task.id);
+    setSort({ key: "manual", direction: "asc" });
+    onReorderTasks?.(moveId(orderedIds, draggedTaskId, targetTaskId));
+    setDraggedTaskId("");
+    setDragOverTaskId("");
+  }
+  function toggleSubtasks(taskId: string) {
+    setExpandedSubtasks((current) => ({ ...current, [taskId]: !current[taskId] }));
+  }
   return (
     <div className="data-scroll-list grid gap-2">
       <div className={cn("hidden px-2.5 text-[11px] uppercase tracking-[0.12em] text-studio-400 md:grid", gridClass)}>
+        <TaskSortButton label="Order" sortKey="manual" activeSort={sort} onSort={toggleSort} compact />
         <TaskSortButton label="Task" sortKey="title" activeSort={sort} onSort={toggleSort} />
         {showAssignee ? <TaskSortButton label="Assignee" sortKey="assignee" activeSort={sort} onSort={toggleSort} /> : null}
         {showContext ? <TaskSortButton label="Area" sortKey="context" activeSort={sort} onSort={toggleSort} /> : null}
@@ -7250,15 +7696,52 @@ function TaskRows({ tasks, users = hammerUsers, projects = hammerProjects, selec
         <TaskSortButton label="Due" sortKey="dueDate" activeSort={sort} onSort={toggleSort} />
         <span>{onUpdateTask || onDeleteTask ? "Actions" : ""}</span>
       </div>
-      {sortedTasks.map((task) => (
+      {sortedTasks.map((task) => {
+        const subtasks = task.subtasks ?? [];
+        const completedSubtasks = subtasks.filter((subtask) => subtask.completed).length;
+        const hasSubtaskControls = Boolean(onCreateSubtask || subtasks.length);
+        const subtasksExpanded = Boolean(expandedSubtasks[task.id]);
+        return (
         <div
           key={task.id}
           className={cn(
             "grid gap-2 rounded-lg border border-white/10 bg-white/[0.03] p-2.5 transition hover:border-amberline/35 hover:bg-white/[0.055]",
             gridClass,
-            selectedTaskId === task.id && "border-amberline/45 bg-amberline/10"
+            selectedTaskId === task.id && "border-amberline/45 bg-amberline/10",
+            dragOverTaskId === task.id && "border-amberline/60 bg-amberline/10"
           )}
+          onDragOver={(event) => {
+            if (!onReorderTasks || !draggedTaskId) return;
+            event.preventDefault();
+            setDragOverTaskId(task.id);
+          }}
+          onDragLeave={() => setDragOverTaskId((current) => current === task.id ? "" : current)}
+          onDrop={(event) => {
+            event.preventDefault();
+            dropTask(task.id);
+          }}
         >
+          <div className="flex items-start">
+            <button
+              type="button"
+              draggable={Boolean(onReorderTasks)}
+              disabled={!onReorderTasks}
+              onDragStart={(event) => {
+                setSort({ key: "manual", direction: "asc" });
+                setDraggedTaskId(task.id);
+                event.dataTransfer.effectAllowed = "move";
+                event.dataTransfer.setData("text/plain", task.id);
+              }}
+              onDragEnd={() => {
+                setDraggedTaskId("");
+                setDragOverTaskId("");
+              }}
+              className="inline-flex h-7 w-7 cursor-grab items-center justify-center rounded border border-white/10 text-studio-400 transition hover:border-amberline/40 hover:text-amberline active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-35"
+              aria-label={`Reorder ${task.title}`}
+            >
+              <GripVertical className="h-4 w-4" />
+            </button>
+          </div>
           <div>
             <p className="text-[13px] font-semibold text-studio-100">{task.title}</p>
             <p className="mt-0.5 text-xs text-studio-300">{task.description}</p>
@@ -7273,6 +7756,18 @@ function TaskRows({ tasks, users = hammerUsers, projects = hammerProjects, selec
           ) : <Badge value={task.status} />}
           <p className="text-xs text-studio-300">{task.dueDate}</p>
           <div className="flex flex-wrap items-center gap-1.5">
+            {hasSubtaskControls ? (
+              <button
+                type="button"
+                onClick={() => toggleSubtasks(task.id)}
+                className="inline-flex h-7 items-center justify-center gap-1 rounded border border-white/10 bg-white/[0.025] px-2 text-[11px] font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline"
+                aria-expanded={subtasksExpanded}
+                aria-controls={`subtasks-${task.id}`}
+              >
+                <ChevronDown className={cn("h-3 w-3 transition-transform", subtasksExpanded && "rotate-180")} />
+                Subtasks {completedSubtasks}/{subtasks.length}
+              </button>
+            ) : null}
             {onUpdateTask ? <EditTaskDialog task={task} users={users} projects={projects} onUpdateTask={onUpdateTask} /> : null}
             {onDeleteTask ? (
               <button
@@ -7287,19 +7782,124 @@ function TaskRows({ tasks, users = hammerUsers, projects = hammerProjects, selec
               </button>
             ) : null}
           </div>
+          {hasSubtaskControls && subtasksExpanded ? (
+            <TaskSubtasks task={task} onCreateSubtask={onCreateSubtask} onUpdateSubtask={onUpdateSubtask} onDeleteSubtask={onDeleteSubtask} />
+          ) : null}
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
 
-function TaskSortButton({ label, sortKey, activeSort, onSort }: { label: string; sortKey: TaskSortKey; activeSort: { key: TaskSortKey; direction: "asc" | "desc" }; onSort: (key: TaskSortKey) => void }) {
-  const active = activeSort.key === sortKey;
+function TaskSubtasks({
+  task,
+  onCreateSubtask,
+  onUpdateSubtask,
+  onDeleteSubtask
+}: {
+  task: HammerTask;
+  onCreateSubtask?: (taskId: string, title: string) => void;
+  onUpdateSubtask?: (subtaskId: string, patch: TaskSubtaskPatch) => void;
+  onDeleteSubtask?: (subtaskId: string) => void;
+}) {
+  const [title, setTitle] = useState("");
+  const subtasks = task.subtasks ?? [];
+  const completedCount = subtasks.filter((subtask) => subtask.completed).length;
+
+  function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!title.trim() || !onCreateSubtask) return;
+    onCreateSubtask(task.id, title.trim());
+    setTitle("");
+  }
+
   return (
-    <button type="button" onClick={() => onSort(sortKey)} className={cn("inline-flex items-center gap-1 text-left font-semibold uppercase tracking-[0.12em] transition hover:text-amberline", active && "text-amberline")}>
-      {label}
-      <ArrowUpDown className="h-3 w-3" />
-      {active ? <span className="text-[10px]">{activeSort.direction === "asc" ? "A-Z" : "Z-A"}</span> : null}
+    <div className="md:col-span-full rounded-md border border-white/10 bg-black/10 p-2">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Subtasks</p>
+        <span className="text-[11px] text-studio-400">{completedCount}/{subtasks.length} complete</span>
+      </div>
+      {subtasks.length ? (
+        <div className="grid gap-1.5">
+          {subtasks.map((subtask) => (
+            <TaskSubtaskRow key={subtask.id} subtask={subtask} onUpdateSubtask={onUpdateSubtask} onDeleteSubtask={onDeleteSubtask} />
+          ))}
+        </div>
+      ) : (
+        <p className="rounded border border-white/10 bg-white/[0.025] px-2.5 py-2 text-xs text-studio-400">No subtasks yet.</p>
+      )}
+      {onCreateSubtask ? (
+        <form onSubmit={submit} className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+          <input className="field py-1.5 text-xs" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Add a subtask" />
+          <button type="submit" disabled={!title.trim()} className="inline-flex items-center justify-center gap-1.5 rounded-md bg-amberline px-3 py-1.5 text-xs font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-40">
+            <Plus className="h-3.5 w-3.5" />
+            Add
+          </button>
+        </form>
+      ) : null}
+    </div>
+  );
+}
+
+function TaskSubtaskRow({ subtask, onUpdateSubtask, onDeleteSubtask }: { subtask: HammerTaskSubtask; onUpdateSubtask?: (subtaskId: string, patch: TaskSubtaskPatch) => void; onDeleteSubtask?: (subtaskId: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(subtask.title);
+
+  useEffect(() => {
+    if (!editing) setDraft(subtask.title);
+  }, [editing, subtask.title]);
+
+  function save() {
+    const nextTitle = draft.trim();
+    if (!nextTitle) return;
+    onUpdateSubtask?.(subtask.id, { title: nextTitle });
+    setEditing(false);
+  }
+
+  return (
+    <div className="flex items-center gap-2 rounded border border-white/10 bg-white/[0.025] px-2.5 py-2">
+      <button
+        type="button"
+        onClick={() => onUpdateSubtask?.(subtask.id, { completed: !subtask.completed })}
+        disabled={!onUpdateSubtask}
+        className={cn("grid h-5 w-5 shrink-0 place-items-center rounded border transition", subtask.completed ? "border-emerald-300/45 bg-emerald-400/20 text-emerald-200" : "border-white/15 text-transparent hover:border-amberline/45", !onUpdateSubtask && "cursor-not-allowed opacity-50")}
+        aria-label={subtask.completed ? "Mark subtask incomplete" : "Mark subtask complete"}
+      >
+        <CheckCircle2 className="h-3.5 w-3.5" />
+      </button>
+      {editing ? (
+        <input className="field min-w-0 flex-1 py-1.5 text-xs" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") save(); if (event.key === "Escape") setEditing(false); }} autoFocus />
+      ) : (
+        <p className={cn("min-w-0 flex-1 text-xs text-studio-200", subtask.completed && "text-studio-500 line-through")}>{subtask.title}</p>
+      )}
+      {editing ? (
+        <button type="button" onClick={save} className="rounded border border-white/10 px-2 py-1 text-[11px] font-semibold text-studio-300 hover:text-amberline">Save</button>
+      ) : (
+        <button type="button" onClick={() => setEditing(true)} disabled={!onUpdateSubtask} className="rounded border border-white/10 px-2 py-1 text-[11px] font-semibold text-studio-300 hover:text-amberline disabled:cursor-not-allowed disabled:opacity-40">Edit</button>
+      )}
+      {onDeleteSubtask ? (
+        <button type="button" onClick={() => onDeleteSubtask(subtask.id)} className="rounded border border-rose-400/25 px-2 py-1 text-[11px] font-semibold text-rose-300 hover:border-rose-300/50 hover:text-rose-200">Delete</button>
+      ) : null}
+    </div>
+  );
+}
+
+function TaskSortButton({ label, sortKey, activeSort, onSort, compact = false }: { label: string; sortKey: TaskSortKey; activeSort: { key: TaskSortKey; direction: "asc" | "desc" }; onSort: (key: TaskSortKey) => void; compact?: boolean }) {
+  const active = activeSort.key === sortKey;
+  const directionLabel = sortKey === "manual" ? (activeSort.direction === "asc" ? "1-N" : "N-1") : activeSort.direction === "asc" ? "A-Z" : "Z-A";
+  if (compact) {
+    return (
+      <button type="button" onClick={() => onSort(sortKey)} aria-label={`${label} sort`} title={label} className={cn("inline-flex h-5 w-5 items-center justify-center rounded text-left font-semibold uppercase tracking-[0.12em] transition hover:text-amberline", active && "text-amberline")}>
+        <GripVertical className="h-3.5 w-3.5" />
+      </button>
+    );
+  }
+  return (
+    <button type="button" onClick={() => onSort(sortKey)} className={cn("inline-flex min-w-0 items-center gap-1 text-left font-semibold uppercase tracking-[0.12em] transition hover:text-amberline", active && "text-amberline")}>
+      <span className="truncate">{label}</span>
+      <ArrowUpDown className="h-3 w-3 shrink-0" />
+      {active ? <span className="shrink-0 text-[10px]">{directionLabel}</span> : null}
     </button>
   );
 }
@@ -7315,6 +7915,7 @@ function compareTasks(a: HammerTask, b: HammerTask, sort: { key: TaskSortKey; di
 }
 
 function taskSortValue(task: HammerTask, key: TaskSortKey, users: HammerUser[], projects: HammerProject[]) {
+  if (key === "manual") return task.sortOrder ?? Number.MAX_SAFE_INTEGER;
   if (key === "title") return `${task.title} ${task.description}`;
   if (key === "assignee") return users.find((user) => user.id === task.assignedToId)?.name ?? userName(task.assignedToId);
   if (key === "context") return taskContextLabelFromList(task, projects);
@@ -8365,6 +8966,33 @@ function inferFileType(fileName: string) {
   if (extension === "fdx") return "application/xml";
   if (extension === "md") return "text/markdown";
   return "text/plain";
+}
+
+async function readUploadErrorResponse(response: Response): Promise<DocumentUploadErrorResponse> {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    return await response.json().catch(() => ({ error: "Document upload failed.", detail: `HTTP ${response.status}` }));
+  }
+  const body = await response.text().catch(() => "");
+  const plainBody = body.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  return {
+    error: "Document upload failed before GreenLight could return a structured error.",
+    detail: plainBody || `HTTP ${response.status} ${response.statusText}`,
+    hint: response.status === 413
+      ? "The upload exceeded a proxy or server body-size limit. Check Nginx client_max_body_size and any load balancer limits."
+      : "Check the production Nginx/app logs for this request."
+  };
+}
+
+function formatUploadError(error: DocumentUploadErrorResponse, status: number) {
+  const parts = [
+    error.error || `Document upload failed with HTTP ${status}.`,
+    error.stage ? `Stage: ${error.stage}.` : undefined,
+    error.detail ? `Details: ${error.detail}` : undefined,
+    error.hint ? `Next step: ${error.hint}` : undefined,
+    error.requestId ? `Request ID: ${error.requestId}` : undefined
+  ].filter(Boolean);
+  return parts.join(" ");
 }
 
 function textDownloadUrl(text?: string) {

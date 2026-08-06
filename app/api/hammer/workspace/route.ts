@@ -43,7 +43,11 @@ export async function GET(request: Request) {
       }),
       prisma.supportingDocument.findMany({ where: { deletedAt: null, scriptDocument: documentWhere }, orderBy: { createdAt: "desc" } }),
       prisma.asset.findMany({ where: canSeeLibrary ? { deletedAt: null } : { deletedAt: null, projectId: { in: projectIds } }, orderBy: { updatedAt: "desc" } }),
-      prisma.task.findMany({ where: canViewAllTasks(auth.user.appRole) ? { deletedAt: null } : { deletedAt: null, assignedToId: auth.user.id }, orderBy: { updatedAt: "desc" } }),
+      prisma.task.findMany({
+        where: canViewAllTasks(auth.user.appRole) ? { deletedAt: null } : { deletedAt: null, assignedToId: auth.user.id },
+        include: { subtasks: { where: { deletedAt: null }, orderBy: [{ completed: "asc" }, { createdAt: "asc" }] } },
+        orderBy: [{ sortOrder: "asc" }, { updatedAt: "desc" }]
+      }),
       prisma.contact.findMany({ where: { deletedAt: null }, orderBy: { updatedAt: "desc" } }),
       prisma.contactRelationship.findMany({ orderBy: { createdAt: "desc" } }),
       prisma.user.findMany({ orderBy: { name: "asc" } }),
@@ -319,6 +323,31 @@ export async function POST(request: Request) {
         await prisma.scriptCollectionItem.delete({ where: { id: stringField(body.collectionItemId) } });
         return NextResponse.json({ ok: true });
 
+      case "archiveScriptCollection":
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        return NextResponse.json({ scriptCollection: toScriptCollection(await prisma.scriptCollection.update({
+          where: { id: stringField(body.collectionId) },
+          data: { status: "ARCHIVED" }
+        })) });
+
+      case "deleteScriptCollection":
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        await prisma.scriptCollection.delete({ where: { id: stringField(body.collectionId) } });
+        return NextResponse.json({ ok: true });
+
+      case "reorderScriptCollectionItems": {
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        const itemIds = stringArrayField(body.collectionItemIds);
+        if (!itemIds.length) return NextResponse.json({ ok: true });
+        const items = await prisma.scriptCollectionItem.findMany({ where: { id: { in: itemIds } }, select: { id: true, collectionId: true } });
+        if (items.length !== itemIds.length || new Set(items.map((item) => item.collectionId)).size !== 1) return NextResponse.json({ error: "Collection items must belong to one collection." }, { status: 400 });
+        await prisma.$transaction(itemIds.map((itemId, index) => prisma.scriptCollectionItem.update({
+          where: { id: itemId },
+          data: { sortOrder: index + 1 }
+        })));
+        return NextResponse.json({ ok: true });
+      }
+
       case "createSlateCollection":
         if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
         return NextResponse.json({ slateCollection: toSlateCollection(await prisma.slateCollection.create({
@@ -359,6 +388,31 @@ export async function POST(request: Request) {
         if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
         await prisma.slateCollectionItem.delete({ where: { id: stringField(body.collectionItemId) } });
         return NextResponse.json({ ok: true });
+
+      case "archiveSlateCollection":
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        return NextResponse.json({ slateCollection: toSlateCollection(await prisma.slateCollection.update({
+          where: { id: stringField(body.collectionId) },
+          data: { status: "ARCHIVED" }
+        })) });
+
+      case "deleteSlateCollection":
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        await prisma.slateCollection.delete({ where: { id: stringField(body.collectionId) } });
+        return NextResponse.json({ ok: true });
+
+      case "reorderSlateCollectionItems": {
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        const itemIds = stringArrayField(body.collectionItemIds);
+        if (!itemIds.length) return NextResponse.json({ ok: true });
+        const items = await prisma.slateCollectionItem.findMany({ where: { id: { in: itemIds } }, select: { id: true, collectionId: true } });
+        if (items.length !== itemIds.length || new Set(items.map((item) => item.collectionId)).size !== 1) return NextResponse.json({ error: "Collection items must belong to one collection." }, { status: 400 });
+        await prisma.$transaction(itemIds.map((itemId, index) => prisma.slateCollectionItem.update({
+          where: { id: itemId },
+          data: { sortOrder: index + 1 }
+        })));
+        return NextResponse.json({ ok: true });
+      }
 
       case "assignDocumentToProject":
         if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
@@ -454,7 +508,8 @@ export async function POST(request: Request) {
           }
         })) });
 
-      case "createTask":
+      case "createTask": {
+        const taskCount = await prisma.task.count({ where: { deletedAt: null } });
         return NextResponse.json({ task: toTask(await prisma.task.create({
           data: {
             projectId: optionalString(body.projectId),
@@ -465,10 +520,12 @@ export async function POST(request: Request) {
             dueDate: dateField(body.dueDate),
             priority: priorityField(body.priority),
             status: taskStatusField(body.status),
+            sortOrder: taskCount + 1,
             targetType: taskTargetField(body.targetType),
             targetId: optionalString(body.targetId)
           }
         })) });
+      }
 
       case "updateTask":
         return NextResponse.json({ task: toTask(await prisma.task.update({
@@ -492,6 +549,60 @@ export async function POST(request: Request) {
           where: { id: stringField(body.taskId) },
           data: { deletedAt: new Date() }
         })) });
+
+      case "reorderTasks": {
+        const taskIds = stringArrayField(body.taskIds);
+        if (!taskIds.length) return NextResponse.json({ ok: true });
+        const matchedTasks = await prisma.task.findMany({
+          where: { id: { in: taskIds }, deletedAt: null },
+          select: { id: true, assignedToId: true, createdById: true, deletedAt: true }
+        });
+        if (matchedTasks.length !== taskIds.length || matchedTasks.some((task) => !canAccessTaskRecord(auth.user.appRole, auth.user.id, task))) return NextResponse.json(forbidden(), { status: 403 });
+        await prisma.$transaction(taskIds.map((taskId, index) => prisma.task.update({
+          where: { id: taskId },
+          data: { sortOrder: index + 1 }
+        })));
+        return NextResponse.json({ ok: true });
+      }
+
+      case "createTaskSubtask": {
+        const task = await prisma.task.findUnique({ where: { id: stringField(body.taskId) }, select: { id: true, assignedToId: true, createdById: true, deletedAt: true } });
+        if (!canAccessTaskRecord(auth.user.appRole, auth.user.id, task)) return NextResponse.json(forbidden(), { status: 403 });
+        return NextResponse.json({ subtask: toTaskSubtask(await prisma.taskSubtask.create({
+          data: {
+            taskId: task!.id,
+            title: stringField(body.title) || "Untitled subtask",
+            createdById: auth.user.id
+          }
+        })) }, { status: 201 });
+      }
+
+      case "updateTaskSubtask": {
+        const subtask = await prisma.taskSubtask.findUnique({
+          where: { id: stringField(body.subtaskId) },
+          include: { task: { select: { id: true, assignedToId: true, createdById: true, deletedAt: true } } }
+        });
+        if (!subtask || subtask.deletedAt || !canAccessTaskRecord(auth.user.appRole, auth.user.id, subtask.task)) return NextResponse.json(forbidden(), { status: 403 });
+        return NextResponse.json({ subtask: toTaskSubtask(await prisma.taskSubtask.update({
+          where: { id: subtask.id },
+          data: {
+            title: body.title !== undefined ? stringField(body.title) || "Untitled subtask" : undefined,
+            completed: body.completed !== undefined ? Boolean(body.completed) : undefined
+          }
+        })) });
+      }
+
+      case "deleteTaskSubtask": {
+        const subtask = await prisma.taskSubtask.findUnique({
+          where: { id: stringField(body.subtaskId) },
+          include: { task: { select: { id: true, assignedToId: true, createdById: true, deletedAt: true } } }
+        });
+        if (!subtask || subtask.deletedAt || !canAccessTaskRecord(auth.user.appRole, auth.user.id, subtask.task)) return NextResponse.json(forbidden(), { status: 403 });
+        return NextResponse.json({ subtask: toTaskSubtask(await prisma.taskSubtask.update({
+          where: { id: subtask.id },
+          data: { deletedAt: new Date() }
+        })) });
+      }
 
       case "deleteProject":
         if (auth.user.appRole !== "admin") return NextResponse.json(forbidden(), { status: 403 });
@@ -797,8 +908,12 @@ function toAsset(asset: { id: string; projectId: string; title: string; descript
   return { id: asset.id, projectId: asset.projectId, title: asset.title, description: asset.description ?? "", source: asset.source ?? undefined, assetType: asset.assetType, fileName: asset.fileName, fileType: asset.fileType, fileSize: asset.fileSize, storagePath: asset.storagePath, thumbnailPath: asset.thumbnailPath ?? undefined, status: asset.status, uploadedById: asset.uploadedById ?? "", imageUrl: asset.dataUrl ?? undefined };
 }
 
-function toTask(task: { id: string; projectId: string | null; title: string; description: string | null; assignedToId: string | null; createdById: string | null; dueDate: Date | null; priority: TaskPriority; status: TaskStatus; targetType: TaskTargetType | null; targetId: string | null; createdAt?: Date; updatedAt?: Date }) {
-  return { id: task.id, projectId: task.projectId ?? "", title: task.title, description: task.description ?? "", assignedToId: task.assignedToId ?? "", createdById: task.createdById ?? "", dueDate: task.dueDate ? dateString(task.dueDate) : "", priority: task.priority, status: task.status, targetType: task.targetType ?? "GENERAL", targetId: task.targetId ?? task.projectId ?? "", createdAt: task.createdAt ? dateTimeString(task.createdAt) : undefined, updatedAt: task.updatedAt ? dateTimeString(task.updatedAt) : undefined };
+function toTask(task: { id: string; projectId: string | null; title: string; description: string | null; assignedToId: string | null; createdById: string | null; dueDate: Date | null; priority: TaskPriority; status: TaskStatus; sortOrder?: number; targetType: TaskTargetType | null; targetId: string | null; createdAt?: Date; updatedAt?: Date; subtasks?: Array<{ id: string; taskId: string; title: string; completed: boolean; createdById: string | null; createdAt: Date; updatedAt: Date }> }) {
+  return { id: task.id, projectId: task.projectId ?? "", title: task.title, description: task.description ?? "", assignedToId: task.assignedToId ?? "", createdById: task.createdById ?? "", dueDate: task.dueDate ? dateString(task.dueDate) : "", priority: task.priority, status: task.status, sortOrder: task.sortOrder ?? 0, targetType: task.targetType ?? "GENERAL", targetId: task.targetId ?? task.projectId ?? "", subtasks: task.subtasks?.map(toTaskSubtask) ?? [], createdAt: task.createdAt ? dateTimeString(task.createdAt) : undefined, updatedAt: task.updatedAt ? dateTimeString(task.updatedAt) : undefined };
+}
+
+function toTaskSubtask(subtask: { id: string; taskId: string; title: string; completed: boolean; createdById: string | null; createdAt: Date; updatedAt: Date }) {
+  return { id: subtask.id, taskId: subtask.taskId, title: subtask.title, completed: subtask.completed, createdById: subtask.createdById ?? undefined, createdAt: dateTimeString(subtask.createdAt), updatedAt: dateTimeString(subtask.updatedAt) };
 }
 
 function toContact(contact: { id: string; name: string; company: string | null; type: ContactType; title: string | null; email: string | null; phone: string | null; location: string | null; website: string | null; status: ContactStatus; ownerId: string | null; tags: string[]; lastContacted: Date | null; nextFollowUp: Date | null; projectIds: string[]; notes: string | null }) {
@@ -883,6 +998,11 @@ function canViewAllProjects(role: string) {
 function canViewAllTasks(role: string) {
   const normalizedRole = role.toLowerCase();
   return normalizedRole === "admin" || normalizedRole === "producer" || normalizedRole === "executive" || normalizedRole === "exec";
+}
+
+function canAccessTaskRecord(role: string, userId: string, task?: { assignedToId: string | null; createdById: string | null; deletedAt: Date | null } | null) {
+  if (!task || task.deletedAt) return false;
+  return canViewAllTasks(role) || task.assignedToId === userId || task.createdById === userId;
 }
 
 function canManageProject(role: string, projectRoles: Record<string, string>, projectId: string) {

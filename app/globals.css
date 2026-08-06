@@ -116,6 +116,11 @@ a {
     max-height: min(68vh, calc(100vh - 330px));
   }
 
+  .contacts-list-scroll {
+    max-height: min(74vh, calc(100vh - 250px));
+    min-height: min(64vh, 42rem);
+  }
+
   .data-scroll-list {
     max-height: min(62vh, calc(100vh - 285px));
     overflow: auto;
@@ -141,17 +146,18 @@ a {
   }
 
   .collections-list {
-    max-height: min(24vh, 13rem);
+    max-height: min(20vh, 11rem);
     overscroll-behavior: contain;
   }
 
   .collections-add-list {
-    max-height: min(28vh, 15rem);
+    max-height: min(22vh, 12rem);
     overscroll-behavior: contain;
   }
 
   .collection-review-scroll {
     max-height: none;
+    min-height: min(42vh, 28rem);
   }
 
   @media (max-width: 1279px) {

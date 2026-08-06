@@ -352,15 +352,29 @@ async function main() {
   }
 
   for (const task of hammerTasks) {
+    const { subtasks, ...taskCreate } = task;
     await prisma.task.upsert({
       where: { id: task.id },
       update: { status: task.status, priority: task.priority },
       create: {
-        ...task,
+        ...taskCreate,
         targetType: task.targetType as TaskTargetType,
         dueDate: dateAtNoon(task.dueDate)
       }
     });
+    for (const subtask of subtasks ?? []) {
+      await prisma.taskSubtask.upsert({
+        where: { id: subtask.id },
+        update: { title: subtask.title, completed: subtask.completed },
+        create: {
+          id: subtask.id,
+          taskId: task.id,
+          title: subtask.title,
+          completed: subtask.completed,
+          createdById: subtask.createdById
+        }
+      });
+    }
   }
 
   for (const comment of hammerComments) {
