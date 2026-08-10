@@ -9,8 +9,9 @@ import { pathToFileURL } from "node:url";
 const execFileAsync = promisify(execFile);
 const requireFromHere = createRequire(import.meta.url);
 
-const DEFAULT_OCR_MAX_PAGES = 180;
-const DEFAULT_OCR_DPI = 200;
+const DEFAULT_OCR_MAX_PAGES = 60;
+const DEFAULT_OCR_DPI = 160;
+const DEFAULT_OCR_MAX_BYTES = 35 * 1024 * 1024;
 const MIN_SELECTABLE_TEXT_CHARS = 80;
 
 export interface PdfTextExtractionResult {
@@ -39,6 +40,15 @@ export async function extractPdfTextWithFallback(bytes: Buffer): Promise<PdfText
   }
 
   if (selectable.text.length >= MIN_SELECTABLE_TEXT_CHARS) return selectable;
+
+  const shouldAttemptOcr = canAttemptInlineOcr(bytes, selectable.pageCount);
+  if (!shouldAttemptOcr.allowed) {
+    return {
+      text: selectable.text,
+      pageCount: selectable.pageCount,
+      warning: `${selectable.warning ? `${selectable.warning} ` : ""}Uploaded successfully, but GreenLight skipped inline OCR to keep the upload responsive. ${shouldAttemptOcr.reason}`
+    };
+  }
 
   const ocr = await extractPdfTextWithOcr(bytes, selectable.pageCount);
   if (ocr.text) {
@@ -81,6 +91,16 @@ async function extractSelectablePdfText(bytes: Buffer): Promise<PdfTextExtractio
 }
 
 async function extractPdfTextWithOcr(bytes: Buffer, pageCount?: number): Promise<PdfTextExtractionResult> {
+  const guard = canAttemptInlineOcr(bytes, pageCount);
+  if (!guard.allowed) {
+    return {
+      text: "",
+      pageCount,
+      usedOcr: true,
+      warning: `Uploaded successfully, but GreenLight skipped inline OCR to keep the upload responsive. ${guard.reason}`
+    };
+  }
+
   const tempDir = await mkdtemp(path.join(tmpdir(), "greenlight-ocr-"));
   const inputPath = path.join(tempDir, "input.pdf");
   const outputPrefix = path.join(tempDir, "page");
@@ -91,7 +111,7 @@ async function extractPdfTextWithOcr(bytes: Buffer, pageCount?: number): Promise
   try {
     await writeFile(inputPath, bytes);
     await execFileAsync("pdftoppm", ["-r", String(dpi), "-f", "1", "-l", String(lastPage), "-png", inputPath, outputPrefix], {
-      timeout: 180_000,
+      timeout: positiveIntFromEnv("OCR_RENDER_TIMEOUT_MS", 120_000),
       maxBuffer: 1024 * 1024
     });
 
@@ -103,7 +123,7 @@ async function extractPdfTextWithOcr(bytes: Buffer, pageCount?: number): Promise
     for (const imageName of imageNames) {
       const imagePath = path.join(tempDir, imageName);
       const { stdout } = await execFileAsync("tesseract", [imagePath, "stdout", "-l", "eng", "--psm", "6"], {
-        timeout: 60_000,
+        timeout: positiveIntFromEnv("OCR_PAGE_TIMEOUT_MS", 45_000),
         maxBuffer: 8 * 1024 * 1024
       });
       pages.push(stdout.trim());
@@ -138,6 +158,28 @@ async function extractPdfTextWithOcr(bytes: Buffer, pageCount?: number): Promise
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+}
+
+
+function canAttemptInlineOcr(bytes: Buffer, pageCount?: number) {
+  if (process.env.OCR_INLINE_ENABLED === "false") {
+    return { allowed: false, reason: "Inline OCR is disabled on this server; the original file is stored and can be processed later." };
+  }
+  const maxBytes = positiveIntFromEnv("OCR_MAX_INLINE_BYTES", DEFAULT_OCR_MAX_BYTES);
+  if (bytes.byteLength > maxBytes) {
+    return { allowed: false, reason: `The PDF is ${formatBytes(bytes.byteLength)}, above the inline OCR limit of ${formatBytes(maxBytes)}. The original file is stored; run offline OCR or upload a text-selectable PDF for breakdown/diff.` };
+  }
+  const maxPages = positiveIntFromEnv("OCR_MAX_PAGES", DEFAULT_OCR_MAX_PAGES);
+  if (pageCount && pageCount > maxPages) {
+    return { allowed: false, reason: `The PDF has ${pageCount} pages, above the inline OCR limit of ${maxPages}. The original file is stored; raise OCR_MAX_PAGES or run offline OCR if this script must be parsed immediately.` };
+  }
+  return { allowed: true, reason: "" };
+}
+
+function formatBytes(bytes: number) {
+  if (bytes >= 1024 * 1024) return `${Math.round(bytes / 1024 / 1024)}MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)}KB`;
+  return `${bytes}B`;
 }
 
 function pageIndex(fileName: string) {

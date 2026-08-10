@@ -6,6 +6,8 @@ import { storeUpload } from "@/lib/server-file-storage";
 import { extractPdfTextWithFallback } from "@/lib/server-pdf-text";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 const documentTypes: DocumentType[] = ["SCRIPT", "TREATMENT", "OUTLINE", "NOTES", "COVERAGE", "BUSINESS_DOCUMENT"];
 const MAX_UPLOAD_BYTES = 250 * 1024 * 1024;
@@ -125,15 +127,16 @@ export async function POST(request: Request) {
     }, { status: 201 });
   } catch (error) {
     const detail = uploadErrorMessage(error);
+    const status = uploadErrorStatus(uploadStage, detail);
     const hint = uploadErrorHint(uploadStage, detail);
-    console.error("[document-upload]", { requestId, uploadStage, detail, hint, error });
+    console.error("[document-upload]", { requestId, uploadStage, status, detail, hint, error });
     return NextResponse.json({
       error: "Document upload failed.",
       stage: uploadStage,
       detail,
       hint,
       requestId
-    }, { status: 500 });
+    }, { status });
   }
 }
 
@@ -180,6 +183,16 @@ function combineUploadNotes(notes: string | undefined, warning: string | undefin
 function uploadErrorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   return "Document upload failed.";
+}
+
+function uploadErrorStatus(stage: string, detail: string) {
+  const normalized = detail.toLowerCase();
+  if (stage.includes("form data") || normalized.includes("body exceeded") || normalized.includes("request entity too large") || normalized.includes("413")) return 413;
+  if (normalized.includes("unsupported file type")) return 400;
+  if (normalized.includes("not found") || normalized.includes("no longer exists")) return 404;
+  if (normalized.includes("foreign key") || normalized.includes("constraint") || normalized.includes("unique constraint")) return 409;
+  if (stage.includes("storing") || normalized.includes("gcs") || normalized.includes("bucket") || normalized.includes("credential") || normalized.includes("permission")) return 503;
+  return 500;
 }
 
 function uploadErrorHint(stage: string, detail: string) {
