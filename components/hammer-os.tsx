@@ -4141,31 +4141,27 @@ function Collections({
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <SectionHeader eyebrow="Collections" title="Review Packets" />
           <div className="flex flex-wrap items-center gap-2">
-            <label className="inline-flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300">
+            <div className="inline-flex rounded-md border border-white/10 bg-white/[0.025] p-1">
+              <CollectionModeButton
+                label="Slate Packets"
+                count={visibleSlateCollections.length}
+                detail={`${slateItemCount} item${slateItemCount === 1 ? "" : "s"}`}
+                active={mode === "slate"}
+                onClick={() => setMode("slate")}
+              />
+              <CollectionModeButton
+                label="Script Groups"
+                count={visibleScriptCollections.length}
+                detail={`${scriptItemCount} item${scriptItemCount === 1 ? "" : "s"}`}
+                active={mode === "scripts"}
+                onClick={() => setMode("scripts")}
+              />
+            </div>
+            <label className="inline-flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-2 text-xs font-semibold text-studio-300">
               <input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />
               Show archived
             </label>
-            <div className="inline-flex w-fit rounded-md border border-white/10 bg-white/[0.025] p-1">
-            <button
-              type="button"
-              onClick={() => setMode("slate")}
-              className={cn("rounded px-3 py-1.5 text-xs font-semibold transition", mode === "slate" ? "bg-amberline text-studio-950" : "text-studio-300 hover:text-studio-100")}
-            >
-              Slate Packets
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode("scripts")}
-              className={cn("rounded px-3 py-1.5 text-xs font-semibold transition", mode === "scripts" ? "bg-amberline text-studio-950" : "text-studio-300 hover:text-studio-100")}
-            >
-              Script Groups
-            </button>
-            </div>
           </div>
-        </div>
-        <div className="mt-3 grid gap-2 md:grid-cols-2">
-          <CompactStat label="Slate packets" value={`${visibleSlateCollections.length}`} sub={`${slateItemCount} project/prospect item${slateItemCount === 1 ? "" : "s"}`} active={mode === "slate"} onClick={() => setMode("slate")} />
-          <CompactStat label="Script groups" value={`${visibleScriptCollections.length}`} sub={`${scriptItemCount} script/doc item${scriptItemCount === 1 ? "" : "s"}`} active={mode === "scripts"} onClick={() => setMode("scripts")} />
         </div>
       </Panel>
 
@@ -4180,18 +4176,115 @@ function Collections({
   );
 }
 
-function CompactStat({ label, value, sub, active, onClick }: { label: string; value: string; sub: string; active: boolean; onClick: () => void }) {
+
+type CollectionSearchField = "title" | "writer" | "logline" | "genre";
+const collectionSearchFields: Array<{ value: CollectionSearchField; label: string }> = [
+  { value: "title", label: "Title" },
+  { value: "writer", label: "Writer" },
+  { value: "logline", label: "Logline" },
+  { value: "genre", label: "Genre" }
+];
+
+function CollectionSearchControls({
+  field,
+  term,
+  selectedOptions,
+  options,
+  onFieldChange,
+  onTermChange,
+  onSelectOption,
+  onRemoveOption,
+  placeholder
+}: {
+  field: CollectionSearchField;
+  term: string;
+  selectedOptions: string[];
+  options: string[];
+  onFieldChange: (field: CollectionSearchField) => void;
+  onTermChange: (term: string) => void;
+  onSelectOption: (option: string) => void;
+  onRemoveOption: (option: string) => void;
+  placeholder: string;
+}) {
+  const normalizedTerm = term.trim().toLowerCase();
+  const suggestions = field === "logline" ? [] : options
+    .filter((option) => !selectedOptions.includes(option))
+    .filter((option) => !normalizedTerm || option.toLowerCase().includes(normalizedTerm))
+    .slice(0, 8);
+  return (
+    <div className="grid gap-2">
+      <div className="grid gap-2 sm:grid-cols-[130px_minmax(0,1fr)]">
+        <select className="field" value={field} onChange={(event) => onFieldChange(event.target.value as CollectionSearchField)} aria-label="Search field">
+          {collectionSearchFields.map((searchField) => <option key={searchField.value} value={searchField.value}>{searchField.label}</option>)}
+        </select>
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-studio-400" />
+          <input className="field pl-8" value={term} onChange={(event) => onTermChange(event.target.value)} placeholder={placeholder} />
+        </div>
+      </div>
+      {selectedOptions.length ? (
+        <div className="flex flex-wrap gap-1.5">
+          {selectedOptions.map((option) => (
+            <button key={option} type="button" onClick={() => onRemoveOption(option)} className="inline-flex items-center gap-1 rounded-full border border-amberline/25 bg-amberline/10 px-2 py-1 text-[11px] font-semibold text-amberline" title="Remove filter">
+              {option}
+              <X className="h-3 w-3" />
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {suggestions.length ? (
+        <div className="flex flex-wrap gap-1.5">
+          {suggestions.map((option) => (
+            <button key={option} type="button" onClick={() => onSelectOption(option)} className="rounded-full border border-white/10 bg-white/[0.035] px-2 py-1 text-[11px] font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline">
+              {option}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function collectionOptionValues<T>(items: T[], getter: (item: T) => string | undefined) {
+  return Array.from(new Set(items.map((item) => getter(item)?.trim()).filter((value): value is string => Boolean(value)))).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
+}
+
+function matchesTargetedCollectionSearch(value: string | undefined, term: string, selectedOptions: string[]) {
+  const normalizedValue = (value ?? "").toLowerCase();
+  const normalizedTerm = term.trim().toLowerCase();
+  const matchesTerm = !normalizedTerm || normalizedValue.includes(normalizedTerm);
+  const matchesSelections = !selectedOptions.length || selectedOptions.some((option) => normalizedValue.includes(option.toLowerCase()));
+  return matchesTerm && matchesSelections;
+}
+
+function slateCollectionSearchValue(item: HammerProject | HammerProjectLead, itemType: SlateCollectionItemType, field: CollectionSearchField, users: HammerUser[]) {
+  if (field === "title") return item.title;
+  if (field === "genre") return item.genre ?? "";
+  if (field === "logline") return item.logline ?? "";
+  if (itemType === "PROJECT") return userName((item as HammerProject).ownerId);
+  return prospectOwnerLabel(item as HammerProjectLead, users) || (item as HammerProjectLead).creator || "";
+}
+
+function documentCollectionSearchValue(document: HammerDocument, field: CollectionSearchField, projects: HammerProject[]) {
+  const project = document.projectId ? projects.find((item) => item.id === document.projectId) : undefined;
+  if (field === "title") return document.title;
+  if (field === "writer") return document.writerName ?? userName(document.createdById);
+  if (field === "genre") return project?.genre ?? "";
+  return project?.logline ?? "";
+}
+
+function CollectionModeButton({ label, count, detail, active, onClick }: { label: string; count: number; detail: string; active: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={cn("rounded-md border p-3 text-left transition", active ? "border-amberline/45 bg-amberline/10" : "border-white/10 bg-white/[0.025] hover:border-white/25")}
+      className={cn("rounded px-3 py-1.5 text-left text-xs font-semibold transition", active ? "bg-amberline text-studio-950" : "text-studio-300 hover:text-studio-100")}
     >
-      <div className="flex items-start justify-between gap-3">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">{label}</p>
-        <p className="text-lg font-semibold text-studio-100">{value}</p>
-      </div>
-      <p className="mt-1 text-xs text-studio-400">{sub}</p>
+      <span className="flex items-center gap-2">
+        <span>{label}</span>
+        <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", active ? "bg-studio-950/15 text-studio-950" : "bg-white/[0.06] text-studio-300")}>{count}</span>
+      </span>
+      <span className={cn("mt-0.5 block text-[10px] font-medium", active ? "text-studio-800" : "text-studio-500")}>{detail}</span>
     </button>
   );
 }
@@ -4224,12 +4317,12 @@ function SlateCollections({
   onDeleteCollection: (collectionId: string) => Promise<void>;
 }) {
   const [selectedCollectionId, setSelectedCollectionId] = useState(collections[0]?.id ?? "");
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [visibility, setVisibility] = useState<HammerSlateCollection["visibility"]>("PROJECT_TEAM");
+  const [createOpen, setCreateOpen] = useState(false);
   const [itemType, setItemType] = useState<SlateCollectionItemType>("PROJECT");
   const [itemId, setItemId] = useState("");
+  const [itemSearchField, setItemSearchField] = useState<CollectionSearchField>("title");
   const [itemSearch, setItemSearch] = useState("");
+  const [itemSearchSelections, setItemSearchSelections] = useState<string[]>([]);
   const [itemNotes, setItemNotes] = useState("");
   const [message, setMessage] = useState("");
   const [draggedItemId, setDraggedItemId] = useState("");
@@ -4240,19 +4333,11 @@ function SlateCollections({
   const collectionProspectIds = new Set(collectionItems.map((item) => item.prospectId).filter(Boolean));
   const availableProjects = projects.filter((project) => !collectionProjectIds.has(project.id));
   const availableProspects = prospects.filter((prospect) => !collectionProspectIds.has(prospect.id));
-  const availableItems = itemType === "PROJECT" ? availableProjects : availableProspects;
+  const availableItems: Array<HammerProject | HammerProjectLead> = itemType === "PROJECT" ? availableProjects : availableProspects;
   const selectedItem = availableItems.find((item) => item.id === itemId);
-  const normalizedItemSearch = itemSearch.trim().toLowerCase();
+  const itemSearchOptions = collectionOptionValues(availableItems, (item) => slateCollectionSearchValue(item, itemType, itemSearchField, users));
   const visibleAvailableItems = availableItems
-    .filter((item) => {
-      if (itemType === "PROJECT") {
-        const projectItem = item as HammerProject;
-        return !normalizedItemSearch || `${projectItem.title} ${projectItem.genre} ${projectItem.status} ${projectItem.logline}`.toLowerCase().includes(normalizedItemSearch);
-      }
-      const prospectItem = item as HammerProjectLead;
-      const searchableText = `${prospectItem.title} ${prospectItem.logline} ${prospectItem.creator} ${prospectItem.genre} ${prospectItem.lane} ${prospectItem.rightsStatus} ${prospectItem.nextActionStatus} ${prospectItem.sourceLink} ${prospectItem.platformSource} ${prospectItem.contactRep} ${prospectItem.searchKeywords}`;
-      return !normalizedItemSearch || searchableText.toLowerCase().includes(normalizedItemSearch);
-    })
+    .filter((item) => matchesTargetedCollectionSearch(slateCollectionSearchValue(item, itemType, itemSearchField, users), itemSearch, itemSearchSelections))
     .sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: "base" }));
 
   useEffect(() => {
@@ -4264,16 +4349,9 @@ function SlateCollections({
     if (availableItems.length && !availableItems.some((item) => item.id === itemId)) setItemId("");
   }, [availableItems, itemId]);
 
-  async function submitCollection(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!name.trim()) {
-      setMessage("Collection name is required.");
-      return;
-    }
-    await onCreateCollection({ name, description, visibility });
-    setName("");
-    setDescription("");
-    setVisibility("PROJECT_TEAM");
+  async function createCollection(input: { name: string; description?: string; visibility: HammerSlateCollection["visibility"] }) {
+    await onCreateCollection(input);
+    setCreateOpen(false);
     setMessage("Collection created.");
   }
 
@@ -4286,6 +4364,7 @@ function SlateCollections({
     await onAddItem(selectedCollection.id, itemType, itemId, itemNotes);
     setItemId("");
     setItemSearch("");
+    setItemSearchSelections([]);
     setItemNotes("");
     setMessage(`${itemType === "PROJECT" ? "Development Slate item" : "Prospect"} added to collection.`);
   }
@@ -4322,7 +4401,7 @@ function SlateCollections({
     <div className="collections-grid grid h-full min-h-0 gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
       <div className="collections-column space-y-4">
         <Panel>
-          <SectionHeader eyebrow="Review Packets" title="Slate Collections" />
+          <SectionHeader eyebrow="Review Packets" title="Slate Collections" action={canManage ? <PrimaryButton icon={Plus} label="Create" onClick={() => setCreateOpen(true)} /> : undefined} />
           <div className="collections-list mt-3 grid gap-2 overflow-y-auto pr-0.5">
             {collections.length ? collections.map((collection) => {
               const count = items.filter((item) => item.collectionId === collection.id).length;
@@ -4344,33 +4423,28 @@ function SlateCollections({
           </div>
         </Panel>
 
-        {canManage ? (
-          <Panel>
-            <SectionHeader eyebrow="New" title="Create Slate Collection" />
-            <form onSubmit={submitCollection} className="mt-3 grid gap-2">
-              <input className="field" value={name} onChange={(event) => setName(event.target.value)} placeholder="Collection name" />
-              <textarea className="field min-h-20" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Purpose, review context, meeting, or deadline" />
-              <select className="field" value={visibility} onChange={(event) => setVisibility(event.target.value as HammerSlateCollection["visibility"])}>
-                <option value="PROJECT_TEAM">Project Team</option>
-                <option value="INTERNAL">Internal</option>
-                <option value="EXECUTIVE_ONLY">Executive Only</option>
-              </select>
-              <PrimaryButton icon={Plus} label="Create Collection" />
-            </form>
-            {message ? <p className="mt-2 text-xs text-studio-300">{message}</p> : null}
-          </Panel>
-        ) : null}
+        {message ? <p className="px-1 text-xs text-studio-300">{message}</p> : null}
 
         {selectedCollection && canManage ? (
           <Panel>
             <SectionHeader eyebrow="Add" title="Add Project or Prospect" />
             <form onSubmit={submitItem} className="mt-3 grid gap-3">
-              <select className="field" value={itemType} onChange={(event) => { setItemType(event.target.value as SlateCollectionItemType); setItemId(""); setItemSearch(""); }}>
+              <select className="field" value={itemType} onChange={(event) => { setItemType(event.target.value as SlateCollectionItemType); setItemId(""); setItemSearch(""); setItemSearchSelections([]); }}>
                 <option value="PROJECT">Development Slate</option>
                 <option value="PROSPECT">Prospect</option>
               </select>
               <div>
-                <input className="field" value={itemSearch} onChange={(event) => { setItemSearch(event.target.value); setItemId(""); }} placeholder={`Search ${itemType === "PROJECT" ? "development slate" : "prospects"} by title, writer, genre, status`} />
+                <CollectionSearchControls
+                  field={itemSearchField}
+                  term={itemSearch}
+                  selectedOptions={itemSearchSelections}
+                  options={itemSearchOptions}
+                  onFieldChange={(nextField) => { setItemSearchField(nextField); setItemId(""); setItemSearch(""); setItemSearchSelections([]); }}
+                  onTermChange={(term) => { setItemSearch(term); setItemId(""); }}
+                  onSelectOption={(option) => { setItemSearchSelections((current) => current.includes(option) ? current : [...current, option]); setItemSearch(""); setItemId(""); }}
+                  onRemoveOption={(option) => { setItemSearchSelections((current) => current.filter((item) => item !== option)); setItemId(""); }}
+                  placeholder={`Search ${itemType === "PROJECT" ? "development slate" : "prospects"} ${statusLabel(itemSearchField).toLowerCase()}`}
+                />
                 {selectedItem ? (
                   <p className="mt-1.5 text-xs text-amberline">Selected: {selectedItem.title}</p>
                 ) : null}
@@ -4384,7 +4458,7 @@ function SlateCollections({
                   <button
                     key={item.id}
                     type="button"
-                    onClick={() => { setItemId(item.id); setItemSearch(item.title); }}
+                    onClick={() => { setItemId(item.id); }}
                     className={cn("flex w-full items-start justify-between gap-3 rounded px-2.5 py-2 text-left text-xs transition hover:bg-white/[0.04]", itemId === item.id && "bg-amberline/10 text-amberline")}
                   >
                     <span>
@@ -4408,26 +4482,14 @@ function SlateCollections({
         ) : null}
       </div>
 
-      <div className="collections-detail-column flex min-h-0 flex-col gap-4">
-        <Panel>
+      <div className="collections-detail-column flex min-h-0 flex-col">
+        <Panel className="flex min-h-0 flex-1 flex-col">
           <SectionHeader
-            eyebrow={selectedCollection?.visibility ? statusLabel(selectedCollection.visibility) : "Collection"}
+            eyebrow="Review List"
             title={selectedCollection?.name ?? "Select a Collection"}
             action={selectedCollection ? <CollectionActions collection={selectedCollection} canManage={canManage} onArchive={archiveSelectedCollection} onDelete={deleteSelectedCollection} /> : undefined}
           />
-          {selectedCollection ? (
-            <div className="mt-3 grid gap-3 md:grid-cols-4">
-              <SmallStat label="Items" value={`${collectionItems.length}`} />
-              <SmallStat label="Projects" value={`${collectionItems.filter((item) => item.itemType === "PROJECT").length}`} />
-              <SmallStat label="Prospects" value={`${collectionItems.filter((item) => item.itemType === "PROSPECT").length}`} />
-              <SmallStat label="Updated" value={selectedCollection.updatedAt} />
-            </div>
-          ) : null}
-          {selectedCollection?.description ? <p className="mt-3 text-[13px] leading-6 text-studio-300">{selectedCollection.description}</p> : null}
-        </Panel>
-
-        <Panel className="flex min-h-0 flex-1 flex-col">
-          <SectionHeader eyebrow="Review List" title="Projects and Prospects" />
+          {selectedCollection?.description ? <p className="mt-2 line-clamp-2 text-[13px] leading-5 text-studio-300">{selectedCollection.description}</p> : null}
           {collectionItems.length ? (
             <div className="data-scroll collection-review-scroll min-h-0 flex-1">
               <table className="data-table min-w-[760px]">
@@ -4492,11 +4554,84 @@ function SlateCollections({
           ) : <EmptyState label="No projects or prospects in this collection yet." />}
         </Panel>
       </div>
+      {createOpen ? <CollectionCreateModal title="Create Slate Collection" onClose={() => setCreateOpen(false)} onCreate={createCollection} /> : null}
     </div>
   );
 }
 
 
+
+
+function CollectionCreateModal({
+  title,
+  onClose,
+  onCreate
+}: {
+  title: string;
+  onClose: () => void;
+  onCreate: (input: { name: string; description?: string; visibility: "PROJECT_TEAM" | "INTERNAL" | "EXECUTIVE_ONLY" }) => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [visibility, setVisibility] = useState<"PROJECT_TEAM" | "INTERNAL" | "EXECUTIVE_ONLY">("PROJECT_TEAM");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!name.trim()) {
+      setError("Collection name is required.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await onCreate({ name: name.trim(), description: description.trim() || undefined, visibility });
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : "Could not create collection.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
+      <form onSubmit={submit} className="mt-16 w-full max-w-lg rounded-xl border border-white/10 bg-studio-950 p-4 shadow-2xl">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <SectionHeader eyebrow="Collections" title={title} />
+          <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close create collection">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="grid gap-3">
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Name</span>
+            <input className="field" value={name} disabled={busy} onChange={(event) => setName(event.target.value)} placeholder="Collection name" autoFocus />
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Description</span>
+            <textarea className="field min-h-28" value={description} disabled={busy} onChange={(event) => setDescription(event.target.value)} placeholder="Purpose, review context, meeting, or deadline" />
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Visibility</span>
+            <select className="field" value={visibility} disabled={busy} onChange={(event) => setVisibility(event.target.value as "PROJECT_TEAM" | "INTERNAL" | "EXECUTIVE_ONLY")}>
+              <option value="PROJECT_TEAM">Project Team</option>
+              <option value="INTERNAL">Internal</option>
+              <option value="EXECUTIVE_ONLY">Executive Only</option>
+            </select>
+          </label>
+        </div>
+        {error ? <p className="mt-3 rounded-md border border-rose-300/25 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">{error}</p> : null}
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" onClick={onClose} disabled={busy} className="rounded-md border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 transition hover:border-white/20 hover:text-studio-100 disabled:cursor-not-allowed disabled:opacity-50">Cancel</button>
+          <button type="submit" disabled={busy} className="inline-flex items-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            Create Collection
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
 
 function CollectionRemoveButton({ label, itemName, itemKind, onRemove }: { label: string; itemName: string; itemKind: "script" | "item"; onRemove: () => void }) {
   function confirmRemove() {
@@ -4570,11 +4705,12 @@ function ScriptCollections({
   onDeleteCollection: (collectionId: string) => Promise<void>;
 }) {
   const [selectedCollectionId, setSelectedCollectionId] = useState(collections[0]?.id ?? "");
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [visibility, setVisibility] = useState<HammerScriptCollection["visibility"]>("PROJECT_TEAM");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [addDocumentOpen, setAddDocumentOpen] = useState(false);
   const [documentId, setDocumentId] = useState("");
+  const [documentSearchField, setDocumentSearchField] = useState<CollectionSearchField>("title");
   const [documentSearch, setDocumentSearch] = useState("");
+  const [documentSearchSelections, setDocumentSearchSelections] = useState<string[]>([]);
   const [itemNotes, setItemNotes] = useState("");
   const [message, setMessage] = useState("");
   const [draggedItemId, setDraggedItemId] = useState("");
@@ -4585,44 +4721,36 @@ function ScriptCollections({
   const scriptDocuments = documents.filter((document) => ["SCRIPT", "TREATMENT", "OUTLINE", "NOTES", "COVERAGE", "BUSINESS_DOCUMENT"].includes(document.type));
   const availableDocuments = scriptDocuments.filter((document) => !collectionDocumentIds.has(document.id));
   const selectedDocument = availableDocuments.find((document) => document.id === documentId);
-  const normalizedDocumentSearch = documentSearch.trim().toLowerCase();
+  const documentSearchOptions = collectionOptionValues(availableDocuments, (document) => documentCollectionSearchValue(document, documentSearchField, projects));
   const visibleAvailableDocuments = availableDocuments
-    .filter((document) => {
-      const version = currentVersionFor(document.id, documents, versions);
-      const searchableText = `${document.title} ${document.writerName} ${document.type} ${document.projectId ? projectTitleFromList(document.projectId, projects) : "Inbox"} ${version?.status ?? ""}`;
-      return !normalizedDocumentSearch || searchableText.toLowerCase().includes(normalizedDocumentSearch);
-    })
-    .slice(0, 25);
+    .filter((document) => matchesTargetedCollectionSearch(documentCollectionSearchValue(document, documentSearchField, projects), documentSearch, documentSearchSelections))
+    .sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: "base" }))
+    .slice(0, 50);
 
   useEffect(() => {
     if (!selectedCollectionId && collections[0]) setSelectedCollectionId(collections[0].id);
     if (selectedCollectionId && !collections.some((collection) => collection.id === selectedCollectionId)) setSelectedCollectionId(collections[0]?.id ?? "");
   }, [collections, selectedCollectionId]);
 
-  async function submitCollection(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!name.trim()) {
-      setMessage("Collection name is required.");
-      return;
-    }
-    await onCreateCollection({ name, description, visibility });
-    setName("");
-    setDescription("");
-    setVisibility("PROJECT_TEAM");
+  async function createCollection(input: { name: string; description?: string; visibility: HammerScriptCollection["visibility"] }) {
+    await onCreateCollection(input);
+    setCreateOpen(false);
     setMessage("Collection created.");
   }
 
   async function submitDocument(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedCollection || !documentId) {
-      setMessage("Choose a collection and script first.");
+      setMessage("Choose a collection and document first.");
       return;
     }
     await onAddDocument(selectedCollection.id, documentId, itemNotes);
     setDocumentId("");
     setDocumentSearch("");
+    setDocumentSearchSelections([]);
     setItemNotes("");
-    setMessage("Script added to collection.");
+    setAddDocumentOpen(false);
+    setMessage("Document added to collection.");
   }
 
   async function dropReviewItem(targetItemId: string) {
@@ -4657,7 +4785,7 @@ function ScriptCollections({
     <div className="collections-grid grid h-full min-h-0 gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
       <div className="collections-column space-y-4">
         <Panel>
-          <SectionHeader eyebrow="Review Groups" title="Collections" />
+          <SectionHeader eyebrow="Review Groups" title="Collections" action={canManage ? <PrimaryButton icon={Plus} label="Create" onClick={() => setCreateOpen(true)} /> : undefined} />
           <div className="collections-list mt-3 grid gap-2 overflow-y-auto pr-0.5">
             {collections.length ? collections.map((collection) => {
               const count = items.filter((item) => item.collectionId === collection.id).length;
@@ -4679,79 +4807,28 @@ function ScriptCollections({
           </div>
         </Panel>
 
-        {canManage ? (
-          <Panel>
-            <SectionHeader eyebrow="New" title="Create Collection" />
-            <form onSubmit={submitCollection} className="mt-3 grid gap-2">
-              <input className="field" value={name} onChange={(event) => setName(event.target.value)} placeholder="Collection name" />
-              <textarea className="field min-h-20" value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Purpose, review context, or deadline" />
-              <select className="field" value={visibility} onChange={(event) => setVisibility(event.target.value as HammerScriptCollection["visibility"])}>
-                <option value="PROJECT_TEAM">Project Team</option>
-                <option value="INTERNAL">Internal</option>
-                <option value="EXECUTIVE_ONLY">Executive Only</option>
-              </select>
-              <PrimaryButton icon={Plus} label="Create Collection" />
-            </form>
-            {message ? <p className="mt-2 text-xs text-studio-300">{message}</p> : null}
-          </Panel>
-        ) : null}
+        {message ? <p className="px-1 text-xs text-studio-300">{message}</p> : null}
 
-        {selectedCollection && canManage ? (
-          <Panel>
-            <SectionHeader eyebrow="Add" title="Add Script to Collection" />
-            <form onSubmit={submitDocument} className="mt-3 grid gap-3">
-              <div>
-                <input className="field" value={documentSearch} onChange={(event) => { setDocumentSearch(event.target.value); setDocumentId(""); }} placeholder="Search scripts by title, writer, project, status" />
-                {selectedDocument ? <p className="mt-1.5 text-xs text-amberline">Selected: {selectedDocument.title}</p> : null}
-              </div>
-              <input className="field" value={itemNotes} onChange={(event) => setItemNotes(event.target.value)} placeholder="Optional collection note" />
-              <div className="collections-add-list overflow-y-auto rounded-md border border-white/10 bg-white/[0.02] p-1.5">
-                {visibleAvailableDocuments.length ? visibleAvailableDocuments.map((document) => {
-                  const version = currentVersionFor(document.id, documents, versions);
-                  return (
-                    <button
-                      key={document.id}
-                      type="button"
-                      onClick={() => { setDocumentId(document.id); setDocumentSearch(document.title); }}
-                      className={cn("flex w-full items-start justify-between gap-3 rounded px-2.5 py-2 text-left text-xs transition hover:bg-white/[0.04]", documentId === document.id && "bg-amberline/10 text-amberline")}
-                    >
-                      <span>
-                        <span className="block font-semibold text-studio-100">{document.title}</span>
-                        <span className="mt-0.5 block text-studio-400">{document.writerName || "No writer"} / {document.projectId ? projectTitleFromList(document.projectId, projects) : "Inbox"} / {statusLabel(version?.status ?? "DRAFT")}</span>
-                      </span>
-                      {documentId === document.id ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amberline" /> : null}
-                    </button>
-                  );
-                }) : <p className="px-2.5 py-3 text-xs text-studio-400">No available scripts match that search.</p>}
-              </div>
-              <button type="submit" disabled={!documentId} className="inline-flex items-center justify-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-xs font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-40">
-                <Plus className="h-3.5 w-3.5" />
-                Add
-              </button>
-            </form>
-          </Panel>
-        ) : null}
       </div>
 
-      <div className="collections-detail-column flex min-h-0 flex-col gap-4">
-        <Panel>
-          <SectionHeader
-            eyebrow={selectedCollection?.visibility ? statusLabel(selectedCollection.visibility) : "Collection"}
-            title={selectedCollection?.name ?? "Select a Collection"}
-            action={selectedCollection ? <CollectionActions collection={selectedCollection} canManage={canManage} onArchive={archiveSelectedCollection} onDelete={deleteSelectedCollection} /> : undefined}
-          />
-          {selectedCollection ? (
-            <div className="mt-3 grid gap-3 md:grid-cols-3">
-              <SmallStat label="Scripts" value={`${collectionItems.length}`} />
-              <SmallStat label="Owner" value={selectedCollection.ownerId ? userName(selectedCollection.ownerId) : "Unassigned"} />
-              <SmallStat label="Updated" value={selectedCollection.updatedAt} />
-            </div>
-          ) : null}
-          {selectedCollection?.description ? <p className="mt-3 text-[13px] leading-6 text-studio-300">{selectedCollection.description}</p> : null}
-        </Panel>
-
+      <div className="collections-detail-column flex min-h-0 flex-col">
         <Panel className="flex min-h-0 flex-1 flex-col">
-          <SectionHeader eyebrow="Review List" title="Scripts in Collection" />
+          <SectionHeader
+            eyebrow="Review List"
+            title={selectedCollection?.name ?? "Select a Collection"}
+            action={selectedCollection ? (
+              <div className="flex flex-wrap items-center gap-1.5">
+                {canManage ? (
+                  <button type="button" onClick={() => setAddDocumentOpen(true)} className="inline-flex items-center gap-1 rounded border border-amberline/35 bg-amberline/10 px-2 py-1 text-[11px] font-semibold text-amberline transition hover:bg-amberline hover:text-studio-950">
+                    <Plus className="h-3 w-3" />
+                    Add Documents
+                  </button>
+                ) : null}
+                <CollectionActions collection={selectedCollection} canManage={canManage} onArchive={archiveSelectedCollection} onDelete={deleteSelectedCollection} />
+              </div>
+            ) : undefined}
+          />
+          {selectedCollection?.description ? <p className="mt-2 line-clamp-2 text-[13px] leading-5 text-studio-300">{selectedCollection.description}</p> : null}
           {collectionItems.length ? (
             <div className="data-scroll collection-review-scroll min-h-0 flex-1">
               <table className="data-table min-w-[760px]">
@@ -4811,6 +4888,131 @@ function ScriptCollections({
           ) : <EmptyState label="No scripts in this collection yet." />}
         </Panel>
       </div>
+      {createOpen ? <CollectionCreateModal title="Create Collection" onClose={() => setCreateOpen(false)} onCreate={createCollection} /> : null}
+      {addDocumentOpen && selectedCollection ? (
+        <CollectionDocumentAddModal
+          collectionName={selectedCollection.name}
+          documentId={documentId}
+          documentSearchField={documentSearchField}
+          documentSearch={documentSearch}
+          documentSearchSelections={documentSearchSelections}
+          itemNotes={itemNotes}
+          selectedDocument={selectedDocument}
+          visibleDocuments={visibleAvailableDocuments}
+          documentSearchOptions={documentSearchOptions}
+          documents={documents}
+          versions={versions}
+          projects={projects}
+          onClose={() => setAddDocumentOpen(false)}
+          onSubmit={submitDocument}
+          onDocumentIdChange={setDocumentId}
+          onSearchFieldChange={(nextField) => { setDocumentSearchField(nextField); setDocumentId(""); setDocumentSearch(""); setDocumentSearchSelections([]); }}
+          onSearchChange={(term) => { setDocumentSearch(term); setDocumentId(""); }}
+          onSelectSearchOption={(option) => { setDocumentSearchSelections((current) => current.includes(option) ? current : [...current, option]); setDocumentSearch(""); setDocumentId(""); }}
+          onRemoveSearchOption={(option) => { setDocumentSearchSelections((current) => current.filter((item) => item !== option)); setDocumentId(""); }}
+          onNotesChange={setItemNotes}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+
+function CollectionDocumentAddModal({
+  collectionName,
+  documentId,
+  documentSearchField,
+  documentSearch,
+  documentSearchSelections,
+  itemNotes,
+  selectedDocument,
+  visibleDocuments,
+  documentSearchOptions,
+  documents,
+  versions,
+  projects,
+  onClose,
+  onSubmit,
+  onDocumentIdChange,
+  onSearchFieldChange,
+  onSearchChange,
+  onSelectSearchOption,
+  onRemoveSearchOption,
+  onNotesChange
+}: {
+  collectionName: string;
+  documentId: string;
+  documentSearchField: CollectionSearchField;
+  documentSearch: string;
+  documentSearchSelections: string[];
+  itemNotes: string;
+  selectedDocument?: HammerDocument;
+  visibleDocuments: HammerDocument[];
+  documentSearchOptions: string[];
+  documents: HammerDocument[];
+  versions: HammerDocumentVersion[];
+  projects: HammerProject[];
+  onClose: () => void;
+  onSubmit: (event: React.FormEvent<HTMLFormElement>) => Promise<void>;
+  onDocumentIdChange: (documentId: string) => void;
+  onSearchFieldChange: (field: CollectionSearchField) => void;
+  onSearchChange: (term: string) => void;
+  onSelectSearchOption: (option: string) => void;
+  onRemoveSearchOption: (option: string) => void;
+  onNotesChange: (notes: string) => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
+      <form onSubmit={onSubmit} className="mt-10 flex max-h-[88vh] w-full max-w-3xl flex-col rounded-xl border border-white/10 bg-studio-950 p-4 shadow-2xl">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <SectionHeader eyebrow="Review List" title="Add Documents" />
+          <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close add documents">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <p className="mb-3 text-xs leading-5 text-studio-400">Add scripts, treatments, coverage, notes, or business documents to {collectionName}.</p>
+        <div className="grid min-h-0 gap-3">
+          <CollectionSearchControls
+            field={documentSearchField}
+            term={documentSearch}
+            selectedOptions={documentSearchSelections}
+            options={documentSearchOptions}
+            onFieldChange={onSearchFieldChange}
+            onTermChange={onSearchChange}
+            onSelectOption={onSelectSearchOption}
+            onRemoveOption={onRemoveSearchOption}
+            placeholder={`Search documents by ${statusLabel(documentSearchField).toLowerCase()}`}
+          />
+          {selectedDocument ? <p className="text-xs text-amberline">Selected: {selectedDocument.title}</p> : null}
+          <input className="field" value={itemNotes} onChange={(event) => onNotesChange(event.target.value)} placeholder="Optional collection note" />
+          <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-white/10 bg-white/[0.02] p-1.5">
+            {visibleDocuments.length ? visibleDocuments.map((document) => {
+              const version = currentVersionFor(document.id, documents, versions);
+              return (
+                <button
+                  key={document.id}
+                  type="button"
+                  onClick={() => onDocumentIdChange(document.id)}
+                  className={cn("flex w-full items-start justify-between gap-3 rounded px-2.5 py-2 text-left text-xs transition hover:bg-white/[0.04]", documentId === document.id && "bg-amberline/10 text-amberline")}
+                >
+                  <span>
+                    <span className="block font-semibold text-studio-100">{document.title}</span>
+                    <span className="mt-0.5 block text-studio-400">{statusLabel(document.type)} / {document.writerName || "No writer"} / {document.projectId ? projectTitleFromList(document.projectId, projects) : "Inbox"} / {statusLabel(version?.status ?? "DRAFT")}</span>
+                  </span>
+                  {documentId === document.id ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amberline" /> : null}
+                </button>
+              );
+            }) : <p className="px-2.5 py-3 text-xs text-studio-400">No available documents match that search.</p>}
+          </div>
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded-md border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 transition hover:border-white/20 hover:text-studio-100">Cancel</button>
+          <button type="submit" disabled={!documentId} className="inline-flex items-center justify-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-40">
+            <Plus className="h-4 w-4" />
+            Add Document
+          </button>
+        </div>
+      </form>
     </div>
   );
 }

@@ -155,9 +155,10 @@ a {
     overscroll-behavior: contain;
   }
 
+
   .collection-review-scroll {
     max-height: none;
-    min-height: min(42vh, 28rem);
+    min-height: min(52vh, 34rem);
   }
 
   @media (max-width: 1279px) {
