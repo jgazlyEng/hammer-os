@@ -4318,6 +4318,7 @@ function SlateCollections({
 }) {
   const [selectedCollectionId, setSelectedCollectionId] = useState(collections[0]?.id ?? "");
   const [createOpen, setCreateOpen] = useState(false);
+  const [addItemOpen, setAddItemOpen] = useState(false);
   const [itemType, setItemType] = useState<SlateCollectionItemType>("PROJECT");
   const [itemId, setItemId] = useState("");
   const [itemSearchField, setItemSearchField] = useState<CollectionSearchField>("title");
@@ -4366,6 +4367,7 @@ function SlateCollections({
     setItemSearch("");
     setItemSearchSelections([]);
     setItemNotes("");
+    setAddItemOpen(false);
     setMessage(`${itemType === "PROJECT" ? "Development Slate item" : "Prospect"} added to collection.`);
   }
 
@@ -4425,61 +4427,6 @@ function SlateCollections({
 
         {message ? <p className="px-1 text-xs text-studio-300">{message}</p> : null}
 
-        {selectedCollection && canManage ? (
-          <Panel>
-            <SectionHeader eyebrow="Add" title="Add Project or Prospect" />
-            <form onSubmit={submitItem} className="mt-3 grid gap-3">
-              <select className="field" value={itemType} onChange={(event) => { setItemType(event.target.value as SlateCollectionItemType); setItemId(""); setItemSearch(""); setItemSearchSelections([]); }}>
-                <option value="PROJECT">Development Slate</option>
-                <option value="PROSPECT">Prospect</option>
-              </select>
-              <div>
-                <CollectionSearchControls
-                  field={itemSearchField}
-                  term={itemSearch}
-                  selectedOptions={itemSearchSelections}
-                  options={itemSearchOptions}
-                  onFieldChange={(nextField) => { setItemSearchField(nextField); setItemId(""); setItemSearch(""); setItemSearchSelections([]); }}
-                  onTermChange={(term) => { setItemSearch(term); setItemId(""); }}
-                  onSelectOption={(option) => { setItemSearchSelections((current) => current.includes(option) ? current : [...current, option]); setItemSearch(""); setItemId(""); }}
-                  onRemoveOption={(option) => { setItemSearchSelections((current) => current.filter((item) => item !== option)); setItemId(""); }}
-                  placeholder={`Search ${itemType === "PROJECT" ? "development slate" : "prospects"} ${statusLabel(itemSearchField).toLowerCase()}`}
-                />
-                {selectedItem ? (
-                  <p className="mt-1.5 text-xs text-amberline">Selected: {selectedItem.title}</p>
-                ) : null}
-              </div>
-              <input className="field" value={itemNotes} onChange={(event) => setItemNotes(event.target.value)} placeholder="Optional collection note" />
-              <p className="text-xs text-studio-400">
-                Showing {visibleAvailableItems.length} available {itemType === "PROJECT" ? "development slate item" : "prospect"}{visibleAvailableItems.length === 1 ? "" : "s"}.
-              </p>
-              <div className="collections-add-list overflow-y-auto rounded-md border border-white/10 bg-white/[0.02] p-1.5">
-                {visibleAvailableItems.length ? visibleAvailableItems.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => { setItemId(item.id); }}
-                    className={cn("flex w-full items-start justify-between gap-3 rounded px-2.5 py-2 text-left text-xs transition hover:bg-white/[0.04]", itemId === item.id && "bg-amberline/10 text-amberline")}
-                  >
-                    <span>
-                      <span className="block font-semibold text-studio-100">{item.title}</span>
-                      <span className="mt-0.5 block text-studio-400">
-                        {itemType === "PROJECT"
-                          ? `${(item as HammerProject).genre || "No genre"} / ${(item as HammerProject).status || "No status"}`
-                          : `${(item as HammerProjectLead).creator || "No writer"} / ${(item as HammerProjectLead).genre || "No genre"}`}
-                      </span>
-                    </span>
-                    {itemId === item.id ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amberline" /> : null}
-                  </button>
-                )) : <p className="px-2.5 py-3 text-xs text-studio-400">No available {itemType === "PROJECT" ? "development slate items" : "prospects"} match that search, or every matching item is already in this collection.</p>}
-              </div>
-              <button type="submit" disabled={!itemId} className="inline-flex items-center justify-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-xs font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-40">
-                <Plus className="h-3.5 w-3.5" />
-                Add
-              </button>
-            </form>
-          </Panel>
-        ) : null}
       </div>
 
       <div className="collections-detail-column flex min-h-0 flex-col">
@@ -4487,7 +4434,17 @@ function SlateCollections({
           <SectionHeader
             eyebrow="Review List"
             title={selectedCollection?.name ?? "Select a Collection"}
-            action={selectedCollection ? <CollectionActions collection={selectedCollection} canManage={canManage} onArchive={archiveSelectedCollection} onDelete={deleteSelectedCollection} /> : undefined}
+            action={selectedCollection ? (
+              <div className="flex flex-wrap items-center gap-1.5">
+                {canManage ? (
+                  <button type="button" onClick={() => setAddItemOpen(true)} className="inline-flex items-center gap-1 rounded border border-amberline/35 bg-amberline/10 px-2 py-1 text-[11px] font-semibold text-amberline transition hover:bg-amberline hover:text-studio-950">
+                    <Plus className="h-3 w-3" />
+                    Add Items
+                  </button>
+                ) : null}
+                <CollectionActions collection={selectedCollection} canManage={canManage} onArchive={archiveSelectedCollection} onDelete={deleteSelectedCollection} />
+              </div>
+            ) : undefined}
           />
           {selectedCollection?.description ? <p className="mt-2 line-clamp-2 text-[13px] leading-5 text-studio-300">{selectedCollection.description}</p> : null}
           {collectionItems.length ? (
@@ -4555,12 +4512,139 @@ function SlateCollections({
         </Panel>
       </div>
       {createOpen ? <CollectionCreateModal title="Create Slate Collection" onClose={() => setCreateOpen(false)} onCreate={createCollection} /> : null}
+      {addItemOpen && selectedCollection ? (
+        <CollectionSlateItemAddModal
+          collectionName={selectedCollection.name}
+          itemType={itemType}
+          itemId={itemId}
+          itemSearchField={itemSearchField}
+          itemSearch={itemSearch}
+          itemSearchSelections={itemSearchSelections}
+          itemNotes={itemNotes}
+          selectedItem={selectedItem}
+          visibleItems={visibleAvailableItems}
+          itemSearchOptions={itemSearchOptions}
+          onClose={() => setAddItemOpen(false)}
+          onSubmit={submitItem}
+          onItemTypeChange={(nextType) => { setItemType(nextType); setItemId(""); setItemSearch(""); setItemSearchSelections([]); }}
+          onItemIdChange={setItemId}
+          onSearchFieldChange={(nextField) => { setItemSearchField(nextField); setItemId(""); setItemSearch(""); setItemSearchSelections([]); }}
+          onSearchChange={(term) => { setItemSearch(term); setItemId(""); }}
+          onSelectSearchOption={(option) => { setItemSearchSelections((current) => current.includes(option) ? current : [...current, option]); setItemSearch(""); setItemId(""); }}
+          onRemoveSearchOption={(option) => { setItemSearchSelections((current) => current.filter((item) => item !== option)); setItemId(""); }}
+          onNotesChange={setItemNotes}
+        />
+      ) : null}
     </div>
   );
 }
 
 
 
+
+
+function CollectionSlateItemAddModal({
+  collectionName,
+  itemType,
+  itemId,
+  itemSearchField,
+  itemSearch,
+  itemSearchSelections,
+  itemNotes,
+  selectedItem,
+  visibleItems,
+  itemSearchOptions,
+  onClose,
+  onSubmit,
+  onItemTypeChange,
+  onItemIdChange,
+  onSearchFieldChange,
+  onSearchChange,
+  onSelectSearchOption,
+  onRemoveSearchOption,
+  onNotesChange
+}: {
+  collectionName: string;
+  itemType: SlateCollectionItemType;
+  itemId: string;
+  itemSearchField: CollectionSearchField;
+  itemSearch: string;
+  itemSearchSelections: string[];
+  itemNotes: string;
+  selectedItem?: HammerProject | HammerProjectLead;
+  visibleItems: Array<HammerProject | HammerProjectLead>;
+  itemSearchOptions: string[];
+  onClose: () => void;
+  onSubmit: (event: React.FormEvent<HTMLFormElement>) => Promise<void>;
+  onItemTypeChange: (itemType: SlateCollectionItemType) => void;
+  onItemIdChange: (itemId: string) => void;
+  onSearchFieldChange: (field: CollectionSearchField) => void;
+  onSearchChange: (term: string) => void;
+  onSelectSearchOption: (option: string) => void;
+  onRemoveSearchOption: (option: string) => void;
+  onNotesChange: (notes: string) => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
+      <form onSubmit={onSubmit} className="mt-10 flex max-h-[88vh] w-full max-w-3xl flex-col rounded-xl border border-white/10 bg-studio-950 p-4 shadow-2xl">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <SectionHeader eyebrow="Review List" title="Add Items" />
+          <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close add items">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <p className="mb-3 text-xs leading-5 text-studio-400">Add Development Slate items or Prospects to {collectionName}.</p>
+        <div className="grid min-h-0 gap-3">
+          <select className="field" value={itemType} onChange={(event) => onItemTypeChange(event.target.value as SlateCollectionItemType)}>
+            <option value="PROJECT">Development Slate</option>
+            <option value="PROSPECT">Prospect</option>
+          </select>
+          <CollectionSearchControls
+            field={itemSearchField}
+            term={itemSearch}
+            selectedOptions={itemSearchSelections}
+            options={itemSearchOptions}
+            onFieldChange={onSearchFieldChange}
+            onTermChange={onSearchChange}
+            onSelectOption={onSelectSearchOption}
+            onRemoveOption={onRemoveSearchOption}
+            placeholder={`Search ${itemType === "PROJECT" ? "development slate" : "prospects"} ${statusLabel(itemSearchField).toLowerCase()}`}
+          />
+          {selectedItem ? <p className="text-xs text-amberline">Selected: {selectedItem.title}</p> : null}
+          <input className="field" value={itemNotes} onChange={(event) => onNotesChange(event.target.value)} placeholder="Optional collection note" />
+          <p className="text-xs text-studio-400">Showing {visibleItems.length} available {itemType === "PROJECT" ? "development slate item" : "prospect"}{visibleItems.length === 1 ? "" : "s"}.</p>
+          <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-white/10 bg-white/[0.02] p-1.5">
+            {visibleItems.length ? visibleItems.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => onItemIdChange(item.id)}
+                className={cn("flex w-full items-start justify-between gap-3 rounded px-2.5 py-2 text-left text-xs transition hover:bg-white/[0.04]", itemId === item.id && "bg-amberline/10 text-amberline")}
+              >
+                <span>
+                  <span className="block font-semibold text-studio-100">{item.title}</span>
+                  <span className="mt-0.5 block text-studio-400">
+                    {itemType === "PROJECT"
+                      ? `${(item as HammerProject).genre || "No genre"} / ${(item as HammerProject).status || "No status"}`
+                      : `${(item as HammerProjectLead).creator || "No writer"} / ${(item as HammerProjectLead).genre || "No genre"}`}
+                  </span>
+                </span>
+                {itemId === item.id ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amberline" /> : null}
+              </button>
+            )) : <p className="px-2.5 py-3 text-xs text-studio-400">No available {itemType === "PROJECT" ? "development slate items" : "prospects"} match that search, or every matching item is already in this collection.</p>}
+          </div>
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded-md border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 transition hover:border-white/20 hover:text-studio-100">Cancel</button>
+          <button type="submit" disabled={!itemId} className="inline-flex items-center justify-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-40">
+            <Plus className="h-4 w-4" />
+            Add Item
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
 
 function CollectionCreateModal({
   title,
