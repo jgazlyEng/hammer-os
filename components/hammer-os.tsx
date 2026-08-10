@@ -1672,12 +1672,12 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       return <ProjectEditor users={users} currentUser={currentUser} onCreate={addProject} />;
     }
     if (["project-detail", "project-documents", "project-assets"].includes(view) && !projects.length) return <EmptyWorkspaceState />;
-    if (view === "project-detail") return <ProjectWorkspace project={project} activeTab="overview" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpdateProject={canManageScriptLibrary(currentUser.role) ? updateProject : undefined} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
-    if (view === "project-documents") return <ProjectWorkspace project={project} activeTab="documents" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpdateProject={canManageScriptLibrary(currentUser.role) ? updateProject : undefined} onUpload={uploadDocumentVersion} onDelete={deleteUploadedDocument} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
+    if (view === "project-detail") return <ProjectWorkspace project={project} activeTab="overview" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpdateProject={canManageScriptLibrary(currentUser.role) ? updateProject : undefined} onUpload={uploadDocumentVersion} onDelete={canManageScriptLibrary(currentUser.role) ? deleteUploadedDocument : undefined} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
+    if (view === "project-documents") return <ProjectWorkspace project={project} activeTab="documents" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpdateProject={canManageScriptLibrary(currentUser.role) ? updateProject : undefined} onUpload={uploadDocumentVersion} onDelete={canManageScriptLibrary(currentUser.role) ? deleteUploadedDocument : undefined} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
     if (view === "project-assets") return <ProjectWorkspace project={project} activeTab="assets" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpdateProject={canManageScriptLibrary(currentUser.role) ? updateProject : undefined} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
     if (view === "scripts") return <LegacyRedirect title="Scripts now live inside the slate" detail="Script tracking is most useful in context. Open a Development Slate item for active project scripts and supporting documents, or use Prospects for materials the team may want to pursue." href="/projects" label="Open Development Slate" />;
     if (["script-detail", "script-versions", "script-diff", "script-breakdown"].includes(view) && !documents.some((item) => item.id === document.id)) return <EmptyScriptState />;
-    if (view === "script-detail") return <ScriptDetail documentId={document.id} documents={documents} versions={versions} comments={comments} currentUser={currentUser} supportingDocuments={supportingDocuments} onUpload={uploadDocumentVersion} onSupportingUpload={uploadSupportingDocument} onSupportingDelete={deleteSupportingDocument} onStatusChange={updateDocumentStatus} onUpdateVersionNotes={canManageScriptLibrary(currentUser.role) ? updateDocumentVersionNotes : undefined} onUpdateVersionMarkdown={canAccessScriptDocument(currentUser, document) ? updateDocumentVersionMarkdown : undefined} onCreateComment={createComment} onUpdateMetadata={canAccessScriptDocument(currentUser, document) ? updateDocumentMetadata : undefined} onDelete={deleteUploadedDocument} />;
+    if (view === "script-detail") return <ScriptDetail documentId={document.id} documents={documents} versions={versions} comments={comments} currentUser={currentUser} supportingDocuments={supportingDocuments} onUpload={uploadDocumentVersion} onSupportingUpload={uploadSupportingDocument} onSupportingDelete={deleteSupportingDocument} onStatusChange={updateDocumentStatus} onUpdateVersionNotes={canManageScriptLibrary(currentUser.role) ? updateDocumentVersionNotes : undefined} onUpdateVersionMarkdown={canAccessScriptDocument(currentUser, document) ? updateDocumentVersionMarkdown : undefined} onCreateComment={createComment} onUpdateMetadata={canAccessScriptDocument(currentUser, document) ? updateDocumentMetadata : undefined} onDelete={canManageScriptLibrary(currentUser.role) ? deleteUploadedDocument : undefined} />;
     if (view === "script-versions") return <ScriptVersions documentId={document.id} versions={versions} document={document} currentUser={currentUser} onUpload={uploadDocumentVersion} />;
     if (view === "script-diff") return <ScriptDiff documentId={document.id} versions={versions} />;
     if (view === "script-breakdown") return <ScriptBreakdown documentId={document.id} documents={documents} versions={versions} />;
@@ -3000,7 +3000,7 @@ function ProjectWorkspace({
   assets?: HammerAsset[];
   approvals?: HammerApproval[];
   onUpload?: (input: DocumentUploadInput) => Promise<DocumentUploadResult | void>;
-  onDelete?: (documentId: string) => void;
+  onDelete?: (documentId: string) => Promise<void> | void;
   onAssignToProject?: (documentId: string, projectId: string) => void;
   onReferenceUpload?: (input: { projectId: string; title: string; description: string; source: string; category: AssetType; file: File }) => Promise<void>;
   onUpdateProject?: (projectId: string, patch: Partial<HammerProject>) => Promise<void>;
@@ -3518,7 +3518,7 @@ function Scripts({
   documents?: HammerDocument[];
   versions?: HammerDocumentVersion[];
   onUpload?: (input: DocumentUploadInput) => Promise<DocumentUploadResult | void>;
-  onDelete?: (documentId: string) => void;
+  onDelete?: (documentId: string) => Promise<void> | void;
   onAssignToProject?: (documentId: string, projectId: string) => void;
   selectedSection?: ScriptLibrarySection;
   repositoryMode?: boolean;
@@ -3995,13 +3995,25 @@ function DocumentRows({
   projects?: HammerProject[];
   omitProject?: boolean;
   showInboxMeta?: boolean;
-  onDelete?: (documentId: string) => void;
+  onDelete?: (documentId: string) => Promise<void> | void;
   onAssignToProject?: (documentId: string, projectId: string) => void;
   assignableProjects?: HammerProject[];
   defaultProjectId?: string;
   emptyLabel?: string;
 }) {
   const [assignmentDrafts, setAssignmentDrafts] = useState<Record<string, string>>({});
+  const [deletingDocumentId, setDeletingDocumentId] = useState("");
+  async function deleteDocumentFromSlate(document: HammerDocument) {
+    if (!onDelete || deletingDocumentId) return;
+    const locationLabel = document.projectId ? projectTitleFromList(document.projectId, projects) : "Inbox";
+    if (!window.confirm(`Delete "${document.title}" from ${locationLabel}? This archives the document record and hides its versions from GreenLight.`)) return;
+    setDeletingDocumentId(document.id);
+    try {
+      await onDelete(document.id);
+    } finally {
+      setDeletingDocumentId("");
+    }
+  }
   if (!docs.length) return <EmptyState label={emptyLabel} />;
   return (
     <div className="data-scroll">
@@ -4047,6 +4059,18 @@ function DocumentRows({
                       </select>
                       <button type="button" disabled={!selectedProjectId || selectedProjectId === doc.projectId} onClick={() => selectedProjectId && onAssignToProject?.(doc.id, selectedProjectId)} className="rounded border border-emerald-400/25 bg-emerald-400/5 px-1.5 py-1 text-[11px] font-semibold text-emerald-300 hover:border-emerald-300/50 hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-40">{moveLabel}</button>
                     </span>
+                  ) : null}
+                  {onDelete ? (
+                    <button
+                      type="button"
+                      disabled={deletingDocumentId === doc.id}
+                      onClick={() => deleteDocumentFromSlate(doc)}
+                      className="inline-flex items-center gap-1 rounded border border-rose-400/25 bg-rose-500/5 px-1.5 py-1 text-[11px] font-semibold text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200 disabled:cursor-not-allowed disabled:opacity-45"
+                      title="Delete this document from the Development Slate"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                      {deletingDocumentId === doc.id ? "Deleting" : "Delete"}
+                    </button>
                   ) : null}
                 </td>
               </tr>
