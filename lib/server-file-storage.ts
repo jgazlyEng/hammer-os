@@ -77,7 +77,11 @@ function sanitizePathSegment(value: string) {
 }
 
 function sanitizeFileName(value: string) {
-  return value.replace(/[/\\?%*:|"<>]/g, "-");
+  return value
+    .normalize("NFKD")
+    .replace(/[^a-zA-Z0-9._-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "") || "uploaded-document";
 }
 
 function inferContentType(fileName: string) {
