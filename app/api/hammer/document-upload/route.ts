@@ -54,13 +54,10 @@ export async function POST(request: Request) {
 
     const fileName = file.name || "uploaded-document";
     const fileType = file.type || inferFileType(fileName);
+    const initialNotes = optionalString(formData.get("notes"));
     const bytes = Buffer.from(await file.arrayBuffer());
     uploadStage = "storing uploaded file";
     const storedUpload = await storeUpload(projectId ?? "inbox", fileName, bytes);
-    uploadStage = "extracting script text";
-    const extraction = await extractUploadText(fileName, fileType, bytes);
-    const extractedText = extraction.text;
-    const uploadNotes = combineUploadNotes(optionalString(formData.get("notes")), extraction.warning);
     const now = new Date();
 
     uploadStage = "saving document metadata";
@@ -88,9 +85,9 @@ export async function POST(request: Request) {
           fileType,
           fileSize: storedUpload.sizeBytes,
           storagePath: storedUpload.storagePath,
-          extractedText,
+          extractedText: "",
           uploadedById: auth.user.id,
-          notes: uploadNotes
+          notes: combineUploadNotes(initialNotes, "Text extraction is queued. The original file has been stored and GreenLight will update this version when parsing finishes.")
         }
       });
 
@@ -113,17 +110,29 @@ export async function POST(request: Request) {
           action: existingDocument ? "document.version_uploaded" : "document.created",
           entityType: "Document",
           entityId: document.id,
-          detailJson: { fileName, projectId, versionNumber: nextVersionNumber, extractionWarning: extraction.warning } as Prisma.InputJsonValue
+          detailJson: { fileName, projectId, versionNumber: nextVersionNumber, storagePath: storedUpload.storagePath, extractionQueued: true } as Prisma.InputJsonValue
         }
       });
 
       return { document: updatedDocument, version };
     });
 
+    void extractAndPersistUploadText({
+      requestId,
+      versionId: result.version.id,
+      documentId: result.document.id,
+      fileName,
+      fileType,
+      bytes,
+      initialNotes,
+      actorUserId: auth.user.id,
+      actor: auth.user.email
+    });
+
     return NextResponse.json({
       document: toDocument(result.document),
       version: toVersion(result.version),
-      warning: extraction.warning
+      warning: "Upload saved. Text extraction is running in the background; refresh the document in a moment to see parsed text, breakdown, and diff support."
     }, { status: 201 });
   } catch (error) {
     const detail = uploadErrorMessage(error);
@@ -144,6 +153,54 @@ function canUploadDocument(role: string, projectRoles: Record<string, string>, p
   const normalizedRole = role.toLowerCase();
   if (normalizedRole === "admin" || normalizedRole === "producer" || normalizedRole === "executive" || normalizedRole === "exec") return true;
   return Boolean(projectId && projectRoles[projectId]);
+}
+
+async function extractAndPersistUploadText(input: {
+  requestId: string;
+  versionId: string;
+  documentId: string;
+  fileName: string;
+  fileType: string;
+  bytes: Buffer;
+  initialNotes?: string;
+  actorUserId: string;
+  actor: string;
+}) {
+  try {
+    const extraction = await extractUploadText(input.fileName, input.fileType, input.bytes);
+    await prisma.$transaction(async (tx) => {
+      await tx.documentVersion.update({
+        where: { id: input.versionId },
+        data: {
+          extractedText: extraction.text,
+          notes: combineUploadNotes(input.initialNotes, extraction.warning)
+        }
+      });
+      await tx.auditLog.create({
+        data: {
+          actorUserId: input.actorUserId,
+          actor: input.actor,
+          action: "document.text_extracted",
+          entityType: "DocumentVersion",
+          entityId: input.versionId,
+          detailJson: { documentId: input.documentId, fileName: input.fileName, extractedChars: extraction.text.length, extractionWarning: extraction.warning } as Prisma.InputJsonValue
+        }
+      });
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "Unknown extraction error.";
+    const warning = `Uploaded successfully, but text extraction failed in the background. The original file is stored; parser/OCR can be retried later. Details: ${detail}`;
+    console.error("[document-upload:background-extract]", { requestId: input.requestId, versionId: input.versionId, detail, error });
+    await prisma.documentVersion.update({
+      where: { id: input.versionId },
+      data: {
+        extractedText: "",
+        notes: combineUploadNotes(input.initialNotes, warning)
+      }
+    }).catch((updateError) => {
+      console.error("[document-upload:background-extract:update-failed]", { requestId: input.requestId, versionId: input.versionId, error: updateError });
+    });
+  }
 }
 
 async function extractUploadText(fileName: string, fileType: string, bytes: Buffer) {
