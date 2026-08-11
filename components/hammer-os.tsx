@@ -3790,7 +3790,7 @@ function DocumentUploadPanel({
       setFile(null);
       window.setTimeout(onDone, 700);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Upload failed.");
+      setStatus(uploadFailureMessage(error));
       setStatusTone("error");
     } finally {
       setBusy(false);
@@ -9278,6 +9278,12 @@ function inferFileType(fileName: string) {
   return "text/plain";
 }
 
+function uploadFailureMessage(error: unknown) {
+  if (error instanceof Error && error.message.trim()) return error.message;
+  if (typeof error === "string" && error.trim()) return error;
+  return "Upload failed, but GreenLight did not receive an error message. Check Nginx/app logs for /api/hammer/document-upload and retry with a smaller PDF or text-selectable export.";
+}
+
 async function readUploadErrorResponse(response: Response): Promise<DocumentUploadErrorResponse> {
   const contentType = response.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {
@@ -9285,9 +9291,23 @@ async function readUploadErrorResponse(response: Response): Promise<DocumentUplo
   }
   const body = await response.text().catch(() => "");
   const plainBody = body.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  if (response.status === 504) {
+    return {
+      error: "Upload timed out at Nginx before GreenLight returned a response.",
+      detail: plainBody || "Nginx reported a 504 Gateway Timeout while waiting for the app upload route.",
+      hint: "Confirm production is running the latest GreenLight build, then check proxy_read_timeout/proxy_send_timeout and app logs for /api/hammer/document-upload. The server may still be spending too long receiving the file, writing to GCS, or parsing an older synchronous route."
+    };
+  }
+  if (response.status === 502 || response.status === 503) {
+    return {
+      error: "Upload service was unavailable.",
+      detail: plainBody || `HTTP ${response.status} ${response.statusText}`,
+      hint: "Check that the app container is healthy and that Nginx is proxying to the active Next.js process."
+    };
+  }
   return {
     error: "Document upload failed before GreenLight could return a structured error.",
-    detail: plainBody || `HTTP ${response.status} ${response.statusText}`,
+    detail: plainBody || `HTTP ${response.status} ${response.statusText || "Unknown response"}`,
     hint: response.status === 413
       ? "The upload exceeded a proxy or server body-size limit. Check Nginx client_max_body_size and any load balancer limits."
       : "Check the production Nginx/app logs for this request."
