@@ -422,6 +422,7 @@ model User {
 
   ownedProjects Project[]          @relation("ProjectOwner")
   documentsCreated Document[]      @relation("DocumentCreator")
+  documentTagsCreated DocumentTag[]
   documentVersionsUploaded DocumentVersion[] @relation("DocumentVersionUploader")
   supportingDocumentsUploaded SupportingDocument[] @relation("SupportingDocumentUploader")
   prospectAssetsUploaded ProspectAsset[] @relation("ProspectAssetUploader")
@@ -476,10 +477,28 @@ model Document {
   diffs            DocumentDiff[]
   supportingDocuments SupportingDocument[]
   collectionItems ScriptCollectionItem[]
+  tags            DocumentTag[]
 
   @@index([projectId])
   @@index([type])
   @@index([deletedAt])
+}
+
+model DocumentTag {
+  id          String   @id @default(cuid())
+  documentId  String
+  key         String
+  value       String
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  createdBy   User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([documentId])
+  @@index([key])
+  @@unique([documentId, key, value])
 }
 
 model ScriptCollection {
@@ -1015,6 +1034,7 @@ model Comment {
   targetId        String
   parentCommentId String?
   body            String            @db.Text
+  metadataJson    Json?
   visibility      CommentVisibility @default(PROJECT_TEAM)
   status          CommentStatus     @default(OPEN)
   createdById     String?

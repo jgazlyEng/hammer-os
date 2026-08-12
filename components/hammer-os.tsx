@@ -65,8 +65,12 @@ import {
   type HammerUser,
   type HammerAsset,
   type HammerDocument,
+  type HammerDocumentTag,
   type HammerDocumentVersion,
   type HammerComment,
+  type HammerCommentMetadata,
+  type HammerNoteTag,
+  type HammerNoteType,
   type HammerScriptCollection,
   type HammerScriptCollectionItem,
   type HammerSlateCollection,
@@ -105,6 +109,7 @@ interface DocumentUploadResponse {
   document?: HammerDocument;
   version?: HammerDocumentVersion;
   warning?: string;
+  extractionQueued?: boolean;
 }
 
 interface DocumentUploadErrorResponse {
@@ -851,9 +856,9 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
         await loadDatabaseWorkspace({ force: true });
       } catch (error) {
         const refreshWarning = `Upload saved, but the workspace list could not refresh automatically. Reload the page if the new document is not visible. Details: ${error instanceof Error ? error.message : "Unknown refresh error."}`;
-        return { warning: data?.warning ? `${data.warning} ${refreshWarning}` : refreshWarning };
+        return { document: data?.document, version: data?.version, warning: data?.warning ? `${data.warning} ${refreshWarning}` : refreshWarning, extractionQueued: data?.extractionQueued };
       }
-      return { warning: data?.warning };
+      return { document: data?.document, version: data?.version, warning: data?.warning, extractionQueued: data?.extractionQueued };
     }
     let extractedText = "";
     let extractionWarning: string | undefined;
@@ -946,7 +951,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     });
   }
 
-  async function createComment(input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string }) {
+  async function createComment(input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string; metadataJson?: HammerCommentMetadata }) {
     if (workspaceMode === "database") {
       await runWorkspaceAction("createComment", input);
       return;
@@ -956,6 +961,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       targetType: input.targetType,
       targetId: input.targetId,
       body: input.body,
+      metadataJson: input.metadataJson,
       visibility: input.visibility ?? "PROJECT_TEAM",
       status: "OPEN",
       createdById: currentUser.id,
@@ -1597,6 +1603,35 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_DOCUMENTS_EVENT));
   }
 
+  async function updateDocumentTags(documentId: string, tags: Array<Pick<HammerDocumentTag, "key" | "value">>) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("updateDocumentTags", { documentId, tags });
+      return;
+    }
+    const now = new Date().toISOString().slice(0, 10);
+    const existing = documents.find((document) => document.id === documentId);
+    if (!existing) return;
+    const updatedDocument = {
+      ...existing,
+      tags: tags.map((tag, index) => ({
+        id: `tag-local-${documentId}-${index}`,
+        documentId,
+        key: tag.key,
+        value: tag.value,
+        createdById: currentUser.id,
+        createdAt: now
+      })),
+      updatedAt: now
+    };
+    const nextDocuments = [
+      ...localDocuments.filter((document) => document.id !== documentId),
+      updatedDocument
+    ];
+    setLocalDocuments(nextDocuments);
+    window.localStorage.setItem(HAMMER_LOCAL_DOCUMENTS_STORAGE_KEY, JSON.stringify(nextDocuments));
+    window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_DOCUMENTS_EVENT));
+  }
+
   async function deleteUploadedDocument(documentId: string) {
     if (workspaceMode === "database") {
       await runWorkspaceAction("deleteDocument", { documentId });
@@ -1677,7 +1712,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     if (view === "project-assets") return <ProjectWorkspace project={project} activeTab="assets" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpdateProject={canManageScriptLibrary(currentUser.role) ? updateProject : undefined} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
     if (view === "scripts") return <LegacyRedirect title="Scripts now live inside the slate" detail="Script tracking is most useful in context. Open a Development Slate item for active project scripts and supporting documents, or use Prospects for materials the team may want to pursue." href="/projects" label="Open Development Slate" />;
     if (["script-detail", "script-versions", "script-diff", "script-breakdown"].includes(view) && !documents.some((item) => item.id === document.id)) return <EmptyScriptState />;
-    if (view === "script-detail") return <ScriptDetail documentId={document.id} documents={documents} versions={versions} comments={comments} currentUser={currentUser} supportingDocuments={supportingDocuments} onUpload={uploadDocumentVersion} onSupportingUpload={uploadSupportingDocument} onSupportingDelete={deleteSupportingDocument} onStatusChange={updateDocumentStatus} onUpdateVersionNotes={canManageScriptLibrary(currentUser.role) ? updateDocumentVersionNotes : undefined} onUpdateVersionMarkdown={canAccessScriptDocument(currentUser, document) ? updateDocumentVersionMarkdown : undefined} onCreateComment={createComment} onUpdateMetadata={canAccessScriptDocument(currentUser, document) ? updateDocumentMetadata : undefined} onDelete={canManageScriptLibrary(currentUser.role) ? deleteUploadedDocument : undefined} />;
+    if (view === "script-detail") return <ScriptDetail documentId={document.id} documents={documents} projects={projects} versions={versions} comments={comments} currentUser={currentUser} supportingDocuments={supportingDocuments} onUpload={uploadDocumentVersion} onSupportingUpload={uploadSupportingDocument} onSupportingDelete={deleteSupportingDocument} onStatusChange={updateDocumentStatus} onUpdateVersionNotes={canManageScriptLibrary(currentUser.role) ? updateDocumentVersionNotes : undefined} onUpdateVersionMarkdown={canAccessScriptDocument(currentUser, document) ? updateDocumentVersionMarkdown : undefined} onCreateComment={createComment} onUpdateMetadata={canAccessScriptDocument(currentUser, document) ? updateDocumentMetadata : undefined} onUpdateTags={canAccessScriptDocument(currentUser, document) ? updateDocumentTags : undefined} onDelete={canManageScriptLibrary(currentUser.role) ? deleteUploadedDocument : undefined} />;
     if (view === "script-versions") return <ScriptVersions documentId={document.id} versions={versions} document={document} currentUser={currentUser} onUpload={uploadDocumentVersion} />;
     if (view === "script-diff") return <ScriptDiff documentId={document.id} versions={versions} />;
     if (view === "script-breakdown") return <ScriptBreakdown documentId={document.id} documents={documents} versions={versions} />;
@@ -1720,7 +1755,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     <AppShell>
       <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
-          <PageBreadcrumbs view={view} project={project} document={document} asset={asset} accessDenied={scriptAccessDenied} />
+          <PageBreadcrumbs view={view} project={project} document={document} asset={asset} projects={projects} accessDenied={scriptAccessDenied} />
           <h1 className="mt-1 text-xl font-semibold text-studio-100 md:text-2xl">{scriptAccessDenied ? "Script Access Required" : titleForView(view, { project, document, asset })}</h1>
           {scopedProjectTitle(view, activeProject) ? <p className="mt-1 text-xs text-studio-400">Showing {scopedProjectTitle(view, activeProject)} only</p> : null}
         </div>
@@ -2525,7 +2560,7 @@ function ProspectAssetsPanel({
     try {
       await onUpload({
         prospectId: prospect.id,
-        title: title.trim() || file.name.replace(/\.[^.]+$/, ""),
+        title: title.trim() || fileNameWithoutExtension(file.name),
         description: description.trim(),
         source: source.trim(),
         file
@@ -2964,8 +2999,15 @@ type DocumentUploadInput = {
 };
 
 type DocumentUploadResult = {
+  document?: HammerDocument;
+  version?: HammerDocumentVersion;
   warning?: string;
+  extractionQueued?: boolean;
 };
+
+type UploadProgressStepId = "selected" | "uploading" | "stored" | "parsing" | "complete";
+type UploadProgressState = "pending" | "active" | "done" | "warning" | "error";
+type UploadProgressStep = { id: UploadProgressStepId; label: string; detail: string; state: UploadProgressState };
 
 function ProjectWorkspace({
   project,
@@ -3542,7 +3584,7 @@ function Scripts({
     const version = currentVersionFor(doc.id, documents, versions);
     if (statusFilter !== "ALL" && version?.status !== statusFilter) return false;
     if (typeFilter !== "ALL" && doc.type !== typeFilter) return false;
-    const haystack = `${doc.title} ${doc.writerName ?? ""} ${doc.source ?? ""} ${doc.projectId ? projectNameForId(doc.projectId) : "Inbox"} ${version?.status ?? ""}`.toLowerCase();
+    const haystack = `${doc.title} ${doc.writerName ?? ""} ${doc.source ?? ""} ${documentTagSearchText(doc)} ${doc.projectId ? projectNameForId(doc.projectId) : "Inbox"} ${version?.status ?? ""}`.toLowerCase();
     return !librarySearch.trim() || haystack.includes(librarySearch.toLowerCase());
   });
   const docs = filteredDocuments.filter((doc) => !scopedProjectId || doc.projectId === scopedProjectId);
@@ -3572,9 +3614,9 @@ function Scripts({
         <SectionHeader
           eyebrow={projectName ? `Showing ${projectName}` : "Repository"}
           title={compact ? "Documents" : "Scripts and Treatments"}
-          action={onUpload ? <PrimaryButton icon={UploadCloud} label="Create Document" onClick={() => setUploadOpen((open) => !open)} /> : undefined}
+          action={onUpload ? <PrimaryButton icon={Plus} label="Add Document" onClick={() => setUploadOpen(true)} /> : undefined}
         />
-        {uploadOpen && onUpload ? <DocumentUploadPanel projectId={scopedProjectId} documents={docs} onUpload={onUpload} onDone={() => setUploadOpen(false)} /> : null}
+        {uploadOpen && onUpload ? <DocumentUploadPanel projectId={scopedProjectId} documents={docs} onUpload={onUpload} onDone={() => setUploadOpen(false)} onCancel={() => setUploadOpen(false)} /> : null}
         <DocumentRows docs={docs} versions={versions} projects={projects} omitProject={Boolean(projectId)} onDelete={onDelete} onAssignToProject={canManageLibrary ? onAssignToProject : undefined} assignableProjects={projects} defaultProjectId={scopedProjectId} emptyLabel={projectName ? `No documents for ${projectName} yet. Upload a script, treatment, outline, or coverage document.` : "No documents match this view."} />
       </Panel>
     );
@@ -3588,8 +3630,8 @@ function Scripts({
           title="Scripts"
           action={onUpload ? (
             <div className="flex flex-wrap gap-1.5">
-              {canManageLibrary ? <button type="button" onClick={() => { setUploadTarget("INBOX"); setUploadOpen((open) => uploadTarget === "INBOX" ? !open : true); }} className="ui-button inline-flex items-center gap-1.5 rounded-md bg-amberline px-2.5 py-1.5 text-xs font-semibold text-studio-950 transition hover:bg-emerald-300"><UploadCloud className="h-3.5 w-3.5" />Create Incoming Document</button> : null}
-              <button type="button" onClick={() => { setUploadTarget("ACTIVE"); setUploadOpen((open) => uploadTarget === "ACTIVE" ? !open : true); }} className={cn("ui-button inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold transition", canManageLibrary ? "border border-white/10 bg-white/[0.025] text-studio-200 hover:border-amberline/40 hover:text-amberline" : "bg-amberline text-studio-950 hover:bg-emerald-300")}><UploadCloud className="h-3.5 w-3.5" />Create Project Document</button>
+              {canManageLibrary ? <button type="button" onClick={() => { setUploadTarget("INBOX"); setUploadOpen(true); }} className="ui-button inline-flex items-center gap-1.5 rounded-md bg-amberline px-2.5 py-1.5 text-xs font-semibold text-studio-950 transition hover:bg-emerald-300"><Plus className="h-3.5 w-3.5" />Add Incoming Document</button> : null}
+              <button type="button" onClick={() => { setUploadTarget("ACTIVE"); setUploadOpen(true); }} className={cn("ui-button inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold transition", canManageLibrary ? "border border-white/10 bg-white/[0.025] text-studio-200 hover:border-amberline/40 hover:text-amberline" : "bg-amberline text-studio-950 hover:bg-emerald-300")}><Plus className="h-3.5 w-3.5" />Add Project Document</button>
             </div>
           ) : undefined}
         />
@@ -3615,14 +3657,13 @@ function Scripts({
           </select>
         </div>
         {uploadOpen && onUpload ? (
-          <div className="mt-3">
-            <DocumentUploadPanel
+          <DocumentUploadPanel
               projectId={uploadTarget === "INBOX" ? undefined : scopedProjectId}
               documents={uploadTarget === "INBOX" ? incomingDocs : activeProjectDocs}
               onUpload={onUpload}
               onDone={() => setUploadOpen(false)}
+              onCancel={() => setUploadOpen(false)}
             />
-          </div>
         ) : null}
       </Panel>
 
@@ -3725,15 +3766,19 @@ function DocumentUploadPanel({
   projectId,
   documents,
   onUpload,
-  onDone
+  onDone,
+  onCancel
 }: {
   projectId?: string;
   documents: HammerDocument[];
   onUpload: (input: DocumentUploadInput) => Promise<DocumentUploadResult | void>;
   onDone: () => void;
+  onCancel: () => void;
 }) {
   const [documentId, setDocumentId] = useState("");
   const [title, setTitle] = useState("");
+  const [titleTouched, setTitleTouched] = useState(false);
+  const [autoTitle, setAutoTitle] = useState("");
   const [writerName, setWriterName] = useState("");
   const [source, setSource] = useState("");
   const [type, setType] = useState<DocumentType>("SCRIPT");
@@ -3741,17 +3786,24 @@ function DocumentUploadPanel({
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState("");
   const [statusTone, setStatusTone] = useState<"idle" | "working" | "success" | "warning" | "error">("idle");
+  const [progressSteps, setProgressSteps] = useState<UploadProgressStep[]>(uploadProgressSteps());
   const [busy, setBusy] = useState(false);
   const selectedDocument = documents.find((document) => document.id === documentId);
 
   useEffect(() => {
     if (selectedDocument) {
       setTitle(selectedDocument.title);
+      setTitleTouched(false);
+      setAutoTitle("");
       setType(selectedDocument.type);
       setWriterName(selectedDocument.writerName ?? "");
       setSource(selectedDocument.source ?? "");
     }
   }, [selectedDocument]);
+
+  function updateProgress(stepId: UploadProgressStepId, state: UploadProgressState, detail?: string) {
+    setProgressSteps((current) => current.map((step) => step.id === stepId ? { ...step, state, detail: detail ?? step.detail } : step));
+  }
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -3759,37 +3811,69 @@ function DocumentUploadPanel({
     if (!file) {
       setStatus("Choose a PDF, FDX, TXT, or MD file first.");
       setStatusTone("error");
+      setProgressSteps(uploadProgressSteps("error", "No file selected."));
       return;
     }
     if (!isAllowedScriptUploadFile(file)) {
       setStatus("DOCX script parsing is disabled for now. Upload PDF, FDX, TXT, or MD instead.");
       setStatusTone("error");
+      setProgressSteps(uploadProgressSteps("error", "Unsupported file type."));
       return;
     }
     setBusy(true);
     setStatusTone("working");
-    setStatus(`Uploading ${file.name} (${formatBytes(file.size)}). Large PDFs can take a moment while GreenLight extracts script text.`);
+    setStatus(`Uploading ${file.name} (${formatBytes(file.size)}). Keep this window open until GreenLight confirms the file is saved.`);
+    setProgressSteps(uploadProgressSteps("uploading", `Sending ${file.name} to GreenLight...`));
     try {
       const result = await onUpload({
         projectId,
         documentId: documentId || undefined,
-        title: title.trim() || file.name.replace(/\.[^.]+$/, ""),
+        title: title.trim() || fileNameWithoutExtension(file.name),
         type,
         writerName: writerName.trim() || "Unassigned Writer",
         source: source.trim(),
         file,
         notes
       });
+      updateProgress("uploading", "done", "Upload request completed.");
+      updateProgress("stored", "done", "Original file saved and document record created.");
+
+      if (result?.extractionQueued && result.version?.documentId && result.version.id) {
+        updateProgress("parsing", "active", "Parsing readable text in the background...");
+        setStatus("File saved. GreenLight is parsing text now; scanned PDFs may finish with an OCR warning.");
+        const extraction = await waitForDocumentExtraction(result.version.documentId, result.version.id);
+        if (extraction.state === "done") {
+          updateProgress("parsing", "done", `Parsed ${extraction.characterCount.toLocaleString()} characters.`);
+          updateProgress("complete", "done", "Document is ready for breakdown and diff tools.");
+          setStatus("Upload complete. Text parsed and workspace refreshed.");
+          setStatusTone("success");
+        } else {
+          updateProgress("parsing", "warning", extraction.message);
+          updateProgress("complete", "warning", "Document is saved, but parsing needs attention.");
+          setStatus(`Uploaded with warning: ${extraction.message}`);
+          setStatusTone("warning");
+        }
+        setFile(null);
+        window.setTimeout(onDone, 900);
+        return;
+      }
+
       if (result?.warning) {
+        updateProgress("parsing", "warning", result.warning);
+        updateProgress("complete", "warning", "Document is saved, but parsing needs attention.");
         setStatus(`Uploaded with warning: ${result.warning}`);
         setStatusTone("warning");
         return;
       }
+      updateProgress("parsing", "done", "Readable text extracted.");
+      updateProgress("complete", "done", "Document is ready.");
       setStatus("Uploaded. Refreshing the script list...");
       setStatusTone("success");
       setFile(null);
       window.setTimeout(onDone, 700);
     } catch (error) {
+      updateProgress("uploading", "error", uploadFailureMessage(error));
+      updateProgress("complete", "error", "Upload did not complete.");
       setStatus(uploadFailureMessage(error));
       setStatusTone("error");
     } finally {
@@ -3798,21 +3882,52 @@ function DocumentUploadPanel({
   }
 
   return (
-    <form onSubmit={submit} className="mb-3 grid gap-3 rounded-lg border border-amberline/20 bg-amberline/5 p-3 md:grid-cols-[1fr_160px]">
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
+      <form onSubmit={submit} className="mt-8 grid max-h-[90vh] w-full max-w-3xl gap-3 overflow-y-auto rounded-xl border border-amberline/25 bg-studio-950 p-4 shadow-2xl md:grid-cols-[1fr_170px]">
+        <div className="md:col-span-2 flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[13px] font-semibold text-studio-100">{selectedDocument ? "Upload New Version" : "Add Document"}</p>
+            <p className="mt-1 text-xs leading-5 text-studio-300">
+              {selectedDocument ? `Attach a new file version to ${selectedDocument.title}.` : "Choose a file first, then add the document details before uploading."}
+            </p>
+          </div>
+          <button type="button" onClick={onCancel} disabled={busy} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100 disabled:cursor-not-allowed disabled:opacity-50" aria-label="Close upload window">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       <div className="md:col-span-2">
-        <p className="text-[13px] font-semibold text-studio-100">{selectedDocument ? "Upload New Version" : "Create Document"}</p>
-        <p className="mt-1 text-xs leading-5 text-studio-300">
-          {selectedDocument ? `Attach a new file version to ${selectedDocument.title}.` : "Create a script, treatment, outline, coverage, or supporting document record by attaching its file here."}
-        </p>
+        <FileUploadPicker
+          file={file}
+          onFileChange={(nextFile) => {
+            setFile(nextFile);
+            if (nextFile) {
+              const inferredTitle = fileNameWithoutExtension(nextFile.name);
+              if (!documentId && (!titleTouched || !title.trim() || title === autoTitle)) {
+                setTitle(inferredTitle);
+                setAutoTitle(inferredTitle);
+                setTitleTouched(false);
+              }
+              setStatus(`Ready to upload ${nextFile.name} (${formatBytes(nextFile.size)}).`);
+              setStatusTone("idle");
+              setProgressSteps(uploadProgressSteps("selected", `${nextFile.name} selected (${formatBytes(nextFile.size)}).`));
+            } else {
+              setProgressSteps(uploadProgressSteps());
+            }
+          }}
+          disabled={busy}
+          accept=".pdf,.fdx,.txt,.md,text/plain,text/markdown,application/pdf"
+          label="Document File"
+          helper="Choose a PDF, FDX, TXT, or MD first"
+        />
       </div>
       <div className="space-y-2">
-        <select className="field" value={documentId} disabled={busy} onChange={(event) => setDocumentId(event.target.value)}>
+        <select className="field" value={documentId} disabled={busy} onChange={(event) => { setDocumentId(event.target.value); setTitleTouched(false); setAutoTitle(""); }}>
           <option value="">Create new document</option>
           {documents.map((document) => (
             <option key={document.id} value={document.id}>New version of {document.title}</option>
           ))}
         </select>
-        <input className="field" value={title} disabled={busy} onChange={(event) => setTitle(event.target.value)} placeholder="Document title" />
+        <input className="field" value={title} disabled={busy} onChange={(event) => { setTitle(event.target.value); setTitleTouched(true); }} placeholder="Document title" />
         <input className="field" list="writer-contact-options" value={writerName} disabled={busy} onChange={(event) => setWriterName(event.target.value)} placeholder="Writer" />
         <input className="field" value={source} disabled={busy} onChange={(event) => setSource(event.target.value)} placeholder="Source: agency, contest, list, manager, referral" />
         <datalist id="writer-contact-options">
@@ -3826,24 +3941,9 @@ function DocumentUploadPanel({
             <option key={documentType} value={documentType}>{statusLabel(documentType)}</option>
           ))}
         </select>
-        <PrimaryButton icon={busy ? Loader2 : UploadCloud} label={busy ? "Uploading..." : documentId ? "Upload Version" : "Create Document"} disabled={busy} />
+        <PrimaryButton icon={busy ? Loader2 : UploadCloud} label={busy ? "Uploading..." : documentId ? "Upload Version" : "Upload Document"} disabled={busy} />
       </div>
-      <div className="md:col-span-2">
-        <FileUploadPicker
-          file={file}
-          onFileChange={(nextFile) => {
-            setFile(nextFile);
-            if (nextFile) {
-              setStatus(`Ready to upload ${nextFile.name} (${formatBytes(nextFile.size)}).`);
-              setStatusTone("idle");
-            }
-          }}
-          disabled={busy}
-          accept=".pdf,.fdx,.txt,.md,text/plain,text/markdown,application/pdf"
-          label="Choose Script or Document"
-          helper="PDF, FDX, TXT, or MD"
-        />
-      </div>
+      <UploadProgressPanel steps={progressSteps} />
       {status ? (
         <div className={cn(
           "md:col-span-2 flex items-start gap-2 rounded-md border px-3 py-2 text-xs leading-5",
@@ -3857,8 +3957,89 @@ function DocumentUploadPanel({
           <span>{status}</span>
         </div>
       ) : null}
-    </form>
+        <div className="md:col-span-2 flex justify-end gap-2 border-t border-white/10 pt-3">
+          <button type="button" onClick={onCancel} disabled={busy} className="rounded-md border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 transition hover:border-white/20 hover:text-studio-100 disabled:cursor-not-allowed disabled:opacity-50">Cancel</button>
+        </div>
+      </form>
+    </div>
   );
+}
+
+function UploadProgressPanel({ steps }: { steps: UploadProgressStep[] }) {
+  const hasStarted = steps.some((step) => step.state !== "pending");
+  if (!hasStarted) return null;
+  return (
+    <div className="md:col-span-2 rounded-lg border border-white/10 bg-studio-950/45 p-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-studio-300">Upload Progress</p>
+        <span className="text-[11px] text-studio-400">Keep this window open</span>
+      </div>
+      <div className="grid gap-2 md:grid-cols-5">
+        {steps.map((step) => (
+          <div key={step.id} className={cn(
+            "rounded-md border p-2 transition",
+            step.state === "pending" && "border-white/10 bg-white/[0.02] text-studio-500",
+            step.state === "active" && "border-emerald-300/35 bg-emerald-400/10 text-emerald-100",
+            step.state === "done" && "border-emerald-300/25 bg-emerald-400/8 text-studio-100",
+            step.state === "warning" && "border-yellow-300/35 bg-yellow-300/10 text-yellow-100",
+            step.state === "error" && "border-rose-300/35 bg-rose-500/10 text-rose-100"
+          )}>
+            <div className="flex items-center gap-1.5">
+              {step.state === "active" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              {step.state === "done" ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-300" /> : null}
+              {step.state === "warning" || step.state === "error" ? <X className="h-3.5 w-3.5" /> : null}
+              {step.state === "pending" ? <span className="h-3.5 w-3.5 rounded-full border border-current opacity-50" /> : null}
+              <p className="text-xs font-semibold">{step.label}</p>
+            </div>
+            <p className="mt-1 line-clamp-3 text-[11px] leading-4 opacity-80">{step.detail}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function uploadProgressSteps(activeStep?: UploadProgressStepId | "error", detail?: string): UploadProgressStep[] {
+  const steps: UploadProgressStep[] = [
+    { id: "selected", label: "Selected", detail: "Choose a PDF, FDX, TXT, or MD file.", state: "pending" },
+    { id: "uploading", label: "Uploading", detail: "Sending the file to GreenLight.", state: "pending" },
+    { id: "stored", label: "Stored", detail: "Saving original file and metadata.", state: "pending" },
+    { id: "parsing", label: "Parsing", detail: "Extracting readable script text.", state: "pending" },
+    { id: "complete", label: "Complete", detail: "Ready for review, diff, and breakdown.", state: "pending" }
+  ];
+  if (!activeStep) return steps;
+  if (activeStep === "error") return steps.map((step, index) => index === 0 ? { ...step, state: "error", detail: detail ?? "Upload could not start." } : step);
+  const activeIndex = steps.findIndex((step) => step.id === activeStep);
+  return steps.map((step, index) => {
+    if (index < activeIndex) return { ...step, state: "done" };
+    if (index === activeIndex) return { ...step, state: activeStep === "selected" ? "done" : "active", detail: detail ?? step.detail };
+    return step;
+  });
+}
+
+async function waitForDocumentExtraction(documentId: string, versionId: string): Promise<{ state: "done" | "warning"; message: string; characterCount: number }> {
+  const queuedNeedle = "Text extraction is queued";
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await delay(attempt < 4 ? 1500 : 3000);
+    const response = await fetch(`/api/hammer/document-versions?documentId=${encodeURIComponent(documentId)}`, { cache: "no-store" });
+    if (!response.ok) continue;
+    const data = await response.json().catch(() => null) as { versions?: HammerDocumentVersion[] } | null;
+    const version = data?.versions?.find((entry) => entry.id === versionId);
+    if (!version) continue;
+    const textLength = version.extractedText?.trim().length ?? 0;
+    const note = version.notes ?? "";
+    if (textLength > 0) return { state: "done", message: "Text parsed successfully.", characterCount: textLength };
+    if (note && !note.includes(queuedNeedle)) return { state: "warning", message: note.replace(/^Upload warning:\s*/i, ""), characterCount: 0 };
+  }
+  return {
+    state: "warning",
+    message: "The original file was saved, but parsing is still running or did not finish before the progress window timed out. Refresh this document in a moment, or check app logs if it remains unparsed.",
+    characterCount: 0
+  };
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function SupportingDocumentUpload({
@@ -3868,64 +4049,128 @@ function SupportingDocumentUpload({
   documentId: string;
   onUpload: (input: { scriptDocumentId: string; title: string; type: SupportingDocumentType; source: string; notes: string; file: File }) => Promise<void>;
 }) {
+  const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
+  const [titleTouched, setTitleTouched] = useState(false);
+  const [autoTitle, setAutoTitle] = useState("");
   const [type, setType] = useState<SupportingDocumentType>("CONTEXT");
   const [source, setSource] = useState("");
   const [notes, setNotes] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  function closeModal() {
+    if (busy) return;
+    setOpen(false);
+    setStatus("");
+  }
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (busy) return;
     if (!file) {
       setStatus("Choose a PDF, DOCX, FDX, or TXT file first.");
       return;
     }
-    setStatus("Adding supporting document...");
+    setBusy(true);
+    setStatus(`Uploading ${file.name}...`);
     try {
       await onUpload({
         scriptDocumentId: documentId,
-        title: title.trim() || file.name.replace(/\.[^.]+$/, ""),
+        title: title.trim() || fileNameWithoutExtension(file.name),
         type,
         source: source.trim(),
         notes,
         file
       });
       setTitle("");
+      setTitleTouched(false);
+      setAutoTitle("");
       setSource("");
       setNotes("");
       setFile(null);
-      setStatus("Added.");
+      setStatus("Context file attached.");
+      window.setTimeout(() => {
+        setOpen(false);
+        setStatus("");
+      }, 600);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Upload failed.");
+    } finally {
+      setBusy(false);
     }
   }
 
   return (
-    <form onSubmit={submit} className="space-y-2 rounded-lg border border-amberline/20 bg-amberline/5 p-3">
-      <div>
-        <p className="text-[11px] uppercase tracking-[0.12em] text-amberline">Attach Context</p>
-        <p className="mt-1 text-xs leading-5 text-studio-300">Coverage, context notes, correspondence, research, and writer materials.</p>
-      </div>
-      <input className="field" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Document title" />
-      <input className="field" value={source} onChange={(event) => setSource(event.target.value)} placeholder="Source: agency, contest, list, manager, referral" />
-      <select className="field" value={type} onChange={(event) => setType(event.target.value as SupportingDocumentType)}>
-        {(["CONTEXT", "COVERAGE", "NOTES", "EMAIL", "WRITER_MATERIAL", "OTHER"] as SupportingDocumentType[]).map((documentType) => (
-          <option key={documentType} value={documentType}>{statusLabel(documentType)}</option>
-        ))}
-      </select>
-      <textarea className="field min-h-16" value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Notes for the team" />
-      <FileUploadPicker
-        resetKey={status === "Added." ? "cleared" : "ready"}
-        file={file}
-        onFileChange={setFile}
-        accept=".pdf,.docx,.fdx,.txt,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        label="Choose Context Document"
-        helper="PDF, DOCX, FDX, or TXT"
-      />
-      {status ? <p className="text-xs text-studio-300">{status}</p> : null}
-      <PrimaryButton icon={UploadCloud} label="Add Document" />
-    </form>
+    <>
+      <button type="button" onClick={() => setOpen(true)} className="ui-button inline-flex items-center gap-1.5 rounded-md bg-amberline px-2.5 py-1.5 text-xs font-semibold text-studio-950 transition hover:bg-emerald-300">
+        <Plus className="h-3.5 w-3.5" />
+        Attach Context
+      </button>
+      {open ? (
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
+          <form onSubmit={submit} className="mt-8 grid max-h-[90vh] w-full max-w-2xl gap-3 overflow-y-auto rounded-xl border border-amberline/25 bg-studio-950 p-4 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[13px] font-semibold text-studio-100">Attach Context</p>
+                <p className="mt-1 text-xs leading-5 text-studio-300">Add coverage, context notes, correspondence, research, or writer materials to this script packet.</p>
+              </div>
+              <button type="button" onClick={closeModal} disabled={busy} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100 disabled:cursor-not-allowed disabled:opacity-50" aria-label="Close context upload window">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <FileUploadPicker
+              resetKey={status === "Context file attached." ? "cleared" : "ready"}
+              file={file}
+              onFileChange={(nextFile) => {
+                setFile(nextFile);
+                if (nextFile) {
+                  const inferredTitle = fileNameWithoutExtension(nextFile.name);
+                  if (!titleTouched || !title.trim() || title === autoTitle) {
+                    setTitle(inferredTitle);
+                    setAutoTitle(inferredTitle);
+                    setTitleTouched(false);
+                  }
+                  setStatus(`Ready to attach ${nextFile.name} (${formatBytes(nextFile.size)}).`);
+                }
+              }}
+              disabled={busy}
+              accept=".pdf,.docx,.fdx,.txt,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              label="Context File"
+              helper="Choose a PDF, DOCX, FDX, or TXT first"
+            />
+            <div className="grid gap-2 sm:grid-cols-2">
+              <label className="grid gap-1">
+                <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Title</span>
+                <input className="field" value={title} disabled={busy} onChange={(event) => { setTitle(event.target.value); setTitleTouched(true); }} placeholder="Document title" />
+              </label>
+              <label className="grid gap-1">
+                <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Type</span>
+                <select className="field" value={type} disabled={busy} onChange={(event) => setType(event.target.value as SupportingDocumentType)}>
+                  {(["CONTEXT", "COVERAGE", "NOTES", "EMAIL", "WRITER_MATERIAL", "OTHER"] as SupportingDocumentType[]).map((documentType) => (
+                    <option key={documentType} value={documentType}>{statusLabel(documentType)}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="grid gap-1 sm:col-span-2">
+                <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Source</span>
+                <input className="field" value={source} disabled={busy} onChange={(event) => setSource(event.target.value)} placeholder="Agency, contest, list, manager, referral" />
+              </label>
+              <label className="grid gap-1 sm:col-span-2">
+                <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Notes</span>
+                <textarea className="field min-h-20" value={notes} disabled={busy} onChange={(event) => setNotes(event.target.value)} placeholder="Notes for the team" />
+              </label>
+            </div>
+            {status ? <p className="rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-studio-300">{status}</p> : null}
+            <div className="flex justify-end gap-2 border-t border-white/10 pt-3">
+              <button type="button" onClick={closeModal} disabled={busy} className="rounded-md border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 transition hover:border-white/20 hover:text-studio-100 disabled:cursor-not-allowed disabled:opacity-50">Cancel</button>
+              <PrimaryButton icon={busy ? Loader2 : Plus} label={busy ? "Attaching..." : "Attach Context"} disabled={busy} />
+            </div>
+          </form>
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -3970,7 +4215,7 @@ function FileUploadPicker({
           </span>
         </span>
         <span className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-xs font-semibold text-studio-950 transition group-hover:bg-emerald-300">
-          <UploadCloud className="h-3.5 w-3.5" />
+          <FileText className="h-3.5 w-3.5" />
           Browse
         </span>
       </span>
@@ -5104,6 +5349,7 @@ function CollectionDocumentAddModal({
 function ScriptDetail({
   documentId,
   documents = hammerDocuments,
+  projects = hammerProjects,
   versions = hammerVersions,
   comments = hammerComments,
   currentUser,
@@ -5116,10 +5362,12 @@ function ScriptDetail({
   onUpdateVersionMarkdown,
   onCreateComment,
   onUpdateMetadata,
+  onUpdateTags,
   onDelete
 }: {
   documentId: string;
   documents?: HammerDocument[];
+  projects?: HammerProject[];
   versions?: HammerDocumentVersion[];
   comments?: HammerComment[];
   currentUser?: HammerUser;
@@ -5130,21 +5378,27 @@ function ScriptDetail({
   onStatusChange?: (versionId: string, status: ScriptStatus) => void;
   onUpdateVersionNotes?: (versionId: string, notes: string) => Promise<void>;
   onUpdateVersionMarkdown?: (versionId: string, markdownNotes: string) => Promise<void>;
-  onCreateComment?: (input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string }) => Promise<void>;
+  onCreateComment?: (input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string; metadataJson?: HammerCommentMetadata }) => Promise<void>;
   onUpdateMetadata?: (documentId: string, patch: Partial<Pick<HammerDocument, "title" | "type" | "writerName" | "source">>) => Promise<void>;
+  onUpdateTags?: (documentId: string, tags: Array<Pick<HammerDocumentTag, "key" | "value">>) => Promise<void>;
   onDelete?: (documentId: string) => void;
 }) {
   const doc = documents.find((item) => item.id === documentId) ?? documents[0] ?? emptyDocument;
   const textState = useDocumentVersionsWithText(doc.id, versions);
   const versionsWithText = textState.versionsWithText;
   const version = currentVersionFor(doc.id, documents, versionsWithText);
-  const [tab, setTab] = useState<"overview" | "notes" | "files" | "versions" | "breakdown">("overview");
+  const [tab, setTab] = useState<"overview" | "notes" | "files" | "compare" | "breakdown">("overview");
   const [metadataDraft, setMetadataDraft] = useState({
     title: doc.title,
     type: doc.type,
     writerName: doc.writerName ?? "",
     source: doc.source ?? ""
   });
+  const [tagDrafts, setTagDrafts] = useState<Array<Pick<HammerDocumentTag, "key" | "value">>>(normalizedDocumentTags(doc.tags));
+  const [tagKeyDraft, setTagKeyDraft] = useState("");
+  const [tagValueDraft, setTagValueDraft] = useState("");
+  const [tagMessage, setTagMessage] = useState("");
+  const [tagBusy, setTagBusy] = useState(false);
   const [quickNoteDraft, setQuickNoteDraft] = useState("");
   const [quickNoteTarget, setQuickNoteTarget] = useState<"VERSION" | "SCRIPT">("VERSION");
   const [quickNoteVisibility, setQuickNoteVisibility] = useState<HammerComment["visibility"]>("PROJECT_TEAM");
@@ -5154,7 +5408,13 @@ function ScriptDetail({
   const [markdownDraft, setMarkdownDraft] = useState(version?.markdownNotes ?? "");
   const [markdownMessage, setMarkdownMessage] = useState("");
   const [markdownBusy, setMarkdownBusy] = useState(false);
-  const documentVersions = versionsWithText.filter((item) => item.documentId === doc.id).sort((a, b) => b.versionNumber - a.versionNumber);
+  const documentVersions = useMemo(() => versionsWithText.filter((item) => item.documentId === doc.id).sort((a, b) => b.versionNumber - a.versionNumber), [doc.id, versionsWithText]);
+  const compareVersions = useMemo(() => [...documentVersions].sort((a, b) => a.versionNumber - b.versionNumber), [documentVersions]);
+  const [compareFromVersionId, setCompareFromVersionId] = useState(compareVersions[0]?.id ?? "");
+  const [compareToVersionId, setCompareToVersionId] = useState(compareVersions[1]?.id ?? compareVersions[0]?.id ?? "");
+  const compareFromVersion = compareVersions.find((item) => item.id === compareFromVersionId) ?? compareVersions[0];
+  const compareToVersion = compareVersions.find((item) => item.id === compareToVersionId) ?? compareVersions[1] ?? compareFromVersion;
+  const compareDiff = buildTextDiff(compareFromVersion?.extractedText ?? "", compareToVersion?.extractedText ?? "");
   const attachedSupportingDocuments = supportingDocuments.filter((item) => item.scriptDocumentId === doc.id);
   const scriptComments = comments.filter((comment) => comment.targetId === doc.id);
   const versionComments = version ? comments.filter((comment) => comment.targetId === version.id) : [];
@@ -5170,8 +5430,12 @@ function ScriptDetail({
       writerName: doc.writerName ?? "",
       source: doc.source ?? ""
     });
+    setTagDrafts(normalizedDocumentTags(doc.tags));
     setMetadataMessage("");
-  }, [doc.id, doc.source, doc.title, doc.type, doc.writerName]);
+    setTagMessage("");
+    setTagKeyDraft("");
+    setTagValueDraft("");
+  }, [doc.id, doc.source, doc.tags, doc.title, doc.type, doc.writerName]);
 
   useEffect(() => {
     setQuickNoteDraft("");
@@ -5180,6 +5444,16 @@ function ScriptDetail({
     setMarkdownDraft(version?.markdownNotes ?? "");
     setMarkdownMessage("");
   }, [doc.id, version?.id, version?.markdownNotes]);
+
+  useEffect(() => {
+    if (!compareVersions.length) return;
+    if (!compareFromVersionId || !compareVersions.some((item) => item.id === compareFromVersionId)) {
+      setCompareFromVersionId(compareVersions[0].id);
+    }
+    if (!compareToVersionId || !compareVersions.some((item) => item.id === compareToVersionId)) {
+      setCompareToVersionId(compareVersions[1]?.id ?? compareVersions[0].id);
+    }
+  }, [compareFromVersionId, compareToVersionId, compareVersions]);
 
   async function saveMetadata() {
     if (!onUpdateMetadata) return;
@@ -5194,10 +5468,50 @@ function ScriptDetail({
         writerName: metadataDraft.writerName.trim(),
         source: metadataDraft.source.trim()
       });
-      setMetadataMessage("Script details updated.");
+      setMetadataMessage("Script info updated.");
     } catch (error) {
-      setMetadataMessage(error instanceof Error ? error.message : "Could not update script details.");
+      setMetadataMessage(error instanceof Error ? error.message : "Could not update script info.");
     }
+  }
+
+  async function persistTagDrafts(nextTags: Array<Pick<HammerDocumentTag, "key" | "value">>, successMessage: string) {
+    const normalizedTags = normalizedDocumentTags(nextTags);
+    setTagDrafts(normalizedTags);
+    setTagBusy(true);
+    setTagMessage("Saving tags...");
+    try {
+      if (onUpdateTags) await onUpdateTags(doc.id, normalizedTags);
+      setTagMessage(successMessage);
+    } catch (error) {
+      setTagDrafts(normalizedDocumentTags(doc.tags));
+      setTagMessage(error instanceof Error ? error.message : "Could not update tags.");
+    } finally {
+      setTagBusy(false);
+    }
+  }
+
+  async function addTagDraft() {
+    if (tagBusy) return;
+    const key = normalizeTagKey(tagKeyDraft);
+    const value = tagValueDraft.trim().replace(/\s+/g, " ");
+    if (!key || !value) {
+      setTagMessage("Add both a tag key and value.");
+      return;
+    }
+    const exists = tagDrafts.some((tag) => tag.key.toLowerCase() === key.toLowerCase() && tag.value.toLowerCase() === value.toLowerCase());
+    if (exists) {
+      setTagMessage("That tag is already attached.");
+      return;
+    }
+    const nextTags = [...tagDrafts, { key, value }];
+    setTagKeyDraft("");
+    setTagValueDraft("");
+    await persistTagDrafts(nextTags, "Tag added.");
+  }
+
+  async function removeTagDraft(index: number) {
+    if (tagBusy) return;
+    await persistTagDrafts(tagDrafts.filter((_, currentIndex) => currentIndex !== index), "Tag removed.");
   }
 
   async function saveQuickNote() {
@@ -5252,7 +5566,7 @@ function ScriptDetail({
         <div className="grid gap-3 md:grid-cols-4">
           <SmallStat label="Status" value={statusLabel(version?.status ?? "DRAFT")} />
           <SmallStat label="Writer" value={doc.writerName ?? userName(doc.createdById)} />
-          <SmallStat label="Project" value={doc.projectId ? projectTitle(doc.projectId) : "Inbox / Unassigned"} />
+          <SmallStat label="Project" value={doc.projectId ? projectTitleFromList(doc.projectId, projects) : "Inbox / Unassigned"} />
           <SmallStat label="Current Version" value={`v${version?.versionNumber ?? 1}`} />
         </div>
         <div className="mt-3 flex flex-wrap gap-1.5 border-t border-white/10 pt-3">
@@ -5260,7 +5574,7 @@ function ScriptDetail({
             ["overview", "Overview"],
             ["notes", `Notes${visibleNotesCount ? ` (${visibleNotesCount})` : ""}`],
             ["files", "Files"],
-            ["versions", `Versions (${documentVersions.length})`],
+            ["compare", "Compare"],
             ["breakdown", "Breakdown"]
           ].map(([id, label]) => (
             <button
@@ -5276,15 +5590,8 @@ function ScriptDetail({
       </Panel>
 
       {tab === "overview" ? (
-        <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
+        <div className="grid gap-4 xl:grid-cols-2">
           <Panel>
-            <SectionHeader eyebrow="Document" title="Readable Text" />
-            {textState.loading ? <p className="mb-2 rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 text-xs text-studio-300">Loading script text...</p> : null}
-            {textState.message ? <p className="mb-2 rounded border border-ember/30 bg-ember/10 px-2.5 py-2 text-xs text-ember">{textState.message}</p> : null}
-            <pre className="max-h-[620px] overflow-auto rounded-lg border border-white/10 bg-black/25 p-3 text-[13px] leading-5 text-studio-200">{version?.extractedText || "Readable text is not available for this version yet."}</pre>
-          </Panel>
-          <div className="space-y-4">
-            <Panel>
               <SectionHeader eyebrow="Review" title="Current Decision" />
               <div className="space-y-3">
                 <Badge value={version?.status ?? "DRAFT"} />
@@ -5339,7 +5646,7 @@ function ScriptDetail({
               </div>
             </Panel>
             <Panel>
-              <SectionHeader eyebrow="Metadata" title="Script Details" />
+              <SectionHeader eyebrow="Script Info" title="Core Fields" />
               {onUpdateMetadata ? (
                 <div className="space-y-3">
                   <label className="grid gap-1">
@@ -5362,7 +5669,7 @@ function ScriptDetail({
                     <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Source</span>
                     <input className="field" value={metadataDraft.source} onChange={(event) => setMetadataDraft((current) => ({ ...current, source: event.target.value }))} placeholder="Source, agency, manager, internal" />
                   </label>
-                  <PrimaryButton icon={CheckCircle2} label="Save Details" onClick={saveMetadata} />
+                  <PrimaryButton icon={CheckCircle2} label="Save Info" onClick={saveMetadata} />
                   {metadataMessage ? <p className="text-xs text-studio-300">{metadataMessage}</p> : null}
                 </div>
               ) : (
@@ -5373,122 +5680,162 @@ function ScriptDetail({
                   <SmallStat label="Source" value={doc.source ?? "Internal"} />
                 </div>
               )}
+              <div className="mt-4 border-t border-white/10 pt-4">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Tags</p>
+                    <p className="mt-1 text-xs text-studio-500">Use key/value tags like agency, manager, contest, tone, or buyer.</p>
+                  </div>
+                </div>
+                {tagDrafts.length ? (
+                  <div className="mb-3 flex flex-wrap gap-1.5">
+                    {tagDrafts.map((tag, index) => (
+                      <span key={`${tag.key}-${tag.value}-${index}`} className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-emerald-300/25 bg-emerald-400/10 px-2.5 py-1 text-xs font-semibold text-emerald-100">
+                        <span className="truncate"><span className="text-emerald-300">{tag.key}</span>: {tag.value}</span>
+                        {onUpdateTags ? (
+                          <button type="button" onClick={() => removeTagDraft(index)} disabled={tagBusy} className="rounded-full text-emerald-100/70 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-50" aria-label={`Remove ${tag.key} tag`}>
+                            <X className="h-3 w-3" />
+                          </button>
+                        ) : null}
+                      </span>
+                    ))}
+                  </div>
+                ) : <p className="mb-3 text-xs text-studio-500">No tags yet.</p>}
+                {onUpdateTags ? (
+                  <div className="space-y-2">
+                    <div className="grid gap-2 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_auto] sm:items-end">
+                      <label className="grid gap-1">
+                        <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">Key</span>
+                        <input className="field" list="document-tag-key-options" value={tagKeyDraft} onChange={(event) => setTagKeyDraft(event.target.value)} placeholder="agency" disabled={tagBusy} />
+                      </label>
+                      <label className="grid gap-1">
+                        <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">Value</span>
+                        <input className="field" value={tagValueDraft} onChange={(event) => setTagValueDraft(event.target.value)} placeholder="CAA" disabled={tagBusy} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void addTagDraft(); } }} />
+                      </label>
+                      <button type="button" onClick={() => void addTagDraft()} disabled={tagBusy} className="inline-flex min-h-10 items-center justify-center rounded-md border border-white/10 px-3 py-2 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline disabled:cursor-not-allowed disabled:opacity-50">{tagBusy ? "Saving..." : "Add"}</button>
+                    </div>
+                    <datalist id="document-tag-key-options">
+                      {["source", "agency", "manager", "contest", "list", "genre", "tone", "buyer", "coverage", "priority"].map((key) => <option key={key} value={key} />)}
+                    </datalist>
+                    {tagMessage ? <p className="text-xs text-studio-300">{tagMessage}</p> : null}
+                  </div>
+                ) : null}
+              </div>
             </Panel>
-          </div>
         </div>
       ) : null}
 
       {tab === "notes" ? (
-        <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-          <Panel className="xl:col-span-2">
-            <SectionHeader eyebrow="Current Version" title={version ? `Version ${version.versionNumber} Markdown Notes` : "Version Markdown Notes"} />
-            <div className="grid gap-3 lg:grid-cols-2">
-              <div className="space-y-2">
-                <textarea
-                  className="field min-h-56 font-mono text-[13px]"
-                  value={markdownDraft}
-                  onChange={(event) => setMarkdownDraft(event.target.value)}
-                  placeholder={"## Coverage Notes\n- What changed in this draft?\n- Open questions\n- Producer concerns"}
-                  disabled={!version || !onUpdateVersionMarkdown}
-                />
-                <div className="flex flex-wrap items-center gap-2">
-                  <button type="button" disabled={markdownBusy || !version || !onUpdateVersionMarkdown} onClick={saveMarkdownNotes} className="inline-flex items-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">
-                    <CheckCircle2 className="h-4 w-4" />
-                    Save Markdown Notes
-                  </button>
-                  {markdownMessage ? <p className="text-xs text-studio-300">{markdownMessage}</p> : null}
-                </div>
-              </div>
-              <MarkdownPreview markdown={markdownDraft} />
-            </div>
-          </Panel>
-          <CommentsPanel
-            eyebrow="Current Version"
-            title={version ? `Version ${version.versionNumber} Notes` : "Version Notes"}
-            targetType={version ? "DOCUMENT_VERSION" : "DOCUMENT"}
-            targetId={version?.id ?? doc.id}
-            projectId={doc.projectId}
-            versionNote={versionUploadNote}
-            comments={versionComments}
-            currentUser={currentUser}
-            onCreateComment={onCreateComment}
-            emptyLabel={version ? "No notes for this version yet." : "No version is selected."}
-            placeholder={version ? `Add a note to version ${version.versionNumber}` : "Add a version note"}
-            saveLabel="Save Version Note"
-          />
-          <CommentsPanel
-            eyebrow="Overall Script"
-            title="Script Notes"
-            targetType="DOCUMENT"
-            targetId={doc.id}
-            projectId={doc.projectId}
-            comments={scriptComments}
-            currentUser={currentUser}
-            onCreateComment={onCreateComment}
-            emptyLabel="No overall script notes yet."
-            placeholder="Add a note to the overall script"
-            saveLabel="Save Script Note"
-          />
-        </div>
+        <ScriptNotesWorkspace
+          document={doc}
+          version={version}
+          versionUploadNote={versionUploadNote}
+          versionMarkdownNote={versionMarkdownNote}
+          comments={[...scriptComments, ...versionComments]}
+          currentUser={currentUser}
+          onCreateComment={onCreateComment}
+        />
       ) : null}
 
       {tab === "files" ? (
         <Panel>
-          <SectionHeader eyebrow="Files" title="Script Packet" action={onUpload ? <PrimaryButton icon={UploadCloud} label="Upload New Script Version" onClick={() => setTab("versions")} /> : undefined} />
-          <div className="grid gap-4 xl:grid-cols-[320px_1fr]">
-            <div className="space-y-3">
-              <div className="rounded-md border border-white/10 bg-white/[0.03] p-3">
-                <p className="text-[11px] uppercase tracking-[0.12em] text-studio-400">Primary Script</p>
-                <p className="mt-1 text-[13px] font-semibold text-studio-100">{version?.fileName ?? doc.title}</p>
-                <p className="mt-1 text-xs text-studio-400">{version?.fileType ?? doc.type} / {version ? formatBytes(version.fileSize) : "Unknown size"}</p>
-                <p className="mt-2 break-all text-xs text-studio-300">{version?.storagePath}</p>
-                {canDownload && version ? <div className="mt-2"><DownloadFileLink fileName={version.fileName} dataUrl={version.dataUrl} fallbackText={version.extractedText} resourceType="documentVersion" resourceId={version.id} currentUser={currentUser} /></div> : null}
-              </div>
-              {onSupportingUpload ? <SupportingDocumentUpload documentId={doc.id} onUpload={onSupportingUpload} /> : null}
-            </div>
+          <SectionHeader eyebrow="Files" title="Script Packet" action={<div className="flex flex-wrap gap-1.5">{onSupportingUpload ? <SupportingDocumentUpload documentId={doc.id} onUpload={onSupportingUpload} /> : null}{onUpload ? <PrimaryButton icon={Plus} label="Compare Versions" onClick={() => setTab("compare")} /> : null}</div>} />
+          <div className="space-y-4">
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-studio-100">Supporting Documents</h3>
-                <span className="rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-[11px] text-studio-300">{attachedSupportingDocuments.length}</span>
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-studio-100">Context Files</h3>
+                <span className="rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-[11px] text-studio-300">{attachedSupportingDocuments.length + (version ? 1 : 0)}</span>
               </div>
-              {attachedSupportingDocuments.length ? (
-                <div className="grid gap-2">
-                  {attachedSupportingDocuments.map((item) => (
-                    <div key={item.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
-                      <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                        <div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="text-[13px] font-semibold text-studio-100">{item.title}</p>
-                            <Badge value={item.type} />
-                          </div>
-                          <p className="mt-1 text-xs text-studio-400">{item.fileName} / {item.fileType} / {formatBytes(item.fileSize)}</p>
-                          {item.source ? <p className="mt-1 text-xs text-studio-400">Source: {item.source}</p> : null}
-                          {item.notes ? <p className="mt-2 text-[13px] leading-5 text-studio-300">{item.notes}</p> : null}
-                          {item.extractedText ? <p className="mt-2 line-clamp-2 text-xs leading-5 text-studio-400">{item.extractedText}</p> : null}
+              <div className="grid gap-2">
+                <div className="rounded-lg border border-emerald-300/20 bg-emerald-400/10 p-3">
+                  <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-[13px] font-semibold text-studio-100">{doc.title}</p>
+                        <Badge value="Primary Script" subtle />
+                        {version ? <Badge value={`v${version.versionNumber}`} /> : null}
+                      </div>
+                      <p className="mt-1 truncate text-xs text-studio-400">{version?.fileName ?? doc.title} / {version?.fileType ?? doc.type} / {version ? formatBytes(version.fileSize) : "Unknown size"}</p>
+                      {version?.storagePath ? <p className="mt-2 break-all text-xs text-studio-400">{version.storagePath}</p> : null}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {version ? <span className="text-[11px] text-studio-500">{version.createdAt}</span> : null}
+                      {canDownload && version ? <DownloadFileLink fileName={version.fileName} dataUrl={version.dataUrl} fallbackText={version.extractedText} resourceType="documentVersion" resourceId={version.id} currentUser={currentUser} compact /> : null}
+                    </div>
+                  </div>
+                </div>
+                {attachedSupportingDocuments.length ? attachedSupportingDocuments.map((item) => (
+                  <div key={item.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-3 transition hover:border-amberline/30 hover:bg-white/[0.05]">
+                    <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-[13px] font-semibold text-studio-100">{item.title}</p>
+                          <Badge value={item.type} />
                         </div>
-                        <div className="flex shrink-0 items-center gap-1.5">
-                          <span className="text-[11px] text-studio-500">{item.uploadedAt}</span>
-                          {canDownload ? <DownloadFileLink fileName={item.fileName} dataUrl={item.dataUrl} fallbackText={item.extractedText} resourceType="supportingDocument" resourceId={item.id} currentUser={currentUser} compact /> : null}
-                          {onSupportingDelete ? <DangerButton label="Delete" onClick={() => onSupportingDelete(item.id)} /> : null}
-                        </div>
+                        <p className="mt-1 truncate text-xs text-studio-400">{item.fileName} / {item.fileType} / {formatBytes(item.fileSize)}</p>
+                        {item.source ? <p className="mt-1 text-xs text-studio-400">Source: {item.source}</p> : null}
+                        {item.notes ? <p className="mt-2 text-[13px] leading-5 text-studio-300">{item.notes}</p> : null}
+                        {item.extractedText ? <p className="mt-2 line-clamp-2 text-xs leading-5 text-studio-400">{item.extractedText}</p> : null}
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        <span className="text-[11px] text-studio-500">{item.uploadedAt}</span>
+                        {canDownload ? <DownloadFileLink fileName={item.fileName} dataUrl={item.dataUrl} fallbackText={item.extractedText} resourceType="supportingDocument" resourceId={item.id} currentUser={currentUser} compact /> : null}
+                        {onSupportingDelete ? <DangerButton label="Delete" onClick={() => onSupportingDelete(item.id)} /> : null}
                       </div>
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <EmptyState label="Add context documents, coverage, emails, writer notes, or other reference material connected to this script." />
-              )}
+                  </div>
+                )) : (
+                  <EmptyState label="Add context documents, coverage, emails, writer notes, or other reference material connected to this script." />
+                )}
+              </div>
             </div>
           </div>
         </Panel>
       ) : null}
 
-      {tab === "versions" ? (
+      {tab === "compare" ? (
         <Panel>
-          <SectionHeader eyebrow="History" title="Versions" action={onUpload ? <TableLink href={`/scripts/${doc.id}/versions`}>Manage versions</TableLink> : undefined} />
-          <div className="grid gap-3">
-            {documentVersions.map((item) => <div key={item.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-3"><div className="flex items-center justify-between gap-3"><p className="text-[13px] font-semibold text-studio-100">Version {item.versionNumber}: {item.fileName}</p><div className="flex shrink-0 items-center gap-1.5">{canDownload ? <DownloadFileLink fileName={item.fileName} dataUrl={item.dataUrl} fallbackText={item.extractedText} resourceType="documentVersion" resourceId={item.id} currentUser={currentUser} compact /> : null}<Badge value={item.status} /></div></div><p className="mt-1.5 text-xs text-studio-300">{item.notes}</p>{item.markdownNotes ? <p className="mt-1 text-xs font-semibold text-amberline">Markdown notes attached</p> : null}<p className="mt-1 text-[11px] text-studio-500">{item.fileType} / {formatBytes(item.fileSize)} / {item.createdAt}</p></div>)}
-          </div>
+          <SectionHeader eyebrow="Compare" title="Version Comparison" action={onUpload ? <TableLink href={`/scripts/${doc.id}/versions`}>Manage versions</TableLink> : undefined} />
+          {textState.loading ? <p className="mb-3 rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 text-xs text-studio-300">Loading version text for comparison...</p> : null}
+          {textState.message ? <p className="mb-3 rounded border border-ember/30 bg-ember/10 px-2.5 py-2 text-xs text-ember">{textState.message}</p> : null}
+          {compareVersions.length > 1 ? (
+            <div className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="grid gap-1">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Version A</span>
+                  <select className="field" value={compareFromVersion?.id ?? ""} onChange={(event) => setCompareFromVersionId(event.target.value)}>
+                    {compareVersions.map((item) => <option key={item.id} value={item.id}>v{item.versionNumber} / {item.fileName}</option>)}
+                  </select>
+                </label>
+                <label className="grid gap-1">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Version B</span>
+                  <select className="field" value={compareToVersion?.id ?? ""} onChange={(event) => setCompareToVersionId(event.target.value)}>
+                    {compareVersions.map((item) => <option key={item.id} value={item.id}>v{item.versionNumber} / {item.fileName}</option>)}
+                  </select>
+                </label>
+              </div>
+              <div className="grid gap-3 md:grid-cols-3">
+                <SmallStat label="Version A" value={compareFromVersion ? `v${compareFromVersion.versionNumber}` : "None"} />
+                <SmallStat label="Version B" value={compareToVersion ? `v${compareToVersion.versionNumber}` : "None"} />
+                <SmallStat label="Summary" value={`${compareDiff.added} added / ${compareDiff.removed} removed`} />
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <DiffColumn title={compareFromVersion ? `v${compareFromVersion.versionNumber} removed` : "Version A"} lines={compareDiff.lines.filter((line) => line.kind !== "added")} />
+                <DiffColumn title={compareToVersion ? `v${compareToVersion.versionNumber} added` : "Version B"} lines={compareDiff.lines.filter((line) => line.kind !== "removed")} />
+              </div>
+              <details className="rounded-lg border border-white/10 bg-white/[0.02] p-3">
+                <summary className="cursor-pointer text-sm font-semibold text-studio-100">Version History</summary>
+                <div className="mt-3 grid gap-2">
+                  {documentVersions.map((item) => <div key={item.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-3"><div className="flex items-center justify-between gap-3"><p className="text-[13px] font-semibold text-studio-100">Version {item.versionNumber}: {item.fileName}</p><div className="flex shrink-0 items-center gap-1.5">{canDownload ? <DownloadFileLink fileName={item.fileName} dataUrl={item.dataUrl} fallbackText={item.extractedText} resourceType="documentVersion" resourceId={item.id} currentUser={currentUser} compact /> : null}<Badge value={item.status} /></div></div><p className="mt-1.5 text-xs text-studio-300">{item.notes}</p>{item.markdownNotes ? <p className="mt-1 text-xs font-semibold text-amberline">Markdown notes attached</p> : null}<p className="mt-1 text-[11px] text-studio-500">{item.fileType} / {formatBytes(item.fileSize)} / {item.createdAt}</p></div>)}
+                </div>
+              </details>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4">
+              <p className="text-sm font-semibold text-studio-100">Add another version to compare changes.</p>
+              <p className="mt-1 text-xs leading-5 text-studio-400">This script currently has {documentVersions.length} version{documentVersions.length === 1 ? "" : "s"}. Use Manage versions to upload a new draft.</p>
+            </div>
+          )}
         </Panel>
       ) : null}
 
@@ -5540,8 +5887,8 @@ function ScriptVersions({
   return (
     <div className="space-y-4">
       <Panel>
-        <SectionHeader eyebrow="History" title="Document Versions" action={onUpload ? <PrimaryButton icon={UploadCloud} label="Upload New Version" onClick={() => setUploadOpen((open) => !open)} /> : undefined} />
-        {uploadOpen && onUpload ? <DocumentUploadPanel projectId={document.projectId} documents={[document]} onUpload={onUpload} onDone={() => setUploadOpen(false)} /> : null}
+        <SectionHeader eyebrow="History" title="Document Versions" action={onUpload ? <PrimaryButton icon={UploadCloud} label="Upload New Version" onClick={() => setUploadOpen(true)} /> : undefined} />
+        {uploadOpen && onUpload ? <DocumentUploadPanel projectId={document.projectId} documents={[document]} onUpload={onUpload} onDone={() => setUploadOpen(false)} onCancel={() => setUploadOpen(false)} /> : null}
         <div className="grid gap-3">
           {documentVersions.map((version) => <div key={version.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-3"><div className="flex items-center justify-between gap-3"><p className="text-[13px] font-semibold text-studio-100">Version {version.versionNumber}: {version.fileName}</p><div className="flex shrink-0 items-center gap-1.5">{canDownload ? <DownloadFileLink fileName={version.fileName} dataUrl={version.dataUrl} fallbackText={version.extractedText} resourceType="documentVersion" resourceId={version.id} currentUser={currentUser} compact /> : null}<Badge value={version.status} /></div></div><p className="mt-1.5 text-xs text-studio-300">{version.notes}</p>{version.markdownNotes ? <p className="mt-1 text-xs font-semibold text-amberline">Markdown notes attached</p> : null}<p className="mt-1 text-[11px] text-studio-500">{version.fileType} / {formatBytes(version.fileSize)} / {version.createdAt}</p></div>)}
         </div>
@@ -5568,6 +5915,207 @@ function ScriptVersions({
           <DiffColumn title={toVersion ? `v${toVersion.versionNumber} added` : "Version B"} lines={diff.lines.filter((line) => line.kind !== "removed")} />
         </div>
       </Panel>
+    </div>
+  );
+}
+
+function ScriptNotesWorkspace({
+  document,
+  version,
+  versionUploadNote,
+  versionMarkdownNote,
+  comments,
+  currentUser,
+  onCreateComment
+}: {
+  document: HammerDocument;
+  version?: HammerDocumentVersion;
+  versionUploadNote?: string;
+  versionMarkdownNote?: string;
+  comments: HammerComment[];
+  currentUser?: HammerUser;
+  onCreateComment?: (input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string; metadataJson?: HammerCommentMetadata }) => Promise<void>;
+}) {
+  const [body, setBody] = useState("");
+  const [attachTo, setAttachTo] = useState<"VERSION" | "SCRIPT">(version ? "VERSION" : "SCRIPT");
+  const [noteType, setNoteType] = useState<HammerNoteType>("GENERAL");
+  const [visibility, setVisibility] = useState<HammerComment["visibility"]>("PROJECT_TEAM");
+  const [tagDrafts, setTagDrafts] = useState<HammerNoteTag[]>([]);
+  const [tagKeyDraft, setTagKeyDraft] = useState("");
+  const [tagValueDraft, setTagValueDraft] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const noteItems = [
+    ...comments.map((comment) => ({ kind: "comment" as const, id: comment.id, createdAt: comment.createdAt, comment })),
+    ...(versionUploadNote?.trim() ? [{ kind: "legacy" as const, id: `upload-${version?.id ?? document.id}`, createdAt: version?.createdAt ?? document.updatedAt, title: "Version Upload Note", body: versionUploadNote, targetLabel: version ? `Version ${version.versionNumber}` : "Overall Script" }] : []),
+    ...(versionMarkdownNote?.trim() ? [{ kind: "legacy" as const, id: `markdown-${version?.id ?? document.id}`, createdAt: version?.createdAt ?? document.updatedAt, title: "Version Markdown Note", body: versionMarkdownNote, targetLabel: version ? `Version ${version.versionNumber}` : "Overall Script" }] : [])
+  ].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+
+  useEffect(() => {
+    setAttachTo(version ? "VERSION" : "SCRIPT");
+    setBody("");
+    setMessage("");
+    setTagDrafts([]);
+  }, [document.id, version?.id]);
+
+  function addNoteTag() {
+    const key = normalizeTagKey(tagKeyDraft);
+    const value = tagValueDraft.trim().replace(/\s+/g, " ");
+    if (!key || !value) {
+      setMessage("Add both a tag key and value, or leave tags blank.");
+      return;
+    }
+    const exists = tagDrafts.some((tag) => tag.key.toLowerCase() === key.toLowerCase() && tag.value.toLowerCase() === value.toLowerCase());
+    if (exists) {
+      setMessage("That tag is already attached to this note.");
+      return;
+    }
+    setTagDrafts((current) => [...current, { key, value }]);
+    setTagKeyDraft("");
+    setTagValueDraft("");
+    setMessage("");
+  }
+
+  function removeNoteTag(index: number) {
+    setTagDrafts((current) => current.filter((_, currentIndex) => currentIndex !== index));
+  }
+
+  async function saveNote() {
+    if (!onCreateComment || !body.trim()) {
+      setMessage(body.trim() ? "Notes cannot be saved from this view yet." : "Write a note before saving.");
+      return;
+    }
+    const targetType = attachTo === "VERSION" && version ? "DOCUMENT_VERSION" : "DOCUMENT";
+    const targetId = attachTo === "VERSION" && version ? version.id : document.id;
+    setBusy(true);
+    setMessage("");
+    try {
+      await onCreateComment({
+        targetType,
+        targetId,
+        projectId: document.projectId,
+        body: body.trim(),
+        visibility,
+        metadataJson: { noteType, tags: normalizedDocumentTags(tagDrafts) }
+      });
+      setBody("");
+      setTagDrafts([]);
+      setTagKeyDraft("");
+      setTagValueDraft("");
+      setMessage("Note saved.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not save note.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Panel>
+      <SectionHeader eyebrow="Notes" title="Script Notes" />
+      <div className="grid gap-4 xl:grid-cols-[360px_1fr]">
+        <div className="rounded-lg border border-white/10 bg-white/[0.025] p-3">
+          <div className="grid gap-3">
+            <label className="grid gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Note</span>
+              <textarea className="field min-h-36" value={body} onChange={(event) => setBody(event.target.value)} placeholder="Add coverage, context, follow-up, or creative notes" />
+            </label>
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+              <label className="grid gap-1">
+                <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Attach To</span>
+                <select className="field" value={attachTo} onChange={(event) => setAttachTo(event.target.value as "VERSION" | "SCRIPT")}>
+                  {version ? <option value="VERSION">Current Version v{version.versionNumber}</option> : null}
+                  <option value="SCRIPT">Overall Script</option>
+                </select>
+              </label>
+              <label className="grid gap-1">
+                <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Note Type</span>
+                <select className="field" value={noteType} onChange={(event) => setNoteType(event.target.value as HammerNoteType)}>
+                  {hammerNoteTypes.map((type) => <option key={type} value={type}>{noteTypeLabel(type)}</option>)}
+                </select>
+              </label>
+              <label className="grid gap-1 sm:col-span-2 xl:col-span-1">
+                <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Visibility</span>
+                <select className="field" value={visibility} onChange={(event) => setVisibility(event.target.value as HammerComment["visibility"])}>
+                  <option value="PROJECT_TEAM">Project Team</option>
+                  <option value="INTERNAL">Internal</option>
+                  <option value="EXECUTIVE_ONLY">Executive Only</option>
+                </select>
+              </label>
+            </div>
+            <div className="grid gap-2">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Tags</span>
+              {tagDrafts.length ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {tagDrafts.map((tag, index) => (
+                    <span key={`${tag.key}-${tag.value}-${index}`} className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-emerald-300/25 bg-emerald-400/10 px-2.5 py-1 text-xs font-semibold text-emerald-100">
+                      <span className="truncate"><span className="text-emerald-300">{tag.key}</span>: {tag.value}</span>
+                      <button type="button" onClick={() => removeNoteTag(index)} className="rounded-full text-emerald-100/70 transition hover:text-white" aria-label={`Remove ${tag.key} tag`}><X className="h-3 w-3" /></button>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+              <div className="grid gap-2 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_auto] sm:items-end xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_auto]">
+                <label className="grid gap-1">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">Key</span>
+                  <input className="field" list="script-note-tag-key-options" value={tagKeyDraft} onChange={(event) => setTagKeyDraft(event.target.value)} placeholder="concern" />
+                </label>
+                <label className="grid gap-1">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">Value</span>
+                  <input className="field" value={tagValueDraft} onChange={(event) => setTagValueDraft(event.target.value)} placeholder="third act" onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addNoteTag(); } }} />
+                </label>
+                <button type="button" onClick={addNoteTag} className="min-h-10 rounded-md border border-white/10 px-3 py-2 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline">Add</button>
+              </div>
+              <datalist id="script-note-tag-key-options">
+                {["agency", "manager", "concern", "action", "priority", "tone", "rights", "coverage"].map((key) => <option key={key} value={key} />)}
+              </datalist>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3">
+              {message ? <p className="text-xs text-studio-300">{message}</p> : <span />}
+              <button type="button" disabled={busy || !currentUser} onClick={saveNote} className="inline-flex items-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">
+                <CheckCircle2 className="h-4 w-4" />
+                {busy ? "Saving..." : "Save Note"}
+              </button>
+            </div>
+          </div>
+        </div>
+        <div className="min-h-0 space-y-2">
+          {noteItems.length ? noteItems.map((item) => item.kind === "comment" ? (
+            <ScriptNoteCard key={item.id} comment={item.comment} version={version} document={document} />
+          ) : (
+            <div key={item.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-3 text-[13px] text-studio-300">
+              <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                <Badge value="GENERAL" subtle />
+                <span className="rounded-full border border-white/10 px-2 py-0.5 text-[11px] font-semibold text-studio-400">{item.targetLabel}</span>
+                <span className="text-[11px] text-studio-500">Legacy</span>
+              </div>
+              <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">{item.title}</p>
+              <p className="whitespace-pre-wrap leading-5">{item.body}</p>
+            </div>
+          )) : <EmptyState label="No notes yet." />}
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+function ScriptNoteCard({ comment, version, document }: { comment: HammerComment; version?: HammerDocumentVersion; document: HammerDocument }) {
+  const metadata = noteMetadata(comment);
+  const attachedLabel = comment.targetType === "DOCUMENT_VERSION" ? (version && comment.targetId === version.id ? `Version ${version.versionNumber}` : "Script Version") : "Overall Script";
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3 text-[13px] text-studio-300">
+      <div className="mb-2 flex flex-wrap items-center gap-1.5">
+        <Badge value={noteTypeLabel(metadata.noteType)} subtle />
+        <span className="rounded-full border border-white/10 px-2 py-0.5 text-[11px] font-semibold text-studio-400">{attachedLabel}</span>
+        <span className="rounded-full border border-white/10 px-2 py-0.5 text-[11px] font-semibold text-studio-400">{statusLabel(comment.visibility)}</span>
+      </div>
+      <p className="whitespace-pre-wrap leading-5">{comment.body}</p>
+      {metadata.tags.length ? (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {metadata.tags.map((tag, index) => <span key={`${tag.key}-${tag.value}-${index}`} className="rounded-full border border-emerald-300/20 bg-emerald-400/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-100"><span className="text-emerald-300">{tag.key}</span>: {tag.value}</span>)}
+        </div>
+      ) : null}
+      <p className="mt-2 text-[11px] text-studio-500">{userName(comment.createdById)} / {comment.createdAt}</p>
     </div>
   );
 }
@@ -8838,7 +9386,10 @@ function normalizeScriptSection(section?: string): ScriptLibrarySection | undefi
 }
 
 function projectTitleFromList(projectId: string, projects: HammerProject[]) {
-  return projects.find((project) => project.id === projectId)?.title ?? projectTitle(projectId);
+  const project = projects.find((item) => item.id === projectId);
+  const fallbackTitle = projectTitle(projectId);
+  if (project) return project.title;
+  return fallbackTitle === "Unknown Project" ? "Linked Development Slate Item" : fallbackTitle;
 }
 
 function nameForUserFromList(userId: string | undefined, users: HammerUser[]) {
@@ -9248,6 +9799,31 @@ function combineVersionNotes(notes: string, warning?: string) {
   return notes.trim() ? `${notes.trim()}\n\n${warningNote}` : warningNote;
 }
 
+
+const hammerNoteTypes: HammerNoteType[] = ["GENERAL", "COVERAGE", "CREATIVE", "LEGAL_RIGHTS", "PRODUCTION", "EXECUTIVE", "FOLLOW_UP"];
+
+function noteTypeLabel(type: HammerNoteType | string | undefined) {
+  const labels: Record<HammerNoteType, string> = {
+    GENERAL: "General",
+    COVERAGE: "Coverage",
+    CREATIVE: "Creative",
+    LEGAL_RIGHTS: "Legal / Rights",
+    PRODUCTION: "Production",
+    EXECUTIVE: "Executive",
+    FOLLOW_UP: "Follow-up"
+  };
+  return labels[(type as HammerNoteType) ?? "GENERAL"] ?? "General";
+}
+
+function noteMetadata(comment: HammerComment): { noteType: HammerNoteType; tags: HammerNoteTag[] } {
+  const metadata = comment.metadataJson;
+  const noteType = metadata?.noteType && hammerNoteTypes.includes(metadata.noteType) ? metadata.noteType : "GENERAL";
+  return {
+    noteType,
+    tags: normalizedDocumentTags(metadata?.tags)
+  };
+}
+
 async function extractTextFromUpload(file: File) {
   const extension = file.name.split(".").pop()?.toLowerCase();
   if (file.type === "application/pdf" || extension === "pdf") {
@@ -9367,6 +9943,33 @@ function defaultDueDate() {
   return date.toISOString().slice(0, 10);
 }
 
+function fileNameWithoutExtension(fileName: string) {
+  return fileName.replace(/\.[^.]+$/, "").trim();
+}
+
+function normalizeTagKey(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, " ").slice(0, 48);
+}
+
+function normalizedDocumentTags(tags: Array<Partial<Pick<HammerDocumentTag, "key" | "value">>> | undefined) {
+  const seen = new Set<string>();
+  const normalized: Array<Pick<HammerDocumentTag, "key" | "value">> = [];
+  for (const tag of tags ?? []) {
+    const key = normalizeTagKey(tag.key ?? "");
+    const value = (tag.value ?? "").trim().replace(/\s+/g, " ").slice(0, 160);
+    if (!key || !value) continue;
+    const compound = `${key}:${value.toLowerCase()}`;
+    if (seen.has(compound)) continue;
+    seen.add(compound);
+    normalized.push({ key, value });
+  }
+  return normalized;
+}
+
+function documentTagSearchText(document: HammerDocument) {
+  return (document.tags ?? []).map((tag) => `${tag.key} ${tag.value}`).join(" ");
+}
+
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
@@ -9465,7 +10068,7 @@ function titleForView(view: HammerView, context: { project: HammerProject; docum
     "project-assets": context.project.title,
     scripts: "Scripts in Context",
     "script-detail": context.document.title,
-    "script-versions": "Version History",
+    "script-versions": "Compare Versions",
     "script-diff": "Version Diff",
     "script-breakdown": "Script Breakdown",
     assets: "Assets",
@@ -9486,10 +10089,10 @@ type BreadcrumbItem = {
   href?: string;
 };
 
-function PageBreadcrumbs({ view, project, document, asset, accessDenied = false }: { view: HammerView; project: HammerProject; document: typeof hammerDocuments[number]; asset: typeof hammerAssets[number]; accessDenied?: boolean }) {
+function PageBreadcrumbs({ view, project, document, asset, projects = hammerProjects, accessDenied = false }: { view: HammerView; project: HammerProject; document: typeof hammerDocuments[number]; asset: typeof hammerAssets[number]; projects?: HammerProject[]; accessDenied?: boolean }) {
   const router = useRouter();
   const [hasPageHistory, setHasPageHistory] = useState(false);
-  const breadcrumbs = accessDenied ? [{ label: "Development Slate", href: "/projects" }, { label: "Access Required" }] : breadcrumbsForView(view, { project, document, asset });
+  const breadcrumbs = accessDenied ? [{ label: "Development Slate", href: "/projects" }, { label: "Access Required" }] : breadcrumbsForView(view, { project, document, asset, projects });
   const backHref = backHrefForView(view, { project, document, asset });
 
   useEffect(() => {
@@ -9538,15 +10141,15 @@ function PageBreadcrumbs({ view, project, document, asset, accessDenied = false 
   );
 }
 
-function breadcrumbsForView(view: HammerView, context: { project: HammerProject; document: typeof hammerDocuments[number]; asset: typeof hammerAssets[number] }): BreadcrumbItem[] {
+function breadcrumbsForView(view: HammerView, context: { project: HammerProject; document: typeof hammerDocuments[number]; asset: typeof hammerAssets[number]; projects?: HammerProject[] }): BreadcrumbItem[] {
   const scriptTrail = context.document.projectId
-    ? [{ label: "Development Slate", href: "/projects" }, { label: projectTitle(context.document.projectId), href: `/projects/${context.document.projectId}/documents` }, { label: context.document.title, href: `/scripts/${context.document.id}` }]
+    ? [{ label: "Development Slate", href: "/projects" }, { label: projectTitleFromList(context.document.projectId, context.projects ?? hammerProjects), href: `/projects/${context.document.projectId}/documents` }, { label: context.document.title, href: `/scripts/${context.document.id}` }]
     : [{ label: "Prospects", href: "/prospects" }, { label: context.document.title, href: `/scripts/${context.document.id}` }];
   const projectTrail = [{ label: "Development Slate", href: "/projects" }, { label: context.project.title, href: `/projects/${context.project.id}` }];
 
   if (view === "script-detail") return scriptTrail;
   if (view === "collections") return [{ label: "Collections" }];
-  if (view === "script-versions") return [...scriptTrail, { label: "Versions" }];
+  if (view === "script-versions") return [...scriptTrail, { label: "Compare" }];
   if (view === "script-diff") return [...scriptTrail, { label: "Diff" }];
   if (view === "script-breakdown") return [...scriptTrail, { label: "Breakdown" }];
   if (view === "project-detail") return projectTrail;

@@ -132,7 +132,8 @@ export async function POST(request: Request) {
     return NextResponse.json({
       document: toDocument(result.document),
       version: toVersion(result.version),
-      warning: "Upload saved. Text extraction is running in the background; refresh the document in a moment to see parsed text, breakdown, and diff support."
+      warning: "Upload saved. Text extraction is running in the background; refresh the document in a moment to see parsed text, breakdown, and diff support.",
+      extractionQueued: true
     }, { status: 201 });
   } catch (error) {
     const detail = uploadErrorMessage(error);

@@ -1,4 +1,4 @@
-import { CommentTargetType, DocumentVersionStatus, PrismaClient, TaskTargetType } from "@prisma/client";
+import { CommentTargetType, DocumentVersionStatus, Prisma, PrismaClient, TaskTargetType } from "@prisma/client";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { hammerApprovals, hammerAssets, hammerComments, hammerContacts, hammerDocuments, hammerEntities, hammerProjectMembers, hammerProjects, hammerScenes, hammerTasks, hammerUsers, hammerVersions, type HammerRole } from "../lib/hammer-data";
@@ -383,6 +383,7 @@ async function main() {
       update: { body: comment.body, status: comment.status },
       create: {
         ...comment,
+        metadataJson: comment.metadataJson as Prisma.InputJsonValue | undefined,
         targetType: comment.targetType as CommentTargetType,
         createdAt: dateAtNoon(comment.createdAt)
       }
