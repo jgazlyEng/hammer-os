@@ -1,9 +1,9 @@
 {
   "name": "hammer-production-tracker",
-  "version": "1.64.0",
+  "version": "1.81.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "NEXT_DIST_DIR=.next-dev next dev",
     "start": "next start --hostname 0.0.0.0 --port 3000",
     "build": "next build",
     "lint": "next lint",

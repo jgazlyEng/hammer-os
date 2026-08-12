@@ -147,6 +147,15 @@ export interface HammerProjectMember {
   role: HammerRole;
 }
 
+export interface HammerDocumentTag {
+  id: string;
+  documentId: string;
+  key: string;
+  value: string;
+  createdById?: string;
+  createdAt: string;
+}
+
 export interface HammerDocument {
   id: string;
   projectId?: string;
@@ -159,6 +168,7 @@ export interface HammerDocument {
   contactId?: string;
   writerName?: string;
   submittedAt?: string;
+  tags?: HammerDocumentTag[];
 }
 
 export interface HammerDocumentVersion {
@@ -269,11 +279,24 @@ export interface HammerAssetLink {
   linkType: "REFERENCE" | "DESIGN_TARGET" | "BREAKDOWN_ITEM" | "APPROVED_LOOK" | "REVIEW_CONTEXT";
 }
 
+export type HammerNoteType = "GENERAL" | "COVERAGE" | "CREATIVE" | "LEGAL_RIGHTS" | "PRODUCTION" | "EXECUTIVE" | "FOLLOW_UP";
+
+export interface HammerNoteTag {
+  key: string;
+  value: string;
+}
+
+export interface HammerCommentMetadata {
+  noteType?: HammerNoteType;
+  tags?: HammerNoteTag[];
+}
+
 export interface HammerComment {
   id: string;
   targetType: string;
   targetId: string;
   body: string;
+  metadataJson?: HammerCommentMetadata;
   visibility: "INTERNAL" | "PROJECT_TEAM" | "EXECUTIVE_ONLY";
   status: "OPEN" | "RESOLVED" | "ARCHIVED";
   createdById: string;

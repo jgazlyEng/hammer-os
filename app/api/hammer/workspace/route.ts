@@ -22,7 +22,7 @@ export async function GET(request: Request) {
       prisma.project.findMany({ where: projectWhere, orderBy: { updatedAt: "desc" } }),
       prisma.prospect.findMany({ where: { deletedAt: null }, orderBy: [{ promotedProjectId: "asc" }, { updatedAt: "desc" }] }),
       prisma.prospectAsset.findMany({ where: { deletedAt: null, prospect: { deletedAt: null } }, orderBy: { createdAt: "desc" } }),
-      prisma.document.findMany({ where: documentWhere, orderBy: { updatedAt: "desc" } }),
+      prisma.document.findMany({ where: documentWhere, include: { tags: { orderBy: [{ key: "asc" }, { value: "asc" }] } }, orderBy: { updatedAt: "desc" } }),
       prisma.documentVersion.findMany({
         where: { document: documentWhere },
         orderBy: { createdAt: "desc" },
@@ -279,17 +279,24 @@ export async function POST(request: Request) {
           data: { markdownNotes: optionalString(body.markdownNotes) ?? null }
         })) });
 
-      case "createComment":
+      case "createComment": {
+        const targetType = commentTargetTypeField(body.targetType);
+        const targetId = stringField(body.targetId);
+        const targetAssociation = await resolveCommentTargetAssociation(targetType, targetId);
+        if (!targetAssociation.exists) return NextResponse.json({ error: "Comment target not found." }, { status: 404 });
+        if (!canAccessAssociatedProject(auth.user.appRole, auth.user.projectRoles, targetAssociation.projectId)) return NextResponse.json(forbidden(), { status: 403 });
         return NextResponse.json({ comment: toComment(await prisma.comment.create({
           data: {
-            projectId: optionalString(body.projectId),
-            targetType: commentTargetTypeField(body.targetType),
-            targetId: stringField(body.targetId),
+            projectId: targetAssociation.projectId,
+            targetType,
+            targetId,
             body: stringField(body.body),
+            metadataJson: noteMetadataField(body.metadataJson),
             visibility: commentVisibilityField(body.visibility),
             createdById: auth.user.id
           }
         })) }, { status: 201 });
+      }
 
       case "createScriptCollection":
         if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
@@ -414,12 +421,25 @@ export async function POST(request: Request) {
         return NextResponse.json({ ok: true });
       }
 
-      case "assignDocumentToProject":
+      case "assignDocumentToProject": {
         if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
-        return NextResponse.json({ document: toDocument(await prisma.document.update({
-          where: { id: stringField(body.documentId) },
-          data: { projectId: stringField(body.projectId), updatedAt: new Date() }
-        })) });
+        const documentId = stringField(body.documentId);
+        const projectId = stringField(body.projectId);
+        if (!documentId || !projectId) return NextResponse.json({ error: "Document and project are required." }, { status: 400 });
+        const [document, project] = await Promise.all([
+          prisma.document.findUnique({ where: { id: documentId }, select: { id: true, deletedAt: true, versions: { select: { id: true } } } }),
+          prisma.project.findUnique({ where: { id: projectId }, select: { id: true, deletedAt: true } })
+        ]);
+        if (!document || document.deletedAt) return NextResponse.json({ error: "Document not found." }, { status: 404 });
+        if (!project || project.deletedAt) return NextResponse.json({ error: "Project not found." }, { status: 404 });
+        const versionIds = document.versions.map((version) => version.id);
+        const [updatedDocument] = await prisma.$transaction([
+          prisma.document.update({ where: { id: documentId }, data: { projectId, submittedAt: null, updatedAt: new Date() }, include: { tags: { orderBy: [{ key: "asc" }, { value: "asc" }] } } }),
+          prisma.supportingDocument.updateMany({ where: { scriptDocumentId: documentId, deletedAt: null }, data: { projectId } }),
+          prisma.comment.updateMany({ where: { OR: [{ targetType: "DOCUMENT", targetId: documentId }, ...(versionIds.length ? [{ targetType: "DOCUMENT_VERSION" as const, targetId: { in: versionIds } }] : [])] }, data: { projectId } })
+        ]);
+        return NextResponse.json({ document: toDocument(updatedDocument) });
+      }
 
       case "updateDocumentMetadata":
         if (!await canManageDocumentMetadata(auth.user.appRole, auth.user.projectRoles, stringField(body.documentId))) return NextResponse.json(forbidden(), { status: 403 });
@@ -434,6 +454,29 @@ export async function POST(request: Request) {
           }
         })) });
 
+      case "updateDocumentTags": {
+        const documentId = stringField(body.documentId);
+        if (!await canManageDocumentMetadata(auth.user.appRole, auth.user.projectRoles, documentId)) return NextResponse.json(forbidden(), { status: 403 });
+        const tags = documentTagsField(body.tags);
+        await prisma.documentTag.deleteMany({ where: { documentId } });
+        const document = await prisma.document.update({
+          where: { id: documentId },
+          data: {
+            updatedAt: new Date(),
+            ...(tags.length ? {
+              tags: {
+                createMany: {
+                  data: tags.map((tag) => ({ key: tag.key, value: tag.value, createdById: auth.user.id })),
+                  skipDuplicates: true
+                }
+              }
+            } : {})
+          },
+          include: { tags: { orderBy: [{ key: "asc" }, { value: "asc" }] } }
+        });
+        return NextResponse.json({ document: toDocument(document) });
+      }
+
       case "deleteDocument":
         if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
         return NextResponse.json({ document: toDocument(await prisma.document.update({
@@ -441,11 +484,15 @@ export async function POST(request: Request) {
           data: { deletedAt: new Date() }
         })) });
 
-      case "uploadSupportingDocument":
+      case "uploadSupportingDocument": {
+        const scriptDocumentId = stringField(body.scriptDocumentId);
+        const scriptDocument = await prisma.document.findUnique({ where: { id: scriptDocumentId }, select: { id: true, projectId: true, deletedAt: true } });
+        if (!scriptDocument || scriptDocument.deletedAt) return NextResponse.json({ error: "Script document not found." }, { status: 404 });
+        if (!canAccessAssociatedProject(auth.user.appRole, auth.user.projectRoles, scriptDocument.projectId)) return NextResponse.json(forbidden(), { status: 403 });
         return NextResponse.json({ supportingDocument: toSupportingDocument(await prisma.supportingDocument.create({
           data: {
-            scriptDocumentId: stringField(body.scriptDocumentId),
-            projectId: optionalString(body.projectId),
+            scriptDocumentId,
+            projectId: scriptDocument.projectId,
             title: stringField(body.title) || stringField(body.fileName) || "Supporting Document",
             type: supportingTypeField(body.type),
             source: optionalString(body.source),
@@ -459,12 +506,17 @@ export async function POST(request: Request) {
             uploadedById: auth.user.id
           }
         })) });
+      }
 
-      case "deleteSupportingDocument":
+      case "deleteSupportingDocument": {
+        const supportingDocument = await prisma.supportingDocument.findUnique({ where: { id: stringField(body.documentId) }, select: { id: true, projectId: true, scriptDocument: { select: { projectId: true } }, deletedAt: true } });
+        if (!supportingDocument || supportingDocument.deletedAt) return NextResponse.json({ error: "Supporting document not found." }, { status: 404 });
+        if (!canAccessAssociatedProject(auth.user.appRole, auth.user.projectRoles, supportingDocument.projectId ?? supportingDocument.scriptDocument.projectId)) return NextResponse.json(forbidden(), { status: 403 });
         return NextResponse.json({ supportingDocument: toSupportingDocument(await prisma.supportingDocument.update({
-          where: { id: stringField(body.documentId) },
+          where: { id: supportingDocument.id },
           data: { deletedAt: new Date() }
         })) });
+      }
 
       case "uploadProspectAsset":
         if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
@@ -490,10 +542,14 @@ export async function POST(request: Request) {
           data: { deletedAt: new Date() }
         })) });
 
-      case "uploadReferenceImage":
+      case "uploadReferenceImage": {
+        const projectId = stringField(body.projectId);
+        const project = await prisma.project.findUnique({ where: { id: projectId }, select: { id: true, deletedAt: true } });
+        if (!project || project.deletedAt) return NextResponse.json({ error: "Project not found." }, { status: 404 });
+        if (!canAccessAssociatedProject(auth.user.appRole, auth.user.projectRoles, projectId)) return NextResponse.json(forbidden(), { status: 403 });
         return NextResponse.json({ asset: toAsset(await prisma.asset.create({
           data: {
-            projectId: stringField(body.projectId),
+            projectId,
             title: stringField(body.title) || stringField(body.fileName) || "Reference Image",
             description: optionalString(body.description),
             source: optionalString(body.source),
@@ -507,12 +563,16 @@ export async function POST(request: Request) {
             uploadedById: auth.user.id
           }
         })) });
+      }
 
       case "createTask": {
+        const association = await resolveTaskAssociation(body);
+        if (!association.valid) return NextResponse.json({ error: association.error }, { status: association.status });
+        if (!canAccessAssociatedProject(auth.user.appRole, auth.user.projectRoles, association.projectId, true)) return NextResponse.json(forbidden(), { status: 403 });
         const taskCount = await prisma.task.count({ where: { deletedAt: null } });
         return NextResponse.json({ task: toTask(await prisma.task.create({
           data: {
-            projectId: optionalString(body.projectId),
+            projectId: association.projectId,
             title: stringField(body.title) || "Untitled assignment",
             description: optionalString(body.description),
             assignedToId: optionalString(body.assignedToId),
@@ -521,27 +581,33 @@ export async function POST(request: Request) {
             priority: priorityField(body.priority),
             status: taskStatusField(body.status),
             sortOrder: taskCount + 1,
-            targetType: taskTargetField(body.targetType),
-            targetId: optionalString(body.targetId)
+            targetType: association.targetType,
+            targetId: association.targetId
           }
         })) });
       }
 
-      case "updateTask":
+      case "updateTask": {
+        const existingTask = await prisma.task.findUnique({ where: { id: stringField(body.taskId) }, select: { id: true, assignedToId: true, createdById: true, deletedAt: true } });
+        if (!canAccessTaskRecord(auth.user.appRole, auth.user.id, existingTask)) return NextResponse.json(forbidden(), { status: 403 });
+        const association = body.projectId !== undefined || body.targetType !== undefined || body.targetId !== undefined ? await resolveTaskAssociation(body) : undefined;
+        if (association && !association.valid) return NextResponse.json({ error: association.error }, { status: association.status });
+        if (association && !canAccessAssociatedProject(auth.user.appRole, auth.user.projectRoles, association.projectId, true)) return NextResponse.json(forbidden(), { status: 403 });
         return NextResponse.json({ task: toTask(await prisma.task.update({
-          where: { id: stringField(body.taskId) },
+          where: { id: existingTask!.id },
           data: {
-            projectId: body.projectId !== undefined ? optionalString(body.projectId) ?? null : undefined,
+            projectId: association ? association.projectId : undefined,
             title: body.title !== undefined ? stringField(body.title) || "Untitled assignment" : undefined,
             description: body.description !== undefined ? optionalString(body.description) ?? null : undefined,
             assignedToId: body.assignedToId !== undefined ? optionalString(body.assignedToId) ?? null : undefined,
             dueDate: body.dueDate !== undefined ? dateField(body.dueDate) ?? null : undefined,
             priority: body.priority ? priorityField(body.priority) : undefined,
             status: body.status ? taskStatusField(body.status) : undefined,
-            targetType: body.targetType !== undefined ? taskTargetField(body.targetType) : undefined,
-            targetId: body.targetId !== undefined ? optionalString(body.targetId) ?? null : undefined
+            targetType: association ? association.targetType : undefined,
+            targetId: association ? association.targetId : undefined
           }
         })) });
+      }
 
       case "deleteTask":
         if (!canViewAllTasks(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
@@ -888,8 +954,25 @@ function toUser(user: { id: string; email: string; name: string; avatarUrl: stri
   return { id: user.id, email: user.email, name: user.name, avatarUrl: user.avatarUrl ?? undefined, googleId: user.googleId ?? "", role: hammerRoleForAppRole(user.appRole) ?? user.role };
 }
 
-function toDocument(document: { id: string; projectId: string | null; title: string; type: DocumentType; currentVersionId: string | null; createdById: string | null; updatedAt: Date; writerName: string | null; source: string | null; contactId: string | null; submittedAt: Date | null }) {
-  return { id: document.id, projectId: document.projectId ?? undefined, title: document.title, type: document.type, currentVersionId: document.currentVersionId ?? "", createdById: document.createdById ?? "", updatedAt: dateString(document.updatedAt), writerName: document.writerName ?? undefined, source: document.source ?? undefined, contactId: document.contactId ?? undefined, submittedAt: document.submittedAt ? dateString(document.submittedAt) : undefined };
+function toDocument(document: { id: string; projectId: string | null; title: string; type: DocumentType; currentVersionId: string | null; createdById: string | null; updatedAt: Date; writerName: string | null; source: string | null; contactId: string | null; submittedAt: Date | null; tags?: Array<{ id: string; documentId: string; key: string; value: string; createdById: string | null; createdAt: Date }> }) {
+  return {
+    id: document.id,
+    projectId: document.projectId ?? undefined,
+    title: document.title,
+    type: document.type,
+    currentVersionId: document.currentVersionId ?? "",
+    createdById: document.createdById ?? "",
+    updatedAt: dateString(document.updatedAt),
+    writerName: document.writerName ?? undefined,
+    source: document.source ?? undefined,
+    contactId: document.contactId ?? undefined,
+    submittedAt: document.submittedAt ? dateString(document.submittedAt) : undefined,
+    tags: document.tags?.map(toDocumentTag) ?? []
+  };
+}
+
+function toDocumentTag(tag: { id: string; documentId: string; key: string; value: string; createdById: string | null; createdAt: Date }) {
+  return { id: tag.id, documentId: tag.documentId, key: tag.key, value: tag.value, createdById: tag.createdById ?? undefined, createdAt: dateString(tag.createdAt) };
 }
 
 function toVersion(version: { id: string; documentId: string; versionNumber: number; status: DocumentVersionStatus; fileName: string; fileType: string; fileSize: number; storagePath: string; dataUrl?: string | null; uploadedById: string | null; createdAt: Date; notes: string | null; markdownNotes?: string | null; extractedText?: string | null }) {
@@ -945,8 +1028,8 @@ function toApproval(approval: { id: string; projectId: string | null; targetType
   return { id: approval.id, projectId: approval.projectId ?? "", targetType: approval.targetType, targetId: approval.targetId, requestedById: approval.requestedById ?? "", reviewerId: approval.reviewerId ?? "", status: approval.status, decisionNotes: approval.decisionNotes ?? undefined, createdAt: dateString(approval.createdAt), decidedAt: approval.decidedAt ? dateString(approval.decidedAt) : undefined };
 }
 
-function toComment(comment: { id: string; targetType: CommentTargetType; targetId: string; body: string; visibility: CommentVisibility; status: string; createdById: string | null; createdAt: Date }) {
-  return { id: comment.id, targetType: comment.targetType, targetId: comment.targetId, body: comment.body, visibility: comment.visibility, status: comment.status, createdById: comment.createdById ?? "", createdAt: dateString(comment.createdAt) };
+function toComment(comment: { id: string; targetType: CommentTargetType; targetId: string; body: string; metadataJson?: Prisma.JsonValue | null; visibility: CommentVisibility; status: string; createdById: string | null; createdAt: Date }) {
+  return { id: comment.id, targetType: comment.targetType, targetId: comment.targetId, body: comment.body, metadataJson: comment.metadataJson ?? undefined, visibility: comment.visibility, status: comment.status, createdById: comment.createdById ?? "", createdAt: dateString(comment.createdAt) };
 }
 
 function toScriptCollection(collection: { id: string; name: string; description: string | null; ownerId: string | null; status: string; visibility: CommentVisibility; createdAt: Date; updatedAt: Date }) {
@@ -1005,6 +1088,116 @@ function canAccessTaskRecord(role: string, userId: string, task?: { assignedToId
   return canViewAllTasks(role) || task.assignedToId === userId || task.createdById === userId;
 }
 
+function canAccessAssociatedProject(role: string, projectRoles: Record<string, string>, projectId?: string | null, allowUnscoped = false) {
+  if (canManageLibrary(role)) return true;
+  if (!projectId) return allowUnscoped;
+  return Boolean(projectRoles[projectId]);
+}
+
+type TargetAssociation = { exists: boolean; projectId?: string | null };
+
+type ResolvedTaskAssociation =
+  | { valid: true; projectId: string | null; targetType: TaskTargetType; targetId: string | null }
+  | { valid: false; status: number; error: string };
+
+async function resolveCommentTargetAssociation(targetType: CommentTargetType, targetId: string): Promise<TargetAssociation> {
+  if (!targetId) return { exists: false };
+  if (targetType === "PROJECT") {
+    const project = await prisma.project.findUnique({ where: { id: targetId }, select: { id: true, deletedAt: true } });
+    return { exists: Boolean(project && !project.deletedAt), projectId: project?.id };
+  }
+  if (targetType === "DOCUMENT") {
+    const document = await prisma.document.findUnique({ where: { id: targetId }, select: { projectId: true, deletedAt: true } });
+    return { exists: Boolean(document && !document.deletedAt), projectId: document?.projectId };
+  }
+  if (targetType === "DOCUMENT_VERSION") {
+    const version = await prisma.documentVersion.findUnique({ where: { id: targetId }, select: { document: { select: { projectId: true, deletedAt: true } } } });
+    return { exists: Boolean(version && !version.document.deletedAt), projectId: version?.document.projectId };
+  }
+  if (targetType === "SCENE") {
+    const scene = await prisma.scene.findUnique({ where: { id: targetId }, select: { projectId: true } });
+    return { exists: Boolean(scene), projectId: scene?.projectId };
+  }
+  if (targetType === "ENTITY") {
+    const entity = await prisma.entity.findUnique({ where: { id: targetId }, select: { projectId: true } });
+    return { exists: Boolean(entity), projectId: entity?.projectId };
+  }
+  if (targetType === "ASSET") {
+    const asset = await prisma.asset.findUnique({ where: { id: targetId }, select: { projectId: true, deletedAt: true } });
+    return { exists: Boolean(asset && !asset.deletedAt), projectId: asset?.projectId };
+  }
+  if (targetType === "TASK") {
+    const task = await prisma.task.findUnique({ where: { id: targetId }, select: { projectId: true, deletedAt: true } });
+    return { exists: Boolean(task && !task.deletedAt), projectId: task?.projectId };
+  }
+  if (targetType === "APPROVAL") {
+    const approval = await prisma.hammerApproval.findUnique({ where: { id: targetId }, select: { projectId: true } });
+    return { exists: Boolean(approval), projectId: approval?.projectId };
+  }
+  return { exists: false };
+}
+
+async function resolveTaskAssociation(body: ActionBody): Promise<ResolvedTaskAssociation> {
+  const targetType = taskTargetField(body.targetType);
+  const submittedProjectId = optionalString(body.projectId) ?? null;
+  const submittedTargetId = optionalString(body.targetId) ?? null;
+  if (targetType === "GENERAL") {
+    if (submittedProjectId) {
+      const project = await prisma.project.findUnique({ where: { id: submittedProjectId }, select: { id: true, deletedAt: true } });
+      if (!project || project.deletedAt) return { valid: false, status: 404, error: "Project not found." };
+    }
+    return { valid: true, projectId: submittedProjectId, targetType, targetId: submittedTargetId };
+  }
+  if (targetType === "PROJECT") {
+    const projectId = submittedTargetId || submittedProjectId;
+    if (!projectId) return { valid: false, status: 400, error: "Project task target is required." };
+    const project = await prisma.project.findUnique({ where: { id: projectId }, select: { id: true, deletedAt: true } });
+    if (!project || project.deletedAt) return { valid: false, status: 404, error: "Project not found." };
+    return { valid: true, projectId, targetType, targetId: projectId };
+  }
+  if (targetType === "PROJECT_LEAD") {
+    const prospect = submittedTargetId ? await prisma.prospect.findUnique({ where: { id: submittedTargetId }, select: { id: true, deletedAt: true, promotedProjectId: true } }) : null;
+    if (!prospect || prospect.deletedAt) return { valid: false, status: 404, error: "Prospect not found." };
+    return { valid: true, projectId: prospect.promotedProjectId, targetType, targetId: prospect.id };
+  }
+  if (targetType === "DOCUMENT") {
+    const document = submittedTargetId ? await prisma.document.findUnique({ where: { id: submittedTargetId }, select: { id: true, projectId: true, deletedAt: true } }) : null;
+    if (!document || document.deletedAt) return { valid: false, status: 404, error: "Document not found." };
+    return { valid: true, projectId: document.projectId, targetType, targetId: document.id };
+  }
+  if (targetType === "DOCUMENT_VERSION") {
+    const version = submittedTargetId ? await prisma.documentVersion.findUnique({ where: { id: submittedTargetId }, select: { id: true, document: { select: { projectId: true, deletedAt: true } } } }) : null;
+    if (!version || version.document.deletedAt) return { valid: false, status: 404, error: "Document version not found." };
+    return { valid: true, projectId: version.document.projectId, targetType, targetId: version.id };
+  }
+  if (targetType === "ASSET") {
+    const asset = submittedTargetId ? await prisma.asset.findUnique({ where: { id: submittedTargetId }, select: { id: true, projectId: true, deletedAt: true } }) : null;
+    if (!asset || asset.deletedAt) return { valid: false, status: 404, error: "Asset not found." };
+    return { valid: true, projectId: asset.projectId, targetType, targetId: asset.id };
+  }
+  if (targetType === "SCENE") {
+    const scene = submittedTargetId ? await prisma.scene.findUnique({ where: { id: submittedTargetId }, select: { id: true, projectId: true } }) : null;
+    if (!scene) return { valid: false, status: 404, error: "Scene not found." };
+    return { valid: true, projectId: scene.projectId, targetType, targetId: scene.id };
+  }
+  if (targetType === "ENTITY") {
+    const entity = submittedTargetId ? await prisma.entity.findUnique({ where: { id: submittedTargetId }, select: { id: true, projectId: true } }) : null;
+    if (!entity) return { valid: false, status: 404, error: "Entity not found." };
+    return { valid: true, projectId: entity.projectId, targetType, targetId: entity.id };
+  }
+  if (targetType === "APPROVAL") {
+    const approval = submittedTargetId ? await prisma.hammerApproval.findUnique({ where: { id: submittedTargetId }, select: { id: true, projectId: true } }) : null;
+    if (!approval) return { valid: false, status: 404, error: "Approval not found." };
+    return { valid: true, projectId: approval.projectId, targetType, targetId: approval.id };
+  }
+  if (targetType === "CONTACT") {
+    const contact = submittedTargetId ? await prisma.contact.findUnique({ where: { id: submittedTargetId }, select: { id: true, deletedAt: true } }) : null;
+    if (!contact || contact.deletedAt) return { valid: false, status: 404, error: "Contact not found." };
+    return { valid: true, projectId: submittedProjectId, targetType, targetId: contact.id };
+  }
+  return { valid: true, projectId: submittedProjectId, targetType, targetId: submittedTargetId };
+}
+
 function canManageProject(role: string, projectRoles: Record<string, string>, projectId: string) {
   const normalizedRole = role.toLowerCase();
   return normalizedRole === "admin" || projectRoles[projectId] === "owner" || projectRoles[projectId] === "producer";
@@ -1034,6 +1227,36 @@ function optionalString(value: unknown) {
 function stringArrayField(value: unknown) {
   if (!Array.isArray(value)) return [];
   return Array.from(new Set(value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean)));
+}
+
+function noteMetadataField(value: unknown): Prisma.InputJsonValue | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const noteType = stringField(record.noteType) || "GENERAL";
+  const allowedTypes = new Set(["GENERAL", "COVERAGE", "CREATIVE", "LEGAL_RIGHTS", "PRODUCTION", "EXECUTIVE", "FOLLOW_UP"]);
+  const tags = documentTagsField(record.tags).slice(0, 20);
+  return {
+    noteType: allowedTypes.has(noteType) ? noteType : "GENERAL",
+    tags
+  };
+}
+
+function documentTagsField(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const tags: Array<{ key: string; value: string }> = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    const key = stringField(record.key).toLowerCase().replace(/\s+/g, " ").slice(0, 48);
+    const tagValue = stringField(record.value).replace(/\s+/g, " ").slice(0, 160);
+    if (!key || !tagValue) continue;
+    const compound = `${key}:${tagValue.toLowerCase()}`;
+    if (seen.has(compound)) continue;
+    seen.add(compound);
+    tags.push({ key, value: tagValue });
+  }
+  return tags.slice(0, 40);
 }
 
 function resolveProspectOwnerIds(lead: Record<string, unknown>, users: Array<{ id: string; name: string; email: string }>) {
