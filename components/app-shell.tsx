@@ -36,12 +36,12 @@ const navItems = [
   { href: "/tasks", label: "Tasks", icon: ClipboardList }
 ];
 
-const contactsNavItem = { href: "/contacts", label: "Contacts", icon: ContactRound };
+const talentNavItem = { href: "/talent", label: "Talent", icon: ContactRound };
 const executiveNavItem = { href: "/executive", label: "Executive", icon: BarChart3 };
 const reportsNavItem = { href: "/reports", label: "Reports", icon: FileBarChart2 };
 const adminNavItem = { href: "/admin/users", label: "Admin", icon: Settings2 };
 const accountNavItem = { href: "/account", label: "Account", icon: UserRound };
-const GREENLIGHT_APP_VERSION = "1.87";
+const GREENLIGHT_APP_VERSION = "1.90";
 const HAMMER_THEME_STORAGE_KEY = "hammer-os-theme";
 type ThemeMode = "dark" | "light";
 type AuthMode = "loading" | "database" | "demo";
@@ -298,7 +298,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               ...navItems,
               ...(currentUser?.role === "EXECUTIVE" || currentUser?.role === "ADMIN" ? [executiveNavItem] : []),
               ...(currentUser && canViewReports(currentUser.role) ? [reportsNavItem] : []),
-              ...(currentUser && canViewContacts(currentUser.role) ? [contactsNavItem] : []),
+              ...(currentUser && canViewContacts(currentUser.role) ? [talentNavItem] : []),
             ].map((item) => {
               const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
               const Icon = item.icon;

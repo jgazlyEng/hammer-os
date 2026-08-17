@@ -978,6 +978,13 @@ model Contact {
   nextFollowUp   DateTime?
   notes          String?       @db.Text
   projectIds     String[]      @default([])
+  isTalent       Boolean       @default(false)
+  talentAgency   String?
+  talentCredits  String?       @db.Text
+  talentGenre    String?
+  talentRole     String?
+  talentMetWith  String?
+  talentBased    String?
   deletedAt      DateTime?
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
@@ -987,6 +994,7 @@ model Contact {
   @@index([type])
   @@index([status])
   @@index([ownerId])
+  @@index([isTalent])
   @@index([nextFollowUp])
   @@index([deletedAt])
 }

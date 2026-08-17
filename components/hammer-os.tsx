@@ -1674,7 +1674,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     if (scriptAccessDenied) {
       return <AccessDenied title="Script access required" detail="You can only open scripts attached to Development Slate items you can access. Producers, executives, and admins can review broader prospect materials from the slate." />;
     }
-    if (view === "dashboard") return <Dashboard currentUser={currentUser} projects={projects} documents={documents} versions={versions} tasks={tasks} approvals={approvals} scriptCollections={scriptCollections} scriptCollectionItems={scriptCollectionItems} slateCollections={slateCollections} slateCollectionItems={slateCollectionItems} />;
+    if (view === "dashboard") return <Dashboard currentUser={currentUser} projects={projects} documents={documents} versions={versions} tasks={tasks} contacts={contacts} approvals={approvals} scriptCollections={scriptCollections} scriptCollectionItems={scriptCollectionItems} slateCollections={slateCollections} slateCollectionItems={slateCollectionItems} />;
     if (view === "projects") return <Projects mode="development" projects={filteredProjects} projectLeads={projectLeads} prospectAssets={prospectAssets} users={users} tasks={tasks} currentUser={currentUser} canCreateProject={canManageScriptLibrary(currentUser.role)} onCreateProject={addProject} onUpdateLead={updateProjectLead} onCreateLead={createProjectLead} onImportLeads={importProjectLeads} onPromoteLead={promoteProjectLead} onCreateTask={createTask} onUploadProspectAsset={uploadProspectAsset} onDeleteProspectAsset={deleteProspectAsset} />;
     if (view === "prospects") return <Projects mode="prospects" projects={filteredProjects} projectLeads={projectLeads} prospectAssets={prospectAssets} users={users} tasks={tasks} currentUser={currentUser} canCreateProject={canManageScriptLibrary(currentUser.role)} onCreateProject={addProject} onUpdateLead={updateProjectLead} onCreateLead={createProjectLead} onImportLeads={importProjectLeads} onPromoteLead={promoteProjectLead} onCreateTask={createTask} onUploadProspectAsset={uploadProspectAsset} onDeleteProspectAsset={deleteProspectAsset} />;
     if (view === "collections") return (
@@ -1721,7 +1721,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     if (view === "asset-detail") return <AssetDetail assetId={asset.id} assets={assets} currentUser={currentUser} />;
     if (view === "tasks") return <Tasks selectedTaskId={selectedTaskId} currentUser={currentUser} users={users} tasks={tasks} projects={projects} onCreateTask={createTask} onUpdateTask={updateTask} onDeleteTask={deleteTask} onReorderTasks={reorderTasks} onCreateSubtask={createTaskSubtask} onUpdateSubtask={updateTaskSubtask} onDeleteSubtask={deleteTaskSubtask} />;
     if (view === "contacts") {
-      if (!canViewContacts(currentUser.role)) return <AccessDenied title="Contacts access required" detail="Only admins, producers, and executives can view the studio contact directory." />;
+      if (!canViewContacts(currentUser.role)) return <AccessDenied title="Talent access required" detail="Only admins, producers, and executives can view the studio talent directory." />;
       return <Contacts initialContacts={contacts} contactRelationships={contactRelationships} currentUser={currentUser} users={users} projects={projects} documents={documents} tasks={tasks} databaseMode={workspaceMode === "database"} onDatabaseImport={(importedContacts) => runWorkspaceAction("importContacts", { contacts: importedContacts })} onCreateContact={createContact} onUpdateContact={updateContact} onDeleteContact={deleteContact} onCreateRelationship={createContactRelationship} onDeleteRelationship={deleteContactRelationship} />;
     }
     if (view === "reports") {
@@ -1823,6 +1823,7 @@ function Dashboard({
   documents,
   versions,
   tasks = hammerTasks,
+  contacts = hammerContacts,
   approvals = hammerApprovals,
   scriptCollections = hammerScriptCollections,
   scriptCollectionItems = hammerScriptCollectionItems,
@@ -1834,6 +1835,7 @@ function Dashboard({
   documents: HammerDocument[];
   versions: HammerDocumentVersion[];
   tasks?: HammerTask[];
+  contacts?: HammerContact[];
   approvals?: HammerApproval[];
   scriptCollections?: HammerScriptCollection[];
   scriptCollectionItems?: HammerScriptCollectionItem[];
@@ -1875,6 +1877,11 @@ function Dashboard({
   const keyTasks = openAssignedTasks
     .filter((task) => !immediateTaskIds.has(task.id) && (task.priority === "URGENT" || task.priority === "HIGH" || task.status === "BLOCKED" || task.status === "ON_HOLD" || task.status === "REVIEW"))
     .sort(compareTasksByPriorityThenDue)
+    .slice(0, 6);
+  const talentFollowUps = contacts
+    .filter((contact) => isTalentContact(contact) && contact.nextFollowUp && (contact.status ?? "ACTIVE") !== "ARCHIVED")
+    .filter((contact) => canSeeLibrary || contact.ownerId === currentUser.id)
+    .sort((a, b) => (a.nextFollowUp ?? "").localeCompare(b.nextFollowUp ?? ""))
     .slice(0, 6);
   const reviewPackets = [
     ...scriptCollections
@@ -1934,6 +1941,11 @@ function Dashboard({
       </div>
 
       <Panel>
+        <SectionHeader eyebrow="Talent" title="Upcoming Follow-Ups" action={<TableLink href="/talent">Open Talent</TableLink>} />
+        <DashboardTalentFollowUps contacts={talentFollowUps} currentUser={currentUser} />
+      </Panel>
+
+      <Panel>
         <SectionHeader eyebrow="Collections" title="Review Packets" action={<TableLink href="/collections">Open Collections</TableLink>} />
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
           {reviewPackets.length ? reviewPackets.map((packet) => (
@@ -1973,6 +1985,28 @@ function DashboardTaskList({ tasks, emptyLabel }: { tasks: HammerTask[]; emptyLa
             <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
               <Badge value={task.priority} />
               <Badge value={task.status} subtle />
+            </div>
+          </div>
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+function DashboardTalentFollowUps({ contacts, currentUser }: { contacts: HammerContact[]; currentUser: HammerUser }) {
+  if (!contacts.length) return <EmptyState label="No talent follow-ups scheduled." />;
+  return (
+    <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+      {contacts.map((contact) => (
+        <Link key={contact.id} href={`/talent?contact=${encodeURIComponent(contact.id)}`} className="block rounded-md border border-white/10 bg-white/[0.03] p-3 transition hover:border-amberline/35 hover:bg-white/[0.055]">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="truncate text-[13px] font-semibold text-studio-100">{contact.name}</p>
+              <p className="mt-1 truncate text-xs text-studio-400">{talentRole(contact)} / {talentAgency(contact)}</p>
+            </div>
+            <div className="shrink-0 text-right">
+              <p className="text-[12px] font-semibold text-studio-200">{contact.nextFollowUp}</p>
+              <p className="mt-1 text-[11px] text-studio-500">{userName(contact.ownerId ?? currentUser.id)}</p>
             </div>
           </div>
         </Link>
@@ -6909,6 +6943,62 @@ const contactTypes: ContactType[] = ["WRITER", "PRODUCER", "ARTIST", "EXECUTIVE"
 const contactStatuses: ContactStatus[] = ["NEW", "ACTIVE", "FOLLOW_UP", "WAITING", "DO_NOT_CONTACT", "ARCHIVED"];
 const contactRelationshipTypes: ContactRelationshipType[] = ["AGENT", "MANAGER", "REPRESENTS", "WORKS_WITH", "ASSISTANT", "LEGAL_REP", "REFERRED_BY", "OTHER"];
 
+function isTalentContact(contact: HammerContact) {
+  return Boolean(contact.isTalent || contact.talentRole || contact.talentGenre || contact.talentAgency || contact.tags?.some((tag) => tag.toLowerCase() === "talent"));
+}
+
+function talentRole(contact: HammerContact) {
+  return contact.talentRole || contact.title || statusLabel(contact.type);
+}
+
+function talentAgency(contact: HammerContact) {
+  return contact.talentAgency || contact.company || "Independent";
+}
+
+function talentGenre(contact: HammerContact) {
+  const tagGenres = (contact.tags ?? []).filter((tag) => tag.toLowerCase() !== "talent").join(", ");
+  return contact.talentGenre || tagGenres || "-";
+}
+
+function talentCredits(contact: HammerContact) {
+  return contact.talentCredits || contact.notes || "";
+}
+
+function talentLocation(contact: HammerContact) {
+  return contact.location || contact.talentBased || "";
+}
+
+function talentMetWith(contact: HammerContact) {
+  return contact.talentMetWith || (contact.lastContacted ? "Yes" : "");
+}
+
+function hasMetWithTalent(contact: HammerContact) {
+  const value = talentMetWith(contact).trim().toLowerCase();
+  if (!value) return false;
+  return !["no", "n", "false", "not yet", "none"].includes(value);
+}
+
+function talentContactType(value: string, fallback: ContactType = "OTHER"): ContactType {
+  const normalized = value.toLowerCase();
+  if (normalized.includes("writer")) return "WRITER";
+  if (normalized.includes("producer")) return "PRODUCER";
+  if (normalized.includes("artist") || normalized.includes("director") || normalized.includes("designer")) return "ARTIST";
+  if (normalized.includes("executive")) return "EXECUTIVE";
+  if (normalized.includes("agency") || normalized.includes("agent")) return "AGENCY";
+  if (normalized.includes("manager") || normalized.includes("management")) return "MANAGEMENT";
+  return fallback;
+}
+
+function splitTalentGenres(value: string) {
+  return value.split(/[,;/]/).map((item) => item.trim()).filter(Boolean);
+}
+
+function talentTags(genre: string, tags?: string) {
+  const genreTags = splitTalentGenres(genre);
+  const extraTags = (tags ?? "").split(/[;,]/).map((tag) => tag.trim()).filter(Boolean);
+  return Array.from(new Set(["talent", ...genreTags, ...extraTags]));
+}
+
 function Contacts({
   initialContacts = hammerContacts,
   contactRelationships = hammerContactRelationships,
@@ -6940,10 +7030,12 @@ function Contacts({
   onCreateRelationship?: (input: { fromContactId: string; toContactId: string; relationshipType: ContactRelationshipType; notes?: string }) => Promise<void>;
   onDeleteRelationship?: (relationshipId: string) => Promise<void>;
 }) {
+  const searchParams = useSearchParams();
   const [search, setSearch] = useState("");
-  const [type, setType] = useState<ContactType | "ALL">("ALL");
-  const [status, setStatus] = useState<ContactStatus | "ALL">("ALL");
-  const [ownerId, setOwnerId] = useState("ALL");
+  const [roleFilter, setRoleFilter] = useState("ALL");
+  const [genreFilter, setGenreFilter] = useState("ALL");
+  const [locationFilter, setLocationFilter] = useState("ALL");
+  const [metWithFilter, setMetWithFilter] = useState<"ALL" | "MET" | "NOT_MET">("ALL");
   const [localContacts, setLocalContacts] = useState<HammerContact[]>([]);
   const [selectedContactId, setSelectedContactId] = useState("");
   const [expandedNoteContactId, setExpandedNoteContactId] = useState("");
@@ -6951,12 +7043,13 @@ function Contacts({
   const [importMessage, setImportMessage] = useState("");
   const [draft, setDraft] = useState({
     name: "",
-    company: "",
-    type: "OTHER" as ContactType,
-    title: "",
+    agency: "",
+    role: "",
+    genre: "",
+    location: "",
+    metWith: "",
     email: "",
     phone: "",
-    location: "",
     website: "",
     status: "ACTIVE" as ContactStatus,
     ownerId: "",
@@ -6964,6 +7057,7 @@ function Contacts({
     lastContacted: "",
     nextFollowUp: "",
     projectIds: [] as string[],
+    credits: "",
     notes: ""
   });
   const [relationshipDraft, setRelationshipDraft] = useState({ toContactId: "", relationshipType: "AGENT" as ContactRelationshipType, notes: "" });
@@ -6975,20 +7069,30 @@ function Contacts({
       ...localContacts.filter((contact) => !initialContacts.some((initialContact) => initialContact.id === contact.id))
     ];
   }, [databaseMode, initialContacts, localContacts]);
-  const filteredContacts = contacts.filter((contact) => {
-    const matchesType = type === "ALL" || contact.type === type;
-    const matchesStatus = status === "ALL" || (contact.status ?? "ACTIVE") === status;
-    const matchesOwner = ownerId === "ALL" || (contact.ownerId ?? "") === ownerId;
-    const haystack = `${contact.name} ${contact.company} ${contact.title} ${contact.email} ${contact.location} ${contact.notes} ${(contact.tags ?? []).join(" ")}`.toLowerCase();
-    return matchesType && matchesStatus && matchesOwner && haystack.includes(search.toLowerCase());
+  const talentContacts = useMemo(() => {
+    const talentOnly = contacts.filter(isTalentContact);
+    return talentOnly.length ? talentOnly : contacts;
+  }, [contacts]);
+  const roleOptions = useMemo(() => Array.from(new Set(talentContacts.map(talentRole).filter(Boolean))).sort((a, b) => a.localeCompare(b)), [talentContacts]);
+  const genreOptions = useMemo(() => Array.from(new Set(talentContacts.flatMap((contact) => splitTalentGenres(talentGenre(contact)).filter((item) => item !== "-")))).sort((a, b) => a.localeCompare(b)), [talentContacts]);
+  const locationOptions = useMemo(() => Array.from(new Set(talentContacts.map(talentLocation).filter(Boolean))).sort((a, b) => a.localeCompare(b)), [talentContacts]);
+  const filteredContacts = talentContacts.filter((contact) => {
+    const role = talentRole(contact);
+    const genre = talentGenre(contact);
+    const location = talentLocation(contact);
+    const matchesRole = roleFilter === "ALL" || role === roleFilter;
+    const matchesGenre = genreFilter === "ALL" || splitTalentGenres(genre).includes(genreFilter);
+    const matchesLocation = locationFilter === "ALL" || location === locationFilter;
+    const matchesMetWith = metWithFilter === "ALL" || (metWithFilter === "MET" ? hasMetWithTalent(contact) : !hasMetWithTalent(contact));
+    const haystack = `${contact.name} ${talentAgency(contact)} ${role} ${genre} ${location} ${contact.email} ${contact.phone} ${talentCredits(contact)} ${contact.notes} ${(contact.tags ?? []).join(" ")}`.toLowerCase();
+    return matchesRole && matchesGenre && matchesLocation && matchesMetWith && haystack.includes(search.toLowerCase());
   });
   const selectedContact = contacts.find((contact) => contact.id === selectedContactId);
   const expandedNoteContact = contacts.find((contact) => contact.id === expandedNoteContactId);
   const relationshipProjects = selectedContact ? projects.filter((project) => draft.projectIds.includes(project.id)) : [];
-  const relationshipScripts = selectedContact ? documents.filter((document) => document.contactId === selectedContact.id || document.source === selectedContact.company || document.writerName === selectedContact.name) : [];
+  const relationshipScripts = selectedContact ? documents.filter((document) => document.contactId === selectedContact.id || document.source === talentAgency(selectedContact) || document.writerName === selectedContact.name) : [];
   const relationshipTasks = selectedContact ? tasks.filter((task) => task.targetType === "CONTACT" && task.targetId === selectedContact.id) : [];
   const linkedContacts = selectedContact ? contactRelationships.filter((relationship) => relationship.fromContactId === selectedContact.id || relationship.toContactId === selectedContact.id) : [];
-  const followUpContacts = contacts.filter((contact) => contact.nextFollowUp && (contact.status ?? "ACTIVE") !== "ARCHIVED").sort((a, b) => (a.nextFollowUp ?? "").localeCompare(b.nextFollowUp ?? "")).slice(0, 5);
 
   useEffect(() => {
     try {
@@ -7000,23 +7104,32 @@ function Contacts({
   }, []);
 
   useEffect(() => {
+    const contactId = searchParams.get("contact");
+    if (contactId && contacts.some((contact) => contact.id === contactId)) {
+      setSelectedContactId(contactId);
+    }
+  }, [contacts, searchParams]);
+
+  useEffect(() => {
     if (!selectedContact) return;
     setDraft({
       name: selectedContact.name,
-      company: selectedContact.company,
-      type: selectedContact.type,
-      title: selectedContact.title,
+      agency: talentAgency(selectedContact),
+      role: talentRole(selectedContact),
+      genre: talentGenre(selectedContact) === "-" ? "" : talentGenre(selectedContact),
+      location: talentLocation(selectedContact),
+      metWith: talentMetWith(selectedContact),
       email: selectedContact.email,
       phone: selectedContact.phone,
-      location: selectedContact.location,
       website: selectedContact.website ?? "",
       status: selectedContact.status ?? "ACTIVE",
       ownerId: selectedContact.ownerId ?? "",
-      tags: (selectedContact.tags ?? []).join(", "),
+      tags: (selectedContact.tags ?? []).filter((tag) => tag.toLowerCase() !== "talent" && !splitTalentGenres(talentGenre(selectedContact)).includes(tag)).join(", "),
       lastContacted: selectedContact.lastContacted ?? "",
       nextFollowUp: selectedContact.nextFollowUp ?? "",
       projectIds: selectedContact.projectIds,
-      notes: selectedContact.notes
+      credits: talentCredits(selectedContact),
+      notes: selectedContact.notes === talentCredits(selectedContact) ? "" : selectedContact.notes
     });
   }, [selectedContact]);
 
@@ -7026,18 +7139,18 @@ function Contacts({
       const text = await file.text();
       const importedContacts = parseContactsCsv(text);
       if (!importedContacts.length) {
-        setImportMessage("No contacts found in CSV.");
+        setImportMessage("No talent found in CSV.");
         return;
       }
       if (databaseMode && onDatabaseImport) {
         await onDatabaseImport(importedContacts);
-        setImportMessage(`Imported ${importedContacts.length} contact${importedContacts.length === 1 ? "" : "s"} to database.`);
+        setImportMessage(`Imported ${importedContacts.length} talent entr${importedContacts.length === 1 ? "y" : "ies"} to database.`);
         return;
       }
       const nextContacts = [...localContacts, ...importedContacts];
       setLocalContacts(nextContacts);
       window.localStorage.setItem(HAMMER_LOCAL_CONTACTS_STORAGE_KEY, JSON.stringify(nextContacts));
-      setImportMessage(`Imported ${importedContacts.length} contact${importedContacts.length === 1 ? "" : "s"}.`);
+      setImportMessage(`Imported ${importedContacts.length} talent entr${importedContacts.length === 1 ? "y" : "ies"}.`);
     } catch (error) {
       setImportMessage(error instanceof Error ? error.message : "Could not import CSV.");
     }
@@ -7048,29 +7161,41 @@ function Contacts({
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url;
-    link.download = `greenlight-contacts-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.download = `greenlight-talent-${new Date().toISOString().slice(0, 10)}.csv`;
     link.click();
     URL.revokeObjectURL(url);
   }
 
   async function saveContact() {
     if (!selectedContact) return;
+    const role = draft.role.trim();
+    const agency = draft.agency.trim();
+    const location = draft.location.trim();
+    const credits = draft.credits.trim();
+    const genre = draft.genre.trim();
     const patch = {
-      name: draft.name.trim() || "Unnamed Contact",
-      company: draft.company.trim(),
-      type: draft.type,
-      title: draft.title.trim(),
+      name: draft.name.trim() || "Unnamed Talent",
+      company: agency,
+      type: talentContactType(role, selectedContact.type),
+      title: role,
       email: draft.email.trim(),
       phone: draft.phone.trim(),
-      location: draft.location.trim(),
+      location,
       website: draft.website.trim() || undefined,
       status: draft.status,
       ownerId: draft.ownerId || undefined,
-      tags: draft.tags.split(/[;,]/).map((tag) => tag.trim()).filter(Boolean),
+      tags: talentTags(genre, draft.tags),
       lastContacted: draft.lastContacted || undefined,
       nextFollowUp: draft.nextFollowUp || undefined,
       projectIds: draft.projectIds,
-      notes: draft.notes
+      notes: draft.notes.trim() || credits,
+      isTalent: true,
+      talentAgency: agency,
+      talentCredits: credits,
+      talentGenre: genre,
+      talentRole: role,
+      talentMetWith: draft.metWith.trim(),
+      talentBased: location
     };
     if (databaseMode) {
       await onUpdateContact?.(selectedContact.id, patch);
@@ -7080,7 +7205,7 @@ function Contacts({
       setLocalContacts(nextContacts);
       window.localStorage.setItem(HAMMER_LOCAL_CONTACTS_STORAGE_KEY, JSON.stringify(nextContacts));
     }
-    setImportMessage("Contact updated.");
+    setImportMessage("Talent entry updated.");
   }
 
   async function addContactRelationship(event: React.FormEvent<HTMLFormElement>) {
@@ -7093,16 +7218,17 @@ function Contacts({
       notes: relationshipDraft.notes
     });
     setRelationshipDraft({ toContactId: "", relationshipType: "AGENT", notes: "" });
-    setImportMessage("Contact link added.");
+    setImportMessage("Talent relationship added.");
   }
 
   async function createManualContact(input: Omit<HammerContact, "id">) {
+    const talentInput = { ...input, isTalent: true, talentBased: input.location };
     if (databaseMode) {
-      await onCreateContact?.(input);
+      await onCreateContact?.(talentInput);
     } else {
       const nextContact: HammerContact = {
         id: `contact-local-${Date.now()}`,
-        ...input
+        ...talentInput
       };
       const nextContacts = [nextContact, ...localContacts];
       setLocalContacts(nextContacts);
@@ -7110,12 +7236,12 @@ function Contacts({
       window.localStorage.setItem(HAMMER_LOCAL_CONTACTS_STORAGE_KEY, JSON.stringify(nextContacts));
     }
     setCreateOpen(false);
-    setImportMessage("Contact added.");
+    setImportMessage("Talent entry added.");
   }
 
   async function deleteSelectedContact() {
     if (!selectedContact) return;
-    if (!window.confirm(`Delete contact "${selectedContact.name}"?`)) return;
+    if (!window.confirm(`Delete talent entry "${selectedContact.name}"?`)) return;
     if (databaseMode) {
       await onDeleteContact?.(selectedContact.id);
     } else {
@@ -7124,55 +7250,60 @@ function Contacts({
       window.localStorage.setItem(HAMMER_LOCAL_CONTACTS_STORAGE_KEY, JSON.stringify(nextContacts));
     }
     setSelectedContactId("");
-    setImportMessage("Contact deleted.");
+    setImportMessage("Talent entry deleted.");
   }
 
   return (
     <div className="space-y-4">
-      <div className={cn("grid gap-4", selectedContact ? "xl:grid-cols-[minmax(0,1fr)_420px]" : "xl:grid-cols-1")}>
+      <div className={cn("grid gap-4", selectedContact ? "xl:grid-cols-[minmax(0,1fr)_440px]" : "xl:grid-cols-1")}>
         <Panel>
-          <SectionHeader eyebrow="Collaborative CRM" title="Contacts" action={<div className="flex flex-wrap gap-2"><PrimaryButton icon={Plus} label="Add Contact" onClick={() => setCreateOpen(true)} /><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline"><UploadCloud className="h-3.5 w-3.5" />Import CSV<input className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => importContacts(event.target.files?.[0])} /></label><button type="button" className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 hover:border-amberline/40 hover:text-amberline" onClick={exportContacts}>Export CSV</button></div>} />
-          <div className="mb-3 grid gap-2 lg:grid-cols-[1fr_180px_180px_180px]">
-            <input className="field" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search names, companies, tags, notes" />
-            <select className="field" value={type} onChange={(event) => setType(event.target.value as ContactType | "ALL")}>
-              <option value="ALL">All contact types</option>
-              {contactTypes.map((contactType) => <option key={contactType} value={contactType}>{statusLabel(contactType)}</option>)}
+          <SectionHeader eyebrow="Talent Directory" title="Talent" action={<div className="flex flex-wrap gap-2"><PrimaryButton icon={Plus} label="Add Talent" onClick={() => setCreateOpen(true)} /><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline"><UploadCloud className="h-3.5 w-3.5" />Import CSV<input className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => importContacts(event.target.files?.[0])} /></label><button type="button" className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 hover:border-amberline/40 hover:text-amberline" onClick={exportContacts}>Export CSV</button></div>} />
+          <div className="mb-3 grid gap-2 lg:grid-cols-[1fr_170px_170px_150px_140px]">
+            <input className="field" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search names, agencies, credits, genres, roles" />
+            <select className="field" value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}>
+              <option value="ALL">All roles</option>
+              {roleOptions.map((role) => <option key={role} value={role}>{role}</option>)}
             </select>
-            <select className="field" value={status} onChange={(event) => setStatus(event.target.value as ContactStatus | "ALL")}>
-              <option value="ALL">All statuses</option>
-              {contactStatuses.map((contactStatus) => <option key={contactStatus} value={contactStatus}>{statusLabel(contactStatus)}</option>)}
+            <select className="field" value={genreFilter} onChange={(event) => setGenreFilter(event.target.value)}>
+              <option value="ALL">All genres</option>
+              {genreOptions.map((genre) => <option key={genre} value={genre}>{genre}</option>)}
             </select>
-            <select className="field" value={ownerId} onChange={(event) => setOwnerId(event.target.value)}>
-              <option value="ALL">All owners</option>
-              {users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+            <select className="field" value={locationFilter} onChange={(event) => setLocationFilter(event.target.value)}>
+              <option value="ALL">All locations</option>
+              {locationOptions.map((location) => <option key={location} value={location}>{location}</option>)}
+            </select>
+            <select className="field" value={metWithFilter} onChange={(event) => setMetWithFilter(event.target.value as "ALL" | "MET" | "NOT_MET")}>
+              <option value="ALL">Any meeting</option>
+              <option value="MET">Met with</option>
+              <option value="NOT_MET">Not met yet</option>
             </select>
           </div>
           {importMessage ? <p className="mb-3 text-xs text-studio-300">{importMessage}</p> : null}
           {filteredContacts.length ? (
             <div className="data-scroll contacts-list-scroll">
-              <table className="data-table min-w-[940px]">
+              <table className="data-table min-w-[1120px]">
                 <thead className="text-[11px] uppercase tracking-[0.12em] text-studio-400">
-                  <tr><th className="py-2">Name</th><th>Type</th><th>Company</th><th>Email</th><th>Phone</th><th>Development Slate</th><th>Notes</th></tr>
+                  <tr><th className="py-2">Name</th><th>Role</th><th>Agency / Management</th><th>Genre</th><th>Location</th><th>Met With?</th><th>Credits</th></tr>
                 </thead>
                 <tbody className="divide-y divide-white/10">
                   {filteredContacts.map((contact) => (
                     <tr key={contact.id} onClick={() => setSelectedContactId(contact.id)} className={cn("cursor-pointer text-studio-200 transition hover:bg-white/[0.035]", selectedContact?.id === contact.id && "bg-emerald-400/10")}>
                       <td className="py-2.5">
                         <p className="font-semibold text-studio-100">{contact.name}</p>
-                        <p className="mt-0.5 text-xs text-studio-400">{contact.title} / {contact.location}</p>
+                        <p className="mt-0.5 text-xs text-studio-400">{contact.email || contact.phone || "Click to view contact info"}</p>
                       </td>
-                      <td><Badge value={contact.type} /></td>
-                      <td>{contact.company}</td>
-                      <td><a className="text-sky-200 hover:text-amberline" href={`mailto:${contact.email}`} onClick={(event) => event.stopPropagation()}>{contact.email}</a></td>
-                      <td className="text-studio-300">{contact.phone}</td>
-                      <td className="space-x-1.5">{contact.projectIds.map((projectId) => <TableLink key={projectId} href={`/projects/${projectId}`}>{projectTitle(projectId)}</TableLink>)}</td>
-                      <td className="max-w-[260px] text-studio-300"><ContactNotesPreview notes={contact.notes} onReadMore={() => setExpandedNoteContactId(contact.id)} /></td>
+                      <td><Badge value={talentRole(contact)} subtle /></td>
+                      <td className="max-w-[230px] whitespace-pre-line text-studio-300">{talentAgency(contact)}</td>
+                      <td className="max-w-[180px] text-studio-300">{talentGenre(contact)}</td>
+                      <td className="text-studio-300">{talentLocation(contact) || "-"}</td>
+                      <td className="text-studio-300">{talentMetWith(contact) || "-"}</td>
+                      <td className="max-w-[320px] text-studio-300"><ContactNotesPreview notes={talentCredits(contact)} onReadMore={() => setExpandedNoteContactId(contact.id)} /></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-          ) : <EmptyState label="No contacts match this search." />}
+          ) : <EmptyState label="No talent matches this search." />}
         </Panel>
 
         {selectedContact ? (
@@ -7182,11 +7313,11 @@ function Contacts({
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <Badge value={selectedContact.type} />
+                      <Badge value={talentRole(selectedContact)} />
                       <Badge value={selectedContact.status ?? "ACTIVE"} subtle />
                     </div>
                     <h3 className="mt-2 text-xl font-semibold text-studio-100">{selectedContact.name}</h3>
-                    <p className="mt-1 text-[13px] text-studio-300">{selectedContact.title} / {selectedContact.company}</p>
+                    <p className="mt-1 whitespace-pre-line text-[13px] text-studio-300">{talentAgency(selectedContact)}</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-1.5">
                     {selectedContact.email ? <TableLink href={`mailto:${selectedContact.email}`}>Email</TableLink> : null}
@@ -7195,115 +7326,47 @@ function Contacts({
                   </div>
                 </div>
                 <div className="mt-4 grid gap-3 md:grid-cols-2">
-                  <label className="grid gap-1">
-                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Name</span>
-                    <input className="field" value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Contact name" />
-                  </label>
-                  <label className="grid gap-1">
-                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Contact Type</span>
-                    <select className="field" value={draft.type} onChange={(event) => setDraft((current) => ({ ...current, type: event.target.value as ContactType }))}>
-                      {contactTypes.map((contactType) => <option key={contactType} value={contactType}>{statusLabel(contactType)}</option>)}
-                    </select>
-                  </label>
-                  <label className="grid gap-1">
-                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Company</span>
-                    <input className="field" value={draft.company} onChange={(event) => setDraft((current) => ({ ...current, company: event.target.value }))} placeholder="Company, agency, vendor" />
-                  </label>
-                  <label className="grid gap-1">
-                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Title / Role</span>
-                    <input className="field" value={draft.title} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} placeholder="Writer, manager, artist..." />
-                  </label>
-                  <label className="grid gap-1">
-                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Email</span>
-                    <input className="field" type="email" value={draft.email} onChange={(event) => setDraft((current) => ({ ...current, email: event.target.value }))} placeholder="name@example.com" />
-                  </label>
-                  <label className="grid gap-1">
-                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Phone</span>
-                    <input className="field" value={draft.phone} onChange={(event) => setDraft((current) => ({ ...current, phone: event.target.value }))} placeholder="Phone number" />
-                  </label>
-                  <label className="grid gap-1">
-                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Location</span>
-                    <input className="field" value={draft.location} onChange={(event) => setDraft((current) => ({ ...current, location: event.target.value }))} placeholder="Los Angeles, CA" />
-                  </label>
-                  <label className="grid gap-1">
-                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Website</span>
-                    <input className="field" value={draft.website} onChange={(event) => setDraft((current) => ({ ...current, website: event.target.value }))} placeholder="https://..." />
-                  </label>
-                  <label className="grid gap-1">
-                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Status</span>
-                    <select className="field" value={draft.status} onChange={(event) => setDraft((current) => ({ ...current, status: event.target.value as ContactStatus }))}>
-                      {contactStatuses.map((contactStatus) => <option key={contactStatus} value={contactStatus}>{statusLabel(contactStatus)}</option>)}
-                    </select>
-                  </label>
-                  <label className="grid gap-1">
-                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Relationship Owner</span>
-                    <select className="field" value={draft.ownerId} onChange={(event) => setDraft((current) => ({ ...current, ownerId: event.target.value }))}>
-                      <option value="">Unassigned owner</option>
-                      {users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
-                    </select>
-                  </label>
-                  <label className="grid gap-1">
-                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Last Contacted</span>
-                    <input className="field" type="date" value={draft.lastContacted} onChange={(event) => setDraft((current) => ({ ...current, lastContacted: event.target.value }))} />
-                  </label>
-                  <label className="grid gap-1">
-                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Next Follow-Up</span>
-                    <input className="field" type="date" value={draft.nextFollowUp} onChange={(event) => setDraft((current) => ({ ...current, nextFollowUp: event.target.value }))} />
-                  </label>
+                  <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Name</span><input className="field" value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Talent name" /></label>
+                  <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Role</span><input className="field" value={draft.role} onChange={(event) => setDraft((current) => ({ ...current, role: event.target.value }))} placeholder="Writer, director, artist..." /></label>
+                  <label className="grid gap-1 md:col-span-2"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Agency / Management</span><textarea className="field min-h-20" value={draft.agency} onChange={(event) => setDraft((current) => ({ ...current, agency: event.target.value }))} placeholder="Agency, manager, rep" /></label>
+                  <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Genre</span><input className="field" value={draft.genre} onChange={(event) => setDraft((current) => ({ ...current, genre: event.target.value }))} placeholder="Horror, Action" /></label>
+                  <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Location</span><input className="field" value={draft.location} onChange={(event) => setDraft((current) => ({ ...current, location: event.target.value }))} placeholder="US, UK, Los Angeles" /></label>
+                  <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Met With?</span><input className="field" value={draft.metWith} onChange={(event) => setDraft((current) => ({ ...current, metWith: event.target.value }))} placeholder="Yes, no, date, notes" /></label>
+                  <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Status</span><select className="field" value={draft.status} onChange={(event) => setDraft((current) => ({ ...current, status: event.target.value as ContactStatus }))}>{contactStatuses.map((contactStatus) => <option key={contactStatus} value={contactStatus}>{statusLabel(contactStatus)}</option>)}</select></label>
+                  <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Email</span><input className="field" type="email" value={draft.email} onChange={(event) => setDraft((current) => ({ ...current, email: event.target.value }))} placeholder="name@example.com" /></label>
+                  <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Phone</span><input className="field" value={draft.phone} onChange={(event) => setDraft((current) => ({ ...current, phone: event.target.value }))} placeholder="Phone number" /></label>
+                  <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Website</span><input className="field" value={draft.website} onChange={(event) => setDraft((current) => ({ ...current, website: event.target.value }))} placeholder="https://..." /></label>
+                  <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Relationship Owner</span><select className="field" value={draft.ownerId} onChange={(event) => setDraft((current) => ({ ...current, ownerId: event.target.value }))}><option value="">Unassigned owner</option>{users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label>
+                  <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Last Contacted</span><input className="field" type="date" value={draft.lastContacted} onChange={(event) => setDraft((current) => ({ ...current, lastContacted: event.target.value }))} /></label>
+                  <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Next Follow-Up</span><input className="field" type="date" value={draft.nextFollowUp} onChange={(event) => setDraft((current) => ({ ...current, nextFollowUp: event.target.value }))} /></label>
                 </div>
-                <label className="mt-3 grid gap-1">
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Tags</span>
-                  <input className="field" value={draft.tags} onChange={(event) => setDraft((current) => ({ ...current, tags: event.target.value }))} placeholder="Tags, separated by commas" />
-                </label>
+                <label className="mt-3 grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Credits</span><textarea className="field min-h-28" value={draft.credits} onChange={(event) => setDraft((current) => ({ ...current, credits: event.target.value }))} placeholder="Film, TV, theatre, awards, relevant credits" /></label>
+                <label className="mt-3 grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Internal Notes / Next Step</span><textarea className="field min-h-24" value={draft.notes} onChange={(event) => setDraft((current) => ({ ...current, notes: event.target.value }))} placeholder="What should happen next with this person?" /></label>
+                <label className="mt-3 grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Additional Tags</span><input className="field" value={draft.tags} onChange={(event) => setDraft((current) => ({ ...current, tags: event.target.value }))} placeholder="Tags, separated by commas" /></label>
                 <div className="mt-3">
-                  <div className="mb-1 flex items-center justify-between gap-2">
-                    <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Assigned Development Slate</span>
-                    <span className="text-[11px] text-studio-500">{draft.projectIds.length} selected</span>
-                  </div>
-                  <div className="grid max-h-40 gap-1 overflow-auto rounded-md border border-white/10 bg-white/[0.025] p-2 md:grid-cols-2">
+                  <div className="mb-1 flex items-center justify-between gap-2"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Assigned Development Slate</span><span className="text-[11px] text-studio-500">{draft.projectIds.length} selected</span></div>
+                  <div className="grid max-h-36 gap-1 overflow-auto rounded-md border border-white/10 bg-white/[0.025] p-2 md:grid-cols-2">
                     {projects.map((project) => {
                       const checked = draft.projectIds.includes(project.id);
                       return (
                         <label key={project.id} className={cn("flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-[13px] text-studio-300 transition hover:bg-white/[0.04] hover:text-studio-100", checked && "bg-emerald-400/10 text-studio-100")}>
-                          <input
-                            type="checkbox"
-                            className="h-3.5 w-3.5 accent-emerald-400"
-                            checked={checked}
-                            onChange={(event) => setDraft((current) => ({
-                              ...current,
-                              projectIds: event.target.checked ? [...current.projectIds, project.id] : current.projectIds.filter((projectId) => projectId !== project.id)
-                            }))}
-                          />
+                          <input type="checkbox" className="h-3.5 w-3.5 accent-emerald-400" checked={checked} onChange={(event) => setDraft((current) => ({ ...current, projectIds: event.target.checked ? [...current.projectIds, project.id] : current.projectIds.filter((projectId) => projectId !== project.id) }))} />
                           <span className="truncate">{project.title}</span>
                         </label>
                       );
                     })}
                   </div>
                 </div>
-                <label className="mt-3 grid gap-1">
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Relationship Notes</span>
-                  <textarea className="field min-h-24" value={draft.notes} onChange={(event) => setDraft((current) => ({ ...current, notes: event.target.value }))} placeholder="Relationship notes" />
-                </label>
-                <div className="mt-3 flex justify-end"><PrimaryButton icon={CheckCircle2} label="Save Relationship" onClick={saveContact} /></div>
-                <div className="mt-2 flex justify-end">
-                  <button type="button" onClick={deleteSelectedContact} className="inline-flex items-center gap-1.5 rounded border border-rose-400/25 bg-rose-500/5 px-2.5 py-1.5 text-xs font-semibold text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200">
-                    <Trash2 className="h-3.5 w-3.5" />
-                    Delete Contact
-                  </button>
-                </div>
+                <div className="mt-3 flex flex-wrap justify-end gap-2"><PrimaryButton icon={CheckCircle2} label="Save Talent" onClick={saveContact} /><button type="button" onClick={deleteSelectedContact} className="inline-flex items-center gap-1.5 rounded border border-rose-400/25 bg-rose-500/5 px-2.5 py-1.5 text-xs font-semibold text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200"><Trash2 className="h-3.5 w-3.5" />Delete</button></div>
               </div>
               <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
-                <SectionHeader eyebrow="Contact Network" title="Linked Contacts" />
+                <SectionHeader eyebrow="Relationship Map" title="Linked Talent / Reps" />
                 <form onSubmit={addContactRelationship} className="mt-3 grid gap-2 lg:grid-cols-[1fr_150px_1fr_auto]">
                   <select className="field" value={relationshipDraft.toContactId} onChange={(event) => setRelationshipDraft((current) => ({ ...current, toContactId: event.target.value }))}>
                     <option value="">Choose contact</option>
-                    {contacts.filter((contact) => contact.id !== selectedContact.id).map((contact) => (
-                      <option key={contact.id} value={contact.id}>{contact.name} / {contact.company}</option>
-                    ))}
+                    {contacts.filter((contact) => contact.id !== selectedContact.id).map((contact) => (<option key={contact.id} value={contact.id}>{contact.name} / {talentAgency(contact)}</option>))}
                   </select>
-                  <select className="field" value={relationshipDraft.relationshipType} onChange={(event) => setRelationshipDraft((current) => ({ ...current, relationshipType: event.target.value as ContactRelationshipType }))}>
-                    {contactRelationshipTypes.map((relationshipType) => <option key={relationshipType} value={relationshipType}>{statusLabel(relationshipType)}</option>)}
-                  </select>
+                  <select className="field" value={relationshipDraft.relationshipType} onChange={(event) => setRelationshipDraft((current) => ({ ...current, relationshipType: event.target.value as ContactRelationshipType }))}>{contactRelationshipTypes.map((relationshipType) => <option key={relationshipType} value={relationshipType}>{statusLabel(relationshipType)}</option>)}</select>
                   <input className="field" value={relationshipDraft.notes} onChange={(event) => setRelationshipDraft((current) => ({ ...current, notes: event.target.value }))} placeholder="Optional relationship note" />
                   <PrimaryButton icon={Plus} label="Link" />
                 </form>
@@ -7314,15 +7377,11 @@ function Contacts({
                     const otherContact = contacts.find((contact) => contact.id === otherContactId);
                     return (
                       <div key={relationship.id} className="flex flex-col gap-2 rounded border border-white/10 bg-white/[0.025] p-2.5 md:flex-row md:items-center md:justify-between">
-                        <div>
-                          <p className="text-[13px] font-semibold text-studio-100">{otherContact?.name ?? "Missing contact"}</p>
-                          <p className="mt-0.5 text-xs text-studio-400">{isOutbound ? statusLabel(relationship.relationshipType) : `Linked as ${statusLabel(relationship.relationshipType)}`} / {otherContact?.company ?? "Unknown company"}</p>
-                          {relationship.notes ? <p className="mt-1 text-xs text-studio-300">{relationship.notes}</p> : null}
-                        </div>
+                        <div><p className="text-[13px] font-semibold text-studio-100">{otherContact?.name ?? "Missing contact"}</p><p className="mt-0.5 text-xs text-studio-400">{isOutbound ? statusLabel(relationship.relationshipType) : `Linked as ${statusLabel(relationship.relationshipType)}`} / {otherContact ? talentAgency(otherContact) : "Unknown"}</p>{relationship.notes ? <p className="mt-1 text-xs text-studio-300">{relationship.notes}</p> : null}</div>
                         {onDeleteRelationship ? <DangerButton label="Remove" onClick={() => onDeleteRelationship(relationship.id)} /> : null}
                       </div>
                     );
-                  }) : <EmptyState label="No linked contacts yet. Add agents, managers, assistants, reps, or referral relationships here." />}
+                  }) : <EmptyState label="No linked relationships yet. Add agents, managers, assistants, collaborators, or referral links here." />}
                 </div>
               </div>
               <div className="grid gap-3 lg:grid-cols-3">
@@ -7334,22 +7393,8 @@ function Contacts({
           </Panel>
         ) : null}
       </div>
-      <Panel>
-        <SectionHeader eyebrow="Relationship Queue" title="Upcoming Follow-Ups" />
-        {followUpContacts.length ? <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-5">{followUpContacts.map((contact) => <button key={contact.id} type="button" onClick={() => setSelectedContactId(contact.id)} className="rounded-md border border-white/10 bg-white/[0.03] p-2.5 text-left transition hover:border-amberline/35"><p className="truncate text-[13px] font-semibold text-studio-100">{contact.name}</p><p className="mt-1 text-xs text-studio-400">{contact.nextFollowUp} / {userName(contact.ownerId ?? currentUser.id)}</p></button>)}</div> : <EmptyState label="No follow-ups scheduled." />}
-      </Panel>
-      {expandedNoteContact ? (
-        <ContactNoteModal contact={expandedNoteContact} onClose={() => setExpandedNoteContactId("")} />
-      ) : null}
-      {createOpen ? (
-        <ContactCreateModal
-          users={users}
-          projects={projects}
-          currentUser={currentUser}
-          onClose={() => setCreateOpen(false)}
-          onCreate={createManualContact}
-        />
-      ) : null}
+      {expandedNoteContact ? (<ContactNoteModal contact={expandedNoteContact} onClose={() => setExpandedNoteContactId("")} />) : null}
+      {createOpen ? (<ContactCreateModal users={users} projects={projects} currentUser={currentUser} onClose={() => setCreateOpen(false)} onCreate={createManualContact} />) : null}
     </div>
   );
 }
@@ -7384,9 +7429,9 @@ function ContactNoteModal({ contact, onClose }: { contact: HammerContact; onClos
         <Panel className="shadow-2xl">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Contact Notes</p>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Talent Notes</p>
               <h3 className="mt-1 text-lg font-semibold text-studio-100">{contact.name}</h3>
-              <p className="mt-1 text-xs text-studio-400">{contact.title || "No title"} / {contact.company || "No company"}</p>
+              <p className="mt-1 text-xs text-studio-400">{contact.title || "No role"} / {talentAgency(contact)}</p>
             </div>
             <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close contact notes">
               <X className="h-4 w-4" />
@@ -7429,7 +7474,14 @@ function ContactCreateModal({
     lastContacted: "",
     nextFollowUp: "",
     projectIds: [],
-    notes: ""
+    notes: "",
+    isTalent: true,
+    talentAgency: "",
+    talentCredits: "",
+    talentGenre: "",
+    talentRole: "",
+    talentMetWith: "",
+    talentBased: ""
   });
   const [tagsText, setTagsText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -7444,23 +7496,36 @@ function ContactCreateModal({
     setBusy(true);
     setError("");
     try {
+      const agency = draft.company.trim();
+      const role = draft.title.trim();
+      const location = draft.location.trim();
+      const genre = draft.talentGenre?.trim() ?? "";
+      const credits = draft.notes.trim();
       await onCreate({
         ...draft,
         name: draft.name.trim(),
-        company: draft.company.trim(),
-        title: draft.title.trim(),
+        company: agency,
+        type: talentContactType(role, draft.type),
+        title: role,
         email: draft.email.trim(),
         phone: draft.phone.trim(),
-        location: draft.location.trim(),
+        location,
         website: draft.website?.trim(),
-        tags: tagsText.split(/[;,]/).map((tag) => tag.trim()).filter(Boolean),
+        tags: talentTags(genre, tagsText),
         lastContacted: draft.lastContacted || undefined,
         nextFollowUp: draft.nextFollowUp || undefined,
         ownerId: draft.ownerId || undefined,
-        notes: draft.notes.trim()
+        notes: credits,
+        isTalent: true,
+        talentAgency: agency,
+        talentCredits: credits,
+        talentGenre: genre,
+        talentRole: role,
+        talentMetWith: draft.talentMetWith?.trim() ?? "",
+        talentBased: location
       });
     } catch (error) {
-      setError(error instanceof Error ? error.message : "Could not add contact.");
+      setError(error instanceof Error ? error.message : "Could not add talent.");
     } finally {
       setBusy(false);
     }
@@ -7470,15 +7535,15 @@ function ContactCreateModal({
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
       <form onSubmit={submit} className="my-6 w-full max-w-3xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-glow">
         <div className="flex items-start justify-between gap-3">
-          <SectionHeader eyebrow="Collaborative CRM" title="Add Contact" />
-          <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close add contact">
+          <SectionHeader eyebrow="Talent Directory" title="Add Talent" />
+          <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close add talent">
             <X className="h-4 w-4" />
           </button>
         </div>
         <div className="grid gap-3 md:grid-cols-2">
           <label className="grid gap-1">
             <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Name</span>
-            <input className="field" value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Contact name" />
+            <input className="field" value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Talent name" />
           </label>
           <label className="grid gap-1">
             <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Contact Type</span>
@@ -7487,12 +7552,20 @@ function ContactCreateModal({
             </select>
           </label>
           <label className="grid gap-1">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Company</span>
-            <input className="field" value={draft.company} onChange={(event) => setDraft((current) => ({ ...current, company: event.target.value }))} placeholder="Company, agency, vendor" />
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Agency / Management</span>
+            <input className="field" value={draft.company} onChange={(event) => setDraft((current) => ({ ...current, company: event.target.value }))} placeholder="Agency, manager, rep" />
           </label>
           <label className="grid gap-1">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Title / Role</span>
-            <input className="field" value={draft.title} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} placeholder="Writer, manager, artist..." />
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Role</span>
+            <input className="field" value={draft.title} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} placeholder="Writer, director, artist..." />
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Genre</span>
+            <input className="field" value={draft.talentGenre ?? ""} onChange={(event) => setDraft((current) => ({ ...current, talentGenre: event.target.value }))} placeholder="Horror, Action" />
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Met With?</span>
+            <input className="field" value={draft.talentMetWith ?? ""} onChange={(event) => setDraft((current) => ({ ...current, talentMetWith: event.target.value }))} placeholder="Yes, no, date, notes" />
           </label>
           <label className="grid gap-1">
             <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Email</span>
@@ -7504,7 +7577,7 @@ function ContactCreateModal({
           </label>
           <label className="grid gap-1">
             <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Location</span>
-            <input className="field" value={draft.location} onChange={(event) => setDraft((current) => ({ ...current, location: event.target.value }))} placeholder="Los Angeles, CA" />
+            <input className="field" value={draft.location} onChange={(event) => setDraft((current) => ({ ...current, location: event.target.value }))} placeholder="US, UK, Los Angeles" />
           </label>
           <label className="grid gap-1">
             <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Website</span>
@@ -7562,13 +7635,13 @@ function ContactCreateModal({
           </div>
         </div>
         <label className="mt-3 grid gap-1">
-          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Relationship Notes</span>
-          <textarea className="field min-h-24" value={draft.notes} onChange={(event) => setDraft((current) => ({ ...current, notes: event.target.value }))} placeholder="Relationship notes" />
+          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Credits / Notes</span>
+          <textarea className="field min-h-24" value={draft.notes} onChange={(event) => setDraft((current) => ({ ...current, notes: event.target.value }))} placeholder="Credits, notes, next step" />
         </label>
         {error ? <p className="mt-3 rounded border border-rose-400/25 bg-rose-500/5 px-2.5 py-2 text-xs text-rose-200">{error}</p> : null}
         <div className="mt-4 flex justify-end gap-2">
           <button type="button" onClick={onClose} className="rounded border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:text-amberline">Cancel</button>
-          <button type="submit" disabled={busy} className="rounded bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">Add Contact</button>
+          <button type="submit" disabled={busy} className="rounded bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">Add Talent</button>
         </div>
       </form>
     </div>
@@ -9960,27 +10033,41 @@ function parseContactsCsv(csv: string): HammerContact[] {
   if (rows.length < 2) return [];
   const headers = rows[0].map((header) => normalizeCsvHeader(header));
   return rows.slice(1).map((row, index) => {
-    const record = Object.fromEntries(headers.map((header, cellIndex) => [header, row[cellIndex]?.trim() ?? ""]));
-    const type = normalizeContactType(record.type);
+    const record = Object.fromEntries(headers.map((header, cellIndex) => [header, row[cellIndex]?.trim() ?? ""])) as Record<string, string>;
+    const agency = record.agency || record.company || record.management || record.representation || "Independent";
+    const role = record.role || record.title || record.type || "Talent";
+    const genre = record.genre || record.genres || "";
+    const location = record.based || record.location || record.city || "";
+    const credits = record.credits || record.notes || "";
+    const metWith = record.metwith || record.met || record.metwithdate || "";
+    const hasTalentColumns = Boolean(record.agency || record.credits || record.genre || record.role || record.metwith || record.based);
+    const type = hasTalentColumns ? talentContactType(role) : normalizeContactType(record.type);
     return {
       id: `contact-local-${Date.now()}-${index}`,
-      name: record.name || "Unnamed Contact",
-      company: record.company || "Independent",
+      name: record.name || "Unnamed Talent",
+      company: agency,
       type,
-      title: record.title || statusLabel(type),
+      title: role || statusLabel(type),
       email: record.email || "",
       phone: record.phone || "",
-      location: record.location || "",
+      location,
       website: record.website || "",
-      status: normalizeContactStatus(record.status),
+      status: normalizeContactStatus(record.status || (metWith ? "ACTIVE" : "NEW")),
       ownerId: record.ownerid || record.owner || "",
-      tags: parseTags(record.tags),
+      tags: hasTalentColumns ? talentTags(genre, record.tags) : parseTags(record.tags),
       lastContacted: record.lastcontacted || "",
       nextFollowUp: record.nextfollowup || record.followup || "",
       projectIds: parseContactProjects(record.projects || record.project || record.projectids),
-      notes: record.notes || ""
+      notes: credits,
+      isTalent: hasTalentColumns || record.istalent === "true",
+      talentAgency: agency,
+      talentCredits: credits,
+      talentGenre: genre,
+      talentRole: role,
+      talentMetWith: metWith,
+      talentBased: location
     };
-  });
+  }).filter((contact) => contact.name.trim());
 }
 
 function optionalCsvNumber(value?: string) {
@@ -9999,23 +10086,24 @@ function buildProspectImportId(title: string, externalId: string | undefined, in
 }
 
 function buildContactsCsv(contacts: HammerContact[]) {
-  const headers = ["name", "company", "type", "title", "email", "phone", "location", "website", "status", "ownerId", "tags", "lastContacted", "nextFollowUp", "projects", "notes"];
+  const headers = ["name", "agency", "credits", "genre", "role", "metWith", "location", "email", "phone", "website", "status", "ownerId", "tags", "nextFollowUp", "projects", "notes"];
   const rows = contacts.map((contact) => [
     contact.name,
-    contact.company,
-    contact.type,
-    contact.title,
+    talentAgency(contact),
+    talentCredits(contact),
+    talentGenre(contact) === "-" ? "" : talentGenre(contact),
+    talentRole(contact),
+    talentMetWith(contact),
+    talentLocation(contact),
     contact.email,
     contact.phone,
-    contact.location,
     contact.website ?? "",
     contact.status ?? "ACTIVE",
     contact.ownerId ?? "",
-    (contact.tags ?? []).join("; "),
-    contact.lastContacted ?? "",
+    (contact.tags ?? []).filter((tag) => tag.toLowerCase() !== "talent").join("; "),
     contact.nextFollowUp ?? "",
     contact.projectIds.map(projectTitle).join("; "),
-    contact.notes
+    contact.notes === talentCredits(contact) ? "" : contact.notes
   ]);
   return [headers, ...rows].map((row) => row.map(escapeCsvCell).join(",")).join("\n");
 }
@@ -10370,7 +10458,7 @@ function titleForView(view: HammerView, context: { project: HammerProject; docum
     assets: "Assets",
     "asset-detail": context.asset.title,
     tasks: "Tasks",
-    contacts: "Contacts",
+    contacts: "Talent",
     reviews: "Reviews",
     reports: "Reports",
     executive: "Executive",

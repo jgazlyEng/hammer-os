@@ -766,7 +766,14 @@ export async function POST(request: Request) {
             lastContacted: body.lastContacted !== undefined ? dateField(body.lastContacted) : undefined,
             nextFollowUp: body.nextFollowUp !== undefined ? dateField(body.nextFollowUp) : undefined,
             projectIds: body.projectIds !== undefined ? (Array.isArray(body.projectIds) ? body.projectIds.filter((id): id is string => typeof id === "string") : []) : undefined,
-            notes: body.notes !== undefined ? optionalString(body.notes) : undefined
+            notes: body.notes !== undefined ? optionalString(body.notes) : undefined,
+            isTalent: body.isTalent !== undefined ? Boolean(body.isTalent) : undefined,
+            talentAgency: body.talentAgency !== undefined ? optionalString(body.talentAgency) : undefined,
+            talentCredits: body.talentCredits !== undefined ? optionalString(body.talentCredits) : undefined,
+            talentGenre: body.talentGenre !== undefined ? optionalString(body.talentGenre) : undefined,
+            talentRole: body.talentRole !== undefined ? optionalString(body.talentRole) : undefined,
+            talentMetWith: body.talentMetWith !== undefined ? optionalString(body.talentMetWith) : undefined,
+            talentBased: body.talentBased !== undefined ? optionalString(body.talentBased) : undefined
           }
         })) });
 
@@ -999,7 +1006,7 @@ function toTaskSubtask(subtask: { id: string; taskId: string; title: string; com
   return { id: subtask.id, taskId: subtask.taskId, title: subtask.title, completed: subtask.completed, createdById: subtask.createdById ?? undefined, createdAt: dateTimeString(subtask.createdAt), updatedAt: dateTimeString(subtask.updatedAt) };
 }
 
-function toContact(contact: { id: string; name: string; company: string | null; type: ContactType; title: string | null; email: string | null; phone: string | null; location: string | null; website: string | null; status: ContactStatus; ownerId: string | null; tags: string[]; lastContacted: Date | null; nextFollowUp: Date | null; projectIds: string[]; notes: string | null }) {
+function toContact(contact: { id: string; name: string; company: string | null; type: ContactType; title: string | null; email: string | null; phone: string | null; location: string | null; website: string | null; status: ContactStatus; ownerId: string | null; tags: string[]; lastContacted: Date | null; nextFollowUp: Date | null; projectIds: string[]; notes: string | null; isTalent: boolean; talentAgency: string | null; talentCredits: string | null; talentGenre: string | null; talentRole: string | null; talentMetWith: string | null; talentBased: string | null }) {
   return {
     id: contact.id,
     name: contact.name,
@@ -1016,7 +1023,14 @@ function toContact(contact: { id: string; name: string; company: string | null; 
     lastContacted: contact.lastContacted ? dateString(contact.lastContacted) : undefined,
     nextFollowUp: contact.nextFollowUp ? dateString(contact.nextFollowUp) : undefined,
     projectIds: contact.projectIds,
-    notes: contact.notes ?? ""
+    notes: contact.notes ?? "",
+    isTalent: contact.isTalent,
+    talentAgency: contact.talentAgency ?? undefined,
+    talentCredits: contact.talentCredits ?? undefined,
+    talentGenre: contact.talentGenre ?? undefined,
+    talentRole: contact.talentRole ?? undefined,
+    talentMetWith: contact.talentMetWith ?? undefined,
+    talentBased: contact.talentBased ?? undefined
   };
 }
 
@@ -1480,7 +1494,14 @@ function contactCreateData(contact: Record<string, unknown>): Prisma.ContactCrea
     lastContacted: dateField(contact.lastContacted),
     nextFollowUp: dateField(contact.nextFollowUp),
     notes: optionalString(contact.notes),
-    projectIds: Array.isArray(contact.projectIds) ? contact.projectIds.filter((id): id is string => typeof id === "string") : []
+    projectIds: Array.isArray(contact.projectIds) ? contact.projectIds.filter((id): id is string => typeof id === "string") : [],
+    isTalent: Boolean(contact.isTalent),
+    talentAgency: optionalString(contact.talentAgency),
+    talentCredits: optionalString(contact.talentCredits),
+    talentGenre: optionalString(contact.talentGenre),
+    talentRole: optionalString(contact.talentRole),
+    talentMetWith: optionalString(contact.talentMetWith),
+    talentBased: optionalString(contact.talentBased)
   };
 }
 
