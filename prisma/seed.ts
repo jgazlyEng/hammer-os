@@ -221,7 +221,14 @@ async function main() {
         lastContacted: dateAtNoon(contact.lastContacted) ?? null,
         nextFollowUp: dateAtNoon(contact.nextFollowUp) ?? null,
         projectIds: contact.projectIds,
-        notes: contact.notes
+        notes: contact.notes,
+        isTalent: contact.isTalent ?? false,
+        talentAgency: contact.talentAgency,
+        talentCredits: contact.talentCredits,
+        talentGenre: contact.talentGenre,
+        talentRole: contact.talentRole,
+        talentMetWith: contact.talentMetWith,
+        talentBased: contact.talentBased
       },
       create: {
         id: contact.id,
@@ -239,7 +246,14 @@ async function main() {
         lastContacted: dateAtNoon(contact.lastContacted) ?? null,
         nextFollowUp: dateAtNoon(contact.nextFollowUp) ?? null,
         projectIds: contact.projectIds,
-        notes: contact.notes
+        notes: contact.notes,
+        isTalent: contact.isTalent ?? false,
+        talentAgency: contact.talentAgency,
+        talentCredits: contact.talentCredits,
+        talentGenre: contact.talentGenre,
+        talentRole: contact.talentRole,
+        talentMetWith: contact.talentMetWith,
+        talentBased: contact.talentBased
       }
     });
   }
