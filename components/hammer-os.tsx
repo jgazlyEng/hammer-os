@@ -4674,7 +4674,7 @@ function ShareButton({ title, type, status, summary, href }: { title: string; ty
         Share
       </button>
       {open ? (
-        <div className="absolute right-0 top-full z-30 mt-2 w-72 rounded-lg border border-white/10 bg-studio-950 p-3 text-left shadow-2xl">
+        <div className="absolute right-0 top-full z-20 mt-2 w-72 rounded-lg border border-white/10 bg-studio-950 p-3 text-left shadow-2xl">
           <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Internal Share</p>
           <p className="mt-1 line-clamp-2 text-xs text-studio-300">{title}</p>
           <div className="mt-3 grid gap-1.5">
