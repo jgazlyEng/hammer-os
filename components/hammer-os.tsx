@@ -4762,7 +4762,7 @@ function SlateCollections({
   useEffect(() => {
     const linkedCollectionId = searchParams.get("collection");
     if (linkedCollectionId && collections.some((collection) => collection.id === linkedCollectionId)) {
-      setSelectedCollectionId(linkedCollectionId);
+      if (selectedCollectionId !== linkedCollectionId) setSelectedCollectionId(linkedCollectionId);
       return;
     }
     if (!selectedCollectionId && collections[0]) setSelectedCollectionId(collections[0].id);
@@ -4770,7 +4770,11 @@ function SlateCollections({
   }, [collections, searchParams, selectedCollectionId]);
 
   useEffect(() => {
-    setSelectedItemIds((current) => current.filter((itemId) => availableItems.some((item) => item.id === itemId)));
+    const availableItemIds = new Set(availableItems.map((item) => item.id));
+    setSelectedItemIds((current) => {
+      const next = current.filter((itemId) => availableItemIds.has(itemId));
+      return next.length === current.length ? current : next;
+    });
   }, [availableItems]);
 
   async function createCollection(input: { name: string; description?: string; visibility: HammerSlateCollection["visibility"] }) {
@@ -5282,7 +5286,7 @@ function ScriptCollections({
   useEffect(() => {
     const linkedCollectionId = searchParams.get("collection");
     if (linkedCollectionId && collections.some((collection) => collection.id === linkedCollectionId)) {
-      setSelectedCollectionId(linkedCollectionId);
+      if (selectedCollectionId !== linkedCollectionId) setSelectedCollectionId(linkedCollectionId);
       return;
     }
     if (!selectedCollectionId && collections[0]) setSelectedCollectionId(collections[0].id);

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type MouseEvent, type PointerEvent } from "react";
 import { BarChart3, ClipboardList, ContactRound, FileBarChart2, FolderKanban, Layers3, LayoutDashboard, LibraryBig, LogOut, Moon, Settings2, Sun, UserRound } from "lucide-react";
 import {
   assignedProjectsForUser,
@@ -41,7 +41,7 @@ const executiveNavItem = { href: "/executive", label: "Executive", icon: BarChar
 const reportsNavItem = { href: "/reports", label: "Reports", icon: FileBarChart2 };
 const adminNavItem = { href: "/admin/users", label: "Admin", icon: Settings2 };
 const accountNavItem = { href: "/account", label: "Account", icon: UserRound };
-const GREENLIGHT_APP_VERSION = "1.92";
+const GREENLIGHT_APP_VERSION = "1.94";
 const HAMMER_THEME_STORAGE_KEY = "hammer-os-theme";
 type ThemeMode = "dark" | "light";
 type AuthMode = "loading" | "database" | "demo";
@@ -278,9 +278,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   }
 
+  function navigateFromSidebar(event: MouseEvent<HTMLAnchorElement> | PointerEvent<HTMLAnchorElement>, href: string) {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (pathname !== href) router.push(href);
+  }
+
   return (
     <div className="min-h-screen">
-      <aside className="fixed inset-y-0 left-0 z-40 w-[60px] border-r border-white/10 bg-[#303633] backdrop-blur md:w-56">
+      <aside className="fixed inset-y-0 left-0 z-[80] w-[60px] border-r border-white/10 bg-[#303633] backdrop-blur md:w-56">
         <div className="flex h-full flex-col px-2 py-3 md:px-3">
           <div className="flex items-center gap-1.5">
             <Link href="/dashboard" className="logo-mark-tile flex h-10 min-w-0 flex-1 items-center justify-center rounded-md border border-emerald-900/35 bg-[#303633] px-2 shadow-sm">
@@ -307,6 +314,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   <Link
                     href={item.href}
                     title={item.label}
+                    onClick={(event) => navigateFromSidebar(event, item.href)}
+                    onPointerDown={(event) => navigateFromSidebar(event, item.href)}
                     className={cn(
                       "group relative flex h-9 items-center justify-center gap-2 rounded-md border border-transparent px-2 text-[13px] text-studio-300 transition hover:bg-white/[0.055] hover:text-studio-100 md:justify-start md:px-2.5",
                       active && "border-emerald-300/20 bg-emerald-400/15 text-studio-100 shadow-[inset_0_0_0_1px_rgba(81,208,138,0.08)]"
@@ -336,6 +345,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   <Link
                     href={adminNavItem.href}
                     title={adminNavItem.label}
+                    onClick={(event) => navigateFromSidebar(event, adminNavItem.href)}
+                    onPointerDown={(event) => navigateFromSidebar(event, adminNavItem.href)}
                     className={cn(
                       "group relative flex h-9 items-center justify-center gap-2 rounded-md px-2 text-[13px] text-studio-400 transition hover:bg-white/[0.04] hover:text-studio-100 md:justify-start md:px-2.5",
                       active && "bg-white/[0.06] text-amberline"
@@ -357,6 +368,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   <Link
                     href={accountNavItem.href}
                     title={accountNavItem.label}
+                    onClick={(event) => navigateFromSidebar(event, accountNavItem.href)}
+                    onPointerDown={(event) => navigateFromSidebar(event, accountNavItem.href)}
                     className={cn(
                       "group relative flex h-9 items-center justify-center gap-2 rounded-md px-2 text-[13px] text-studio-400 transition hover:bg-white/[0.04] hover:text-studio-100 md:justify-start md:px-2.5",
                       active && "bg-white/[0.06] text-amberline"
