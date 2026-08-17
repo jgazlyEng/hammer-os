@@ -41,7 +41,7 @@ const executiveNavItem = { href: "/executive", label: "Executive", icon: BarChar
 const reportsNavItem = { href: "/reports", label: "Reports", icon: FileBarChart2 };
 const adminNavItem = { href: "/admin/users", label: "Admin", icon: Settings2 };
 const accountNavItem = { href: "/account", label: "Account", icon: UserRound };
-const GREENLIGHT_APP_VERSION = "1.91";
+const GREENLIGHT_APP_VERSION = "1.92";
 const HAMMER_THEME_STORAGE_KEY = "hammer-os-theme";
 type ThemeMode = "dark" | "light";
 type AuthMode = "loading" | "database" | "demo";
@@ -280,7 +280,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen">
-      <aside className="fixed inset-y-0 left-0 z-30 w-[60px] border-r border-white/10 bg-[#303633] backdrop-blur md:w-56">
+      <aside className="fixed inset-y-0 left-0 z-40 w-[60px] border-r border-white/10 bg-[#303633] backdrop-blur md:w-56">
         <div className="flex h-full flex-col px-2 py-3 md:px-3">
           <div className="flex items-center gap-1.5">
             <Link href="/dashboard" className="logo-mark-tile flex h-10 min-w-0 flex-1 items-center justify-center rounded-md border border-emerald-900/35 bg-[#303633] px-2 shadow-sm">
@@ -376,7 +376,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      <main className="ml-[60px] px-3 py-3 md:ml-56 md:px-4 md:py-4 xl:px-5">
+      <main className="relative z-0 ml-[60px] px-3 py-3 md:ml-56 md:px-4 md:py-4 xl:px-5">
         <div className="mx-auto max-w-[1320px]">
           {showProjectContext ? (
             <ProjectTopBar activeProject={activeProject} projects={availableProjects} onChange={changeProject} user={user} mode={authMode} />
