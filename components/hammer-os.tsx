@@ -10029,11 +10029,11 @@ function resolveCsvOwnerIds(owner: string | undefined, users: HammerUser[]) {
 }
 
 function parseContactsCsv(csv: string): HammerContact[] {
-  const rows = parseCsvRows(csv).filter((row) => row.some((cell) => cell.trim()));
+  const rows = parseCsvRows(csv).filter((row) => row.some((cell) => csvCell(cell).trim()));
   if (rows.length < 2) return [];
   const headers = rows[0].map((header) => normalizeCsvHeader(header));
   return rows.slice(1).map((row, index) => {
-    const record = Object.fromEntries(headers.map((header, cellIndex) => [header, row[cellIndex]?.trim() ?? ""])) as Record<string, string>;
+    const record = Object.fromEntries(headers.map((header, cellIndex) => [header, csvCell(row[cellIndex]).trim()])) as Record<string, string>;
     const agency = record.agency || record.company || record.management || record.representation || "Independent";
     const role = record.role || record.title || record.type || "Talent";
     const genre = record.genre || record.genres || "";
@@ -10067,7 +10067,7 @@ function parseContactsCsv(csv: string): HammerContact[] {
       talentMetWith: metWith,
       talentBased: location
     };
-  }).filter((contact) => contact.name.trim());
+  }).filter((contact) => csvCell(contact.name).trim());
 }
 
 function optionalCsvNumber(value?: string) {
@@ -10141,8 +10141,12 @@ function parseCsvRows(csv: string) {
   return rows;
 }
 
-function normalizeCsvHeader(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+function csvCell(value: unknown) {
+  return typeof value === "string" ? value : value == null ? "" : String(value);
+}
+
+function normalizeCsvHeader(value: unknown) {
+  return csvCell(value).toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 function normalizeContactType(value?: string): ContactType {
@@ -10159,17 +10163,19 @@ function parseTags(value?: string) {
   return value ? value.split(/[;,]/).map((tag) => tag.trim()).filter(Boolean) : [];
 }
 
-function parseContactProjects(value: string) {
-  if (!value.trim()) return [];
-  return value
+function parseContactProjects(value?: string) {
+  const source = csvCell(value);
+  if (!source.trim()) return [];
+  return source
     .split(/[;|]/)
     .map((item) => item.trim())
     .map((item) => hammerProjects.find((project) => project.id === item || project.title.toLowerCase() === item.toLowerCase())?.id)
     .filter((projectId): projectId is string => Boolean(projectId));
 }
 
-function escapeCsvCell(value: string) {
-  return /[",\n\r]/.test(value) ? `"${value.replaceAll("\"", "\"\"")}"` : value;
+function escapeCsvCell(value: unknown) {
+  const string = csvCell(value);
+  return /[",\n\r]/.test(string) ? `"${string.replaceAll("\"", "\"\"")}"` : string;
 }
 
 function currentVersionFor(documentId: string, documents: HammerDocument[], versions: HammerDocumentVersion[]) {
