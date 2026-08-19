@@ -290,12 +290,46 @@ export async function POST(request: Request) {
             projectId: targetAssociation.projectId,
             targetType,
             targetId,
-            body: stringField(body.body),
+            body: textField(body.body),
             metadataJson: noteMetadataField(body.metadataJson),
             visibility: commentVisibilityField(body.visibility),
             createdById: auth.user.id
           }
         })) }, { status: 201 });
+      }
+
+      case "updateComment": {
+        const commentId = stringField(body.commentId);
+        const existingComment = await prisma.comment.findUnique({ where: { id: commentId } });
+        if (!existingComment) return NextResponse.json({ error: "Note not found." }, { status: 404 });
+        if (!canAccessAssociatedProject(auth.user.appRole, auth.user.projectRoles, existingComment.projectId ?? undefined)) return NextResponse.json(forbidden(), { status: 403 });
+        const targetType = commentTargetTypeField(body.targetType);
+        const targetId = stringField(body.targetId);
+        const targetAssociation = await resolveCommentTargetAssociation(targetType, targetId);
+        if (!targetAssociation.exists) return NextResponse.json({ error: "Comment target not found." }, { status: 404 });
+        if (!canAccessAssociatedProject(auth.user.appRole, auth.user.projectRoles, targetAssociation.projectId)) return NextResponse.json(forbidden(), { status: 403 });
+        return NextResponse.json({ comment: toComment(await prisma.comment.update({
+          where: { id: commentId },
+          data: {
+            projectId: targetAssociation.projectId,
+            targetType,
+            targetId,
+            body: textField(body.body),
+            metadataJson: noteMetadataField(body.metadataJson),
+            visibility: commentVisibilityField(body.visibility)
+          }
+        })) });
+      }
+
+      case "deleteComment": {
+        const commentId = stringField(body.commentId);
+        const existingComment = await prisma.comment.findUnique({ where: { id: commentId } });
+        if (!existingComment) return NextResponse.json({ error: "Note not found." }, { status: 404 });
+        if (!canAccessAssociatedProject(auth.user.appRole, auth.user.projectRoles, existingComment.projectId ?? undefined)) return NextResponse.json(forbidden(), { status: 403 });
+        return NextResponse.json({ comment: toComment(await prisma.comment.update({
+          where: { id: commentId },
+          data: { status: "ARCHIVED" }
+        })) });
       }
 
       case "createScriptCollection":
@@ -1043,7 +1077,7 @@ function toApproval(approval: { id: string; projectId: string | null; targetType
 }
 
 function toComment(comment: { id: string; targetType: CommentTargetType; targetId: string; body: string; metadataJson?: Prisma.JsonValue | null; visibility: CommentVisibility; status: string; createdById: string | null; createdAt: Date }) {
-  return { id: comment.id, targetType: comment.targetType, targetId: comment.targetId, body: comment.body, metadataJson: comment.metadataJson ?? undefined, visibility: comment.visibility, status: comment.status, createdById: comment.createdById ?? "", createdAt: dateString(comment.createdAt) };
+  return { id: comment.id, targetType: comment.targetType, targetId: comment.targetId, body: comment.body, metadataJson: comment.metadataJson ?? undefined, visibility: comment.visibility, status: comment.status, createdById: comment.createdById ?? "", createdAt: dateTimeString(comment.createdAt) };
 }
 
 function toScriptCollection(collection: { id: string; name: string; description: string | null; ownerId: string | null; status: string; visibility: CommentVisibility; createdAt: Date; updatedAt: Date }) {
@@ -1231,6 +1265,10 @@ function dateTimeString(date: Date) {
 
 function stringField(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function textField(value: unknown) {
+  return typeof value === "string" ? value : "";
 }
 
 function optionalString(value: unknown) {
