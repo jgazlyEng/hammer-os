@@ -101,7 +101,7 @@ const HAMMER_LOCAL_VERSION_NOTES_STORAGE_KEY = "hammer:version-notes";
 const HAMMER_LOCAL_VERSION_MARKDOWN_STORAGE_KEY = "hammer:version-markdown-notes";
 const HAMMER_LOCAL_COMMENTS_STORAGE_KEY = "hammer:comments";
 
-type HammerView = "dashboard" | "projects" | "prospects" | "collections" | "project-new" | "project-detail" | "project-documents" | "project-assets" | "scripts" | "script-detail" | "script-versions" | "script-diff" | "script-breakdown" | "assets" | "asset-detail" | "tasks" | "contacts" | "reviews" | "reports" | "executive" | "admin-users" | "account";
+type HammerView = "dashboard" | "projects" | "prospects" | "collections" | "notes" | "project-new" | "project-detail" | "project-documents" | "project-assets" | "scripts" | "script-detail" | "script-versions" | "script-diff" | "script-breakdown" | "assets" | "asset-detail" | "tasks" | "contacts" | "reviews" | "reports" | "executive" | "admin-users" | "account";
 type ScriptLibrarySection = "inbox" | "projects" | "all";
 type AppRole = "admin" | "executive" | "producer" | "department_lead";
 
@@ -965,10 +965,41 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       visibility: input.visibility ?? "PROJECT_TEAM",
       status: "OPEN",
       createdById: currentUser.id,
-      createdAt: new Date().toISOString().slice(0, 10)
+      createdAt: new Date().toISOString()
     };
     setLocalComments((current) => {
       const next = [nextComment, ...current];
+      window.localStorage.setItem(HAMMER_LOCAL_COMMENTS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  async function updateComment(commentId: string, input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string; metadataJson?: HammerCommentMetadata }) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("updateComment", { commentId, ...input });
+      return;
+    }
+    setLocalComments((current) => {
+      const next = current.map((comment) => comment.id === commentId ? {
+        ...comment,
+        targetType: input.targetType,
+        targetId: input.targetId,
+        body: input.body,
+        metadataJson: input.metadataJson,
+        visibility: input.visibility ?? comment.visibility
+      } : comment);
+      window.localStorage.setItem(HAMMER_LOCAL_COMMENTS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  async function deleteComment(commentId: string) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("deleteComment", { commentId });
+      return;
+    }
+    setLocalComments((current) => {
+      const next = current.filter((comment) => comment.id !== commentId);
       window.localStorage.setItem(HAMMER_LOCAL_COMMENTS_STORAGE_KEY, JSON.stringify(next));
       return next;
     });
@@ -1677,6 +1708,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     if (view === "dashboard") return <Dashboard currentUser={currentUser} projects={projects} documents={documents} versions={versions} tasks={tasks} contacts={contacts} approvals={approvals} scriptCollections={scriptCollections} scriptCollectionItems={scriptCollectionItems} slateCollections={slateCollections} slateCollectionItems={slateCollectionItems} />;
     if (view === "projects") return <Projects mode="development" projects={filteredProjects} projectLeads={projectLeads} prospectAssets={prospectAssets} users={users} tasks={tasks} currentUser={currentUser} canCreateProject={canManageScriptLibrary(currentUser.role)} onCreateProject={addProject} onUpdateLead={updateProjectLead} onCreateLead={createProjectLead} onImportLeads={importProjectLeads} onPromoteLead={promoteProjectLead} onCreateTask={createTask} onUploadProspectAsset={uploadProspectAsset} onDeleteProspectAsset={deleteProspectAsset} />;
     if (view === "prospects") return <Projects mode="prospects" projects={filteredProjects} projectLeads={projectLeads} prospectAssets={prospectAssets} users={users} tasks={tasks} currentUser={currentUser} canCreateProject={canManageScriptLibrary(currentUser.role)} onCreateProject={addProject} onUpdateLead={updateProjectLead} onCreateLead={createProjectLead} onImportLeads={importProjectLeads} onPromoteLead={promoteProjectLead} onCreateTask={createTask} onUploadProspectAsset={uploadProspectAsset} onDeleteProspectAsset={deleteProspectAsset} />;
+    if (view === "notes") return <NotesCenter comments={comments} users={users} projects={projects} documents={documents} versions={versions} tasks={tasks} assets={assets} approvals={approvals} currentUser={currentUser} onUpdateComment={updateComment} onDeleteComment={deleteComment} />;
     if (view === "collections") return (
       <Collections
         slateCollections={slateCollections}
@@ -1713,7 +1745,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     if (view === "project-assets") return <ProjectWorkspace project={project} activeTab="assets" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpdateProject={canManageScriptLibrary(currentUser.role) ? updateProject : undefined} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
     if (view === "scripts") return <LegacyRedirect title="Scripts now live inside the slate" detail="Script tracking is most useful in context. Open a Development Slate item for active project scripts and supporting documents, or use Prospects for materials the team may want to pursue." href="/projects" label="Open Development Slate" />;
     if (["script-detail", "script-versions", "script-diff", "script-breakdown"].includes(view) && !documents.some((item) => item.id === document.id)) return <EmptyScriptState />;
-    if (view === "script-detail") return <ScriptDetail documentId={document.id} documents={documents} projects={projects} versions={versions} comments={comments} currentUser={currentUser} supportingDocuments={supportingDocuments} onUpload={uploadDocumentVersion} onSupportingUpload={uploadSupportingDocument} onSupportingDelete={deleteSupportingDocument} onStatusChange={updateDocumentStatus} onUpdateVersionNotes={canManageScriptLibrary(currentUser.role) ? updateDocumentVersionNotes : undefined} onUpdateVersionMarkdown={canAccessScriptDocument(currentUser, document) ? updateDocumentVersionMarkdown : undefined} onCreateComment={createComment} onUpdateMetadata={canAccessScriptDocument(currentUser, document) ? updateDocumentMetadata : undefined} onUpdateTags={canAccessScriptDocument(currentUser, document) ? updateDocumentTags : undefined} onDelete={canManageScriptLibrary(currentUser.role) ? deleteUploadedDocument : undefined} />;
+    if (view === "script-detail") return <ScriptDetail documentId={document.id} documents={documents} projects={projects} users={users} versions={versions} comments={comments} currentUser={currentUser} supportingDocuments={supportingDocuments} onUpload={uploadDocumentVersion} onSupportingUpload={uploadSupportingDocument} onSupportingDelete={deleteSupportingDocument} onStatusChange={updateDocumentStatus} onUpdateVersionNotes={canManageScriptLibrary(currentUser.role) ? updateDocumentVersionNotes : undefined} onUpdateVersionMarkdown={canAccessScriptDocument(currentUser, document) ? updateDocumentVersionMarkdown : undefined} onCreateComment={createComment} onUpdateComment={updateComment} onDeleteComment={deleteComment} onUpdateMetadata={canAccessScriptDocument(currentUser, document) ? updateDocumentMetadata : undefined} onUpdateTags={canAccessScriptDocument(currentUser, document) ? updateDocumentTags : undefined} onDelete={canManageScriptLibrary(currentUser.role) ? deleteUploadedDocument : undefined} />;
     if (view === "script-versions") return <ScriptVersions documentId={document.id} versions={versions} document={document} currentUser={currentUser} onUpload={uploadDocumentVersion} />;
     if (view === "script-diff") return <ScriptDiff documentId={document.id} versions={versions} />;
     if (view === "script-breakdown") return <ScriptBreakdown documentId={document.id} documents={documents} versions={versions} />;
@@ -1721,7 +1753,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     if (view === "asset-detail") return <AssetDetail assetId={asset.id} assets={assets} currentUser={currentUser} />;
     if (view === "tasks") return <Tasks selectedTaskId={selectedTaskId} currentUser={currentUser} users={users} tasks={tasks} projects={projects} onCreateTask={createTask} onUpdateTask={updateTask} onDeleteTask={deleteTask} onReorderTasks={reorderTasks} onCreateSubtask={createTaskSubtask} onUpdateSubtask={updateTaskSubtask} onDeleteSubtask={deleteTaskSubtask} />;
     if (view === "contacts") {
-      if (!canViewContacts(currentUser.role)) return <AccessDenied title="Talent access required" detail="Only admins, producers, and executives can view the studio talent directory." />;
+      if (!canViewContacts(currentUser.role)) return <AccessDenied title="Outreach access required" detail="Only admins, producers, and executives can view the studio outreach directory." />;
       return <Contacts initialContacts={contacts} contactRelationships={contactRelationships} currentUser={currentUser} users={users} projects={projects} documents={documents} tasks={tasks} databaseMode={workspaceMode === "database"} onDatabaseImport={(importedContacts) => runWorkspaceAction("importContacts", { contacts: importedContacts })} onCreateContact={createContact} onUpdateContact={updateContact} onDeleteContact={deleteContact} onCreateRelationship={createContactRelationship} onDeleteRelationship={deleteContactRelationship} />;
     }
     if (view === "reports") {
@@ -1941,7 +1973,7 @@ function Dashboard({
       </div>
 
       <Panel>
-        <SectionHeader eyebrow="Talent" title="Upcoming Follow-Ups" action={<TableLink href="/talent">Open Talent</TableLink>} />
+        <SectionHeader eyebrow="Outreach" title="Upcoming Follow-Ups" action={<TableLink href="/outreach">Open Outreach</TableLink>} />
         <DashboardTalentFollowUps contacts={talentFollowUps} currentUser={currentUser} />
       </Panel>
 
@@ -1994,11 +2026,11 @@ function DashboardTaskList({ tasks, emptyLabel }: { tasks: HammerTask[]; emptyLa
 }
 
 function DashboardTalentFollowUps({ contacts, currentUser }: { contacts: HammerContact[]; currentUser: HammerUser }) {
-  if (!contacts.length) return <EmptyState label="No talent follow-ups scheduled." />;
+  if (!contacts.length) return <EmptyState label="No outreach follow-ups scheduled." />;
   return (
     <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
       {contacts.map((contact) => (
-        <Link key={contact.id} href={`/talent?contact=${encodeURIComponent(contact.id)}`} className="block rounded-md border border-white/10 bg-white/[0.03] p-3 transition hover:border-amberline/35 hover:bg-white/[0.055]">
+        <Link key={contact.id} href={`/outreach?contact=${encodeURIComponent(contact.id)}`} className="block rounded-md border border-white/10 bg-white/[0.03] p-3 transition hover:border-amberline/35 hover:bg-white/[0.055]">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <p className="truncate text-[13px] font-semibold text-studio-100">{contact.name}</p>
@@ -3224,8 +3256,7 @@ function ProjectWorkspace({
       </section>
 
       {activeTab === "overview" ? (
-        <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
-          <div className="space-y-4">
+        <div className="space-y-4">
             <Panel>
               <SectionHeader eyebrow="Artist Start Here" title="Assignments and Working Brief" action={<div className="flex flex-wrap gap-1.5">{onCreateTask ? <NewAssignmentButton project={project} firstScript={firstScript} users={users} onCreateTask={onCreateTask} /> : null}<TableLink href="/tasks">Open tasks</TableLink></div>} />
               <div className="grid gap-3 xl:grid-cols-[0.9fr_1.1fr]">
@@ -3260,10 +3291,6 @@ function ProjectWorkspace({
               <SectionHeader eyebrow="Visual Reference" title="Reference Images" action={<TableLink href={`/projects/${project.id}/assets`}>Open reference</TableLink>} />
               <ReferenceImageGrid images={projectReferenceImages.slice(0, 6)} assets={projectAssets.slice(0, 6)} canDownload={canDownload} currentUser={currentUser} />
             </Panel>
-          </div>
-          <div className="space-y-4">
-            <CommentsPanel targetId={project.id} />
-          </div>
         </div>
       ) : null}
 
@@ -5583,6 +5610,7 @@ function ScriptDetail({
   documentId,
   documents = hammerDocuments,
   projects = hammerProjects,
+  users = hammerUsers,
   versions = hammerVersions,
   comments = hammerComments,
   currentUser,
@@ -5594,6 +5622,8 @@ function ScriptDetail({
   onUpdateVersionNotes,
   onUpdateVersionMarkdown,
   onCreateComment,
+  onUpdateComment,
+  onDeleteComment,
   onUpdateMetadata,
   onUpdateTags,
   onDelete
@@ -5601,6 +5631,7 @@ function ScriptDetail({
   documentId: string;
   documents?: HammerDocument[];
   projects?: HammerProject[];
+  users?: HammerUser[];
   versions?: HammerDocumentVersion[];
   comments?: HammerComment[];
   currentUser?: HammerUser;
@@ -5612,6 +5643,8 @@ function ScriptDetail({
   onUpdateVersionNotes?: (versionId: string, notes: string) => Promise<void>;
   onUpdateVersionMarkdown?: (versionId: string, markdownNotes: string) => Promise<void>;
   onCreateComment?: (input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string; metadataJson?: HammerCommentMetadata }) => Promise<void>;
+  onUpdateComment?: (commentId: string, input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string; metadataJson?: HammerCommentMetadata }) => Promise<void>;
+  onDeleteComment?: (commentId: string) => Promise<void>;
   onUpdateMetadata?: (documentId: string, patch: Partial<Pick<HammerDocument, "title" | "type" | "writerName" | "source">>) => Promise<void>;
   onUpdateTags?: (documentId: string, tags: Array<Pick<HammerDocumentTag, "key" | "value">>) => Promise<void>;
   onDelete?: (documentId: string) => void;
@@ -5966,7 +5999,10 @@ function ScriptDetail({
           versionMarkdownNote={versionMarkdownNote}
           comments={[...scriptComments, ...versionComments]}
           currentUser={currentUser}
+          users={users}
           onCreateComment={onCreateComment}
+          onUpdateComment={onUpdateComment}
+          onDeleteComment={onDeleteComment}
         />
       ) : null}
 
@@ -6152,6 +6188,370 @@ function ScriptVersions({
   );
 }
 
+function NotesCenter({
+  comments,
+  users,
+  projects,
+  documents,
+  versions,
+  tasks,
+  assets,
+  approvals,
+  currentUser,
+  onUpdateComment,
+  onDeleteComment
+}: {
+  comments: HammerComment[];
+  users: HammerUser[];
+  projects: HammerProject[];
+  documents: HammerDocument[];
+  versions: HammerDocumentVersion[];
+  tasks: HammerTask[];
+  assets: HammerAsset[];
+  approvals: HammerApproval[];
+  currentUser: HammerUser;
+  onUpdateComment?: (commentId: string, input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string; metadataJson?: HammerCommentMetadata }) => Promise<void>;
+  onDeleteComment?: (commentId: string) => Promise<void>;
+}) {
+  const [search, setSearch] = useState("");
+  const [targetFilter, setTargetFilter] = useState("ALL");
+  const [typeFilter, setTypeFilter] = useState("ALL");
+  const [authorFilter, setAuthorFilter] = useState("ALL");
+  const [selectedCommentId, setSelectedCommentId] = useState("");
+  const visibleNotes = comments.filter((comment) => comment.status !== "ARCHIVED");
+  const authorIds = Array.from(new Set(visibleNotes.map((comment) => comment.createdById).filter(Boolean))).sort((left, right) => userNameFromList(left, users).localeCompare(userNameFromList(right, users)));
+  const targetTypes = Array.from(new Set(visibleNotes.map((comment) => comment.targetType))).sort();
+  const filteredNotes = visibleNotes
+    .filter((comment) => {
+      const metadata = noteMetadata(comment);
+      const context = noteTargetContext(comment, { projects, documents, versions, tasks, assets, approvals });
+      const haystack = `${comment.body} ${metadata.noteType} ${metadata.tags.map((tag) => `${tag.key} ${tag.value}`).join(" ")} ${context.label} ${context.parentLabel} ${userNameFromList(comment.createdById, users)}`.toLowerCase();
+      if (targetFilter !== "ALL" && comment.targetType !== targetFilter) return false;
+      if (typeFilter !== "ALL" && metadata.noteType !== typeFilter) return false;
+      if (authorFilter !== "ALL" && comment.createdById !== authorFilter) return false;
+      return !search.trim() || haystack.includes(search.trim().toLowerCase());
+    })
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+  const selectedComment = visibleNotes.find((comment) => comment.id === selectedCommentId);
+
+  return (
+    <div className="space-y-4">
+      <Panel>
+        <SectionHeader eyebrow="Notes" title="Studio Notes" />
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_170px_170px_190px]">
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Search Notes</span>
+            <input className="field" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search note text, title, tag, author" />
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Area</span>
+            <select className="field" value={targetFilter} onChange={(event) => setTargetFilter(event.target.value)}>
+              <option value="ALL">All Areas</option>
+              {targetTypes.map((targetType) => <option key={targetType} value={targetType}>{statusLabel(targetType)}</option>)}
+            </select>
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Note Type</span>
+            <select className="field" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
+              <option value="ALL">All Types</option>
+              {hammerNoteTypes.map((noteType) => <option key={noteType} value={noteType}>{noteTypeLabel(noteType)}</option>)}
+            </select>
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Author</span>
+            <select className="field" value={authorFilter} onChange={(event) => setAuthorFilter(event.target.value)}>
+              <option value="ALL">All Authors</option>
+              {authorIds.map((authorId) => <option key={authorId} value={authorId}>{userNameFromList(authorId, users)}</option>)}
+            </select>
+          </label>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-studio-400">
+          <span>{filteredNotes.length} of {visibleNotes.length} notes</span>
+          <button type="button" className="font-semibold text-amberline" onClick={() => { setSearch(""); setTargetFilter("ALL"); setTypeFilter("ALL"); setAuthorFilter("ALL"); }}>Clear filters</button>
+        </div>
+      </Panel>
+      <Panel>
+        <div className="data-scroll max-h-[calc(100vh-330px)] min-h-[360px]">
+          <div className="grid gap-2 pr-2">
+            {filteredNotes.length ? filteredNotes.map((comment) => (
+              <GlobalNoteCard
+                key={comment.id}
+                comment={comment}
+                users={users}
+                projects={projects}
+                documents={documents}
+                versions={versions}
+                tasks={tasks}
+                assets={assets}
+                approvals={approvals}
+                onOpen={() => setSelectedCommentId(comment.id)}
+              />
+            )) : <EmptyState label="No notes match the current filters." />}
+          </div>
+        </div>
+      </Panel>
+      {selectedComment ? (
+        <GlobalNoteDialog
+          comment={selectedComment}
+          users={users}
+          projects={projects}
+          documents={documents}
+          versions={versions}
+          tasks={tasks}
+          assets={assets}
+          approvals={approvals}
+          currentUser={currentUser}
+          onClose={() => setSelectedCommentId("")}
+          onUpdateComment={onUpdateComment}
+          onDeleteComment={onDeleteComment}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function GlobalNoteCard({
+  comment,
+  users,
+  projects,
+  documents,
+  versions,
+  tasks,
+  assets,
+  approvals,
+  onOpen
+}: {
+  comment: HammerComment;
+  users: HammerUser[];
+  projects: HammerProject[];
+  documents: HammerDocument[];
+  versions: HammerDocumentVersion[];
+  tasks: HammerTask[];
+  assets: HammerAsset[];
+  approvals: HammerApproval[];
+  onOpen: () => void;
+}) {
+  const metadata = noteMetadata(comment);
+  const context = noteTargetContext(comment, { projects, documents, versions, tasks, assets, approvals });
+  const isLong = comment.body.length > 300 || comment.body.includes("\n");
+  return (
+    <button type="button" onClick={onOpen} className="w-full rounded-lg border border-white/10 bg-white/[0.03] p-3 text-left transition hover:border-amberline/35 hover:bg-white/[0.055]">
+      <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+        <div className="min-w-0">
+          <div className="mb-2 flex flex-wrap items-center gap-1.5">
+            <Badge value={noteTypeLabel(metadata.noteType)} subtle />
+            <span className="rounded-full border border-white/10 px-2 py-0.5 text-[11px] font-semibold text-studio-400">{statusLabel(comment.targetType)}</span>
+            <span className="rounded-full border border-white/10 px-2 py-0.5 text-[11px] font-semibold text-studio-400">{statusLabel(comment.visibility)}</span>
+          </div>
+          <p className="truncate text-sm font-semibold text-studio-100">{context.label}</p>
+          {context.parentLabel ? <p className="mt-0.5 truncate text-xs text-studio-400">{context.parentLabel}</p> : null}
+        </div>
+        <p className="shrink-0 text-xs text-studio-500">{userNameFromList(comment.createdById, users)} / {formatNoteTimestamp(comment.createdAt)}</p>
+      </div>
+      <p className="mt-3 line-clamp-3 whitespace-pre-wrap text-[13px] leading-5 text-studio-300">{comment.body}</p>
+      {metadata.tags.length ? (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {metadata.tags.map((tag, index) => <span key={`${tag.key}-${tag.value}-${index}`} className="rounded-full border border-emerald-300/20 bg-emerald-400/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-100"><span className="text-emerald-300">{tag.key}</span>: {tag.value}</span>)}
+        </div>
+      ) : null}
+      {isLong ? <p className="mt-2 text-xs font-semibold text-amberline">Read more</p> : null}
+    </button>
+  );
+}
+
+function GlobalNoteDialog({
+  comment,
+  users,
+  projects,
+  documents,
+  versions,
+  tasks,
+  assets,
+  approvals,
+  onClose,
+  onUpdateComment,
+  onDeleteComment
+}: {
+  comment: HammerComment;
+  users: HammerUser[];
+  projects: HammerProject[];
+  documents: HammerDocument[];
+  versions: HammerDocumentVersion[];
+  tasks: HammerTask[];
+  assets: HammerAsset[];
+  approvals: HammerApproval[];
+  currentUser: HammerUser;
+  onClose: () => void;
+  onUpdateComment?: (commentId: string, input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string; metadataJson?: HammerCommentMetadata }) => Promise<void>;
+  onDeleteComment?: (commentId: string) => Promise<void>;
+}) {
+  const context = noteTargetContext(comment, { projects, documents, versions, tasks, assets, approvals });
+  const metadata = noteMetadata(comment);
+  const [body, setBody] = useState(comment.body);
+  const [noteType, setNoteType] = useState<HammerNoteType>(metadata.noteType);
+  const [visibility, setVisibility] = useState<HammerComment["visibility"]>(comment.visibility);
+  const [tagDrafts, setTagDrafts] = useState<HammerNoteTag[]>(metadata.tags);
+  const [tagKeyDraft, setTagKeyDraft] = useState("");
+  const [tagValueDraft, setTagValueDraft] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState<"save" | "delete" | "">("");
+
+  useEffect(() => {
+    const nextMetadata = noteMetadata(comment);
+    setBody(comment.body);
+    setNoteType(nextMetadata.noteType);
+    setVisibility(comment.visibility);
+    setTagDrafts(nextMetadata.tags);
+    setTagKeyDraft("");
+    setTagValueDraft("");
+    setMessage("");
+    setBusy("");
+  }, [comment]);
+
+  function addTag() {
+    const key = normalizeTagKey(tagKeyDraft);
+    const value = tagValueDraft.trim().replace(/\s+/g, " ");
+    if (!key || !value) {
+      setMessage("Add both a tag key and value, or leave tags blank.");
+      return;
+    }
+    const exists = tagDrafts.some((tag) => tag.key.toLowerCase() === key.toLowerCase() && tag.value.toLowerCase() === value.toLowerCase());
+    if (exists) {
+      setMessage("That tag is already attached to this note.");
+      return;
+    }
+    setTagDrafts((current) => [...current, { key, value }]);
+    setTagKeyDraft("");
+    setTagValueDraft("");
+    setMessage("");
+  }
+
+  function importNoteText(text: string) {
+    setBody((current) => current.trim() ? `${current}\n\n${text}` : text);
+  }
+
+  async function save() {
+    if (!onUpdateComment || !body.trim()) {
+      setMessage(body.trim() ? "This note cannot be edited from this view yet." : "Write a note before saving.");
+      return;
+    }
+    setBusy("save");
+    setMessage("");
+    try {
+      await onUpdateComment(comment.id, {
+        targetType: comment.targetType,
+        targetId: comment.targetId,
+        projectId: context.projectId ?? undefined,
+        body,
+        visibility,
+        metadataJson: { noteType, tags: normalizedDocumentTags(tagDrafts) }
+      });
+      onClose();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not update note.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function remove() {
+    if (!onDeleteComment) {
+      setMessage("This note cannot be deleted from this view yet.");
+      return;
+    }
+    setBusy("delete");
+    setMessage("");
+    try {
+      await onDeleteComment(comment.id);
+      onClose();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not delete note.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-studio-950/80 px-4 py-8 backdrop-blur-sm" onMouseDown={onClose}>
+      <div className="w-full max-w-5xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Note</p>
+            <h3 className="mt-1 truncate text-xl font-semibold text-studio-100">{context.label}</h3>
+            <p className="mt-1 text-xs text-studio-400">{userNameFromList(comment.createdById, users)} / {formatNoteTimestamp(comment.createdAt)}{context.parentLabel ? ` / ${context.parentLabel}` : ""}</p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {context.href ? <TableLink href={context.href}>Open Source</TableLink> : null}
+            <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close note">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Note Type</span>
+            <select className="field" value={noteType} onChange={(event) => setNoteType(event.target.value as HammerNoteType)}>
+              {hammerNoteTypes.map((type) => <option key={type} value={type}>{noteTypeLabel(type)}</option>)}
+            </select>
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Visibility</span>
+            <select className="field" value={visibility} onChange={(event) => setVisibility(event.target.value as HammerComment["visibility"])}>
+              <option value="PROJECT_TEAM">Project Team</option>
+              <option value="INTERNAL">Internal</option>
+              <option value="EXECUTIVE_ONLY">Executive Only</option>
+            </select>
+          </label>
+        </div>
+        <label className="mt-3 grid gap-1">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Note</span>
+          <textarea className="field min-h-[320px] whitespace-pre-wrap font-sans leading-6" value={body} onChange={(event) => setBody(event.target.value)} />
+        </label>
+        <div className="mt-3">
+          <NoteFileImportControl onImport={importNoteText} disabled={Boolean(busy)} />
+        </div>
+        <div className="mt-3 grid gap-2">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Tags</span>
+          {tagDrafts.length ? (
+            <div className="flex flex-wrap gap-1.5">
+              {tagDrafts.map((tag, index) => (
+                <span key={`${tag.key}-${tag.value}-${index}`} className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-emerald-300/25 bg-emerald-400/10 px-2.5 py-1 text-xs font-semibold text-emerald-100">
+                  <span className="truncate"><span className="text-emerald-300">{tag.key}</span>: {tag.value}</span>
+                  <button type="button" onClick={() => setTagDrafts((current) => current.filter((_, currentIndex) => currentIndex !== index))} className="rounded-full text-emerald-100/70 transition hover:text-white" aria-label={`Remove ${tag.key} tag`}>
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : null}
+          <div className="grid gap-2 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_auto] md:items-end">
+            <label className="grid gap-1">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">Key</span>
+              <input className="field" value={tagKeyDraft} onChange={(event) => setTagKeyDraft(event.target.value)} placeholder="priority" />
+            </label>
+            <label className="grid gap-1">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">Value</span>
+              <input className="field" value={tagValueDraft} onChange={(event) => setTagValueDraft(event.target.value)} placeholder="follow-up" onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addTag(); } }} />
+            </label>
+            <button type="button" onClick={addTag} className="min-h-10 rounded-md border border-white/10 px-3 py-2 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline">Add</button>
+          </div>
+        </div>
+        {message ? <p className="mt-3 rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 text-xs text-studio-300">{message}</p> : null}
+        <div className="mt-4 flex flex-wrap justify-between gap-2 border-t border-white/10 pt-3">
+          <DangerButton label={busy === "delete" ? "Deleting..." : "Delete Note"} onClick={() => void remove()} />
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={onClose} className="rounded border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:text-amberline">Cancel</button>
+            <button type="button" disabled={busy === "save" || !body.trim()} onClick={() => void save()} className="inline-flex items-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">
+              <CheckCircle2 className="h-4 w-4" />
+              {busy === "save" ? "Saving..." : "Save Note"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ScriptNotesWorkspace({
   document,
   version,
@@ -6159,7 +6559,10 @@ function ScriptNotesWorkspace({
   versionMarkdownNote,
   comments,
   currentUser,
-  onCreateComment
+  users = hammerUsers,
+  onCreateComment,
+  onUpdateComment,
+  onDeleteComment
 }: {
   document: HammerDocument;
   version?: HammerDocumentVersion;
@@ -6167,7 +6570,10 @@ function ScriptNotesWorkspace({
   versionMarkdownNote?: string;
   comments: HammerComment[];
   currentUser?: HammerUser;
+  users?: HammerUser[];
   onCreateComment?: (input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string; metadataJson?: HammerCommentMetadata }) => Promise<void>;
+  onUpdateComment?: (commentId: string, input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string; metadataJson?: HammerCommentMetadata }) => Promise<void>;
+  onDeleteComment?: (commentId: string) => Promise<void>;
 }) {
   const [body, setBody] = useState("");
   const [attachTo, setAttachTo] = useState<"VERSION" | "SCRIPT">(version ? "VERSION" : "SCRIPT");
@@ -6178,17 +6584,21 @@ function ScriptNotesWorkspace({
   const [tagValueDraft, setTagValueDraft] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [selectedCommentId, setSelectedCommentId] = useState("");
+  const visibleComments = comments.filter((comment) => comment.status !== "ARCHIVED");
   const noteItems = [
-    ...comments.map((comment) => ({ kind: "comment" as const, id: comment.id, createdAt: comment.createdAt, comment })),
+    ...visibleComments.map((comment) => ({ kind: "comment" as const, id: comment.id, createdAt: comment.createdAt, comment })),
     ...(versionUploadNote?.trim() ? [{ kind: "legacy" as const, id: `upload-${version?.id ?? document.id}`, createdAt: version?.createdAt ?? document.updatedAt, title: "Version Upload Note", body: versionUploadNote, targetLabel: version ? `Version ${version.versionNumber}` : "Overall Script" }] : []),
     ...(versionMarkdownNote?.trim() ? [{ kind: "legacy" as const, id: `markdown-${version?.id ?? document.id}`, createdAt: version?.createdAt ?? document.updatedAt, title: "Version Markdown Note", body: versionMarkdownNote, targetLabel: version ? `Version ${version.versionNumber}` : "Overall Script" }] : [])
-  ].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  ].sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+  const selectedComment = visibleComments.find((comment) => comment.id === selectedCommentId);
 
   useEffect(() => {
     setAttachTo(version ? "VERSION" : "SCRIPT");
     setBody("");
     setMessage("");
     setTagDrafts([]);
+    setSelectedCommentId("");
   }, [document.id, version?.id]);
 
   function addNoteTag() {
@@ -6213,6 +6623,10 @@ function ScriptNotesWorkspace({
     setTagDrafts((current) => current.filter((_, currentIndex) => currentIndex !== index));
   }
 
+  function importNoteText(text: string) {
+    setBody((current) => current.trim() ? `${current}\n\n${text}` : text);
+  }
+
   async function saveNote() {
     if (!onCreateComment || !body.trim()) {
       setMessage(body.trim() ? "Notes cannot be saved from this view yet." : "Write a note before saving.");
@@ -6227,7 +6641,7 @@ function ScriptNotesWorkspace({
         targetType,
         targetId,
         projectId: document.projectId,
-        body: body.trim(),
+        body,
         visibility,
         metadataJson: { noteType, tags: normalizedDocumentTags(tagDrafts) }
       });
@@ -6246,14 +6660,15 @@ function ScriptNotesWorkspace({
   return (
     <Panel>
       <SectionHeader eyebrow="Notes" title="Script Notes" />
-      <div className="grid gap-4 xl:grid-cols-[360px_1fr]">
+      <div className="space-y-4">
         <div className="rounded-lg border border-white/10 bg-white/[0.025] p-3">
           <div className="grid gap-3">
             <label className="grid gap-1">
               <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Note</span>
-              <textarea className="field min-h-36" value={body} onChange={(event) => setBody(event.target.value)} placeholder="Add coverage, context, follow-up, or creative notes" />
+              <textarea className="field min-h-44 whitespace-pre-wrap font-sans leading-6" value={body} onChange={(event) => setBody(event.target.value)} placeholder="Add coverage, context, follow-up, or creative notes" />
             </label>
-            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-1">
+            <NoteFileImportControl onImport={importNoteText} disabled={busy} />
+            <div className="grid gap-2 md:grid-cols-3">
               <label className="grid gap-1">
                 <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Attach To</span>
                 <select className="field" value={attachTo} onChange={(event) => setAttachTo(event.target.value as "VERSION" | "SCRIPT")}>
@@ -6267,7 +6682,7 @@ function ScriptNotesWorkspace({
                   {hammerNoteTypes.map((type) => <option key={type} value={type}>{noteTypeLabel(type)}</option>)}
                 </select>
               </label>
-              <label className="grid gap-1 sm:col-span-2 xl:col-span-1">
+              <label className="grid gap-1">
                 <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Visibility</span>
                 <select className="field" value={visibility} onChange={(event) => setVisibility(event.target.value as HammerComment["visibility"])}>
                   <option value="PROJECT_TEAM">Project Team</option>
@@ -6288,7 +6703,7 @@ function ScriptNotesWorkspace({
                   ))}
                 </div>
               ) : null}
-              <div className="grid gap-2 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_auto] sm:items-end xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_auto]">
+              <div className="grid gap-2 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_auto] md:items-end">
                 <label className="grid gap-1">
                   <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">Key</span>
                   <input className="field" list="script-note-tag-key-options" value={tagKeyDraft} onChange={(event) => setTagKeyDraft(event.target.value)} placeholder="concern" />
@@ -6314,7 +6729,7 @@ function ScriptNotesWorkspace({
         </div>
         <div className="min-h-0 space-y-2">
           {noteItems.length ? noteItems.map((item) => item.kind === "comment" ? (
-            <ScriptNoteCard key={item.id} comment={item.comment} version={version} document={document} />
+            <ScriptNoteCard key={item.id} comment={item.comment} version={version} document={document} users={users} onOpen={() => setSelectedCommentId(item.comment.id)} />
           ) : (
             <div key={item.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-3 text-[13px] text-studio-300">
               <div className="mb-2 flex flex-wrap items-center gap-1.5">
@@ -6328,27 +6743,288 @@ function ScriptNotesWorkspace({
           )) : <EmptyState label="No notes yet." />}
         </div>
       </div>
+      {selectedComment ? (
+        <ScriptNoteDialog
+          comment={selectedComment}
+          document={document}
+          version={version}
+          users={users}
+          onClose={() => setSelectedCommentId("")}
+          onUpdateComment={onUpdateComment}
+          onDeleteComment={onDeleteComment}
+        />
+      ) : null}
     </Panel>
   );
 }
 
-function ScriptNoteCard({ comment, version, document }: { comment: HammerComment; version?: HammerDocumentVersion; document: HammerDocument }) {
+function ScriptNoteCard({ comment, version, users, onOpen }: { comment: HammerComment; version?: HammerDocumentVersion; document: HammerDocument; users: HammerUser[]; onOpen: () => void }) {
   const metadata = noteMetadata(comment);
   const attachedLabel = comment.targetType === "DOCUMENT_VERSION" ? (version && comment.targetId === version.id ? `Version ${version.versionNumber}` : "Script Version") : "Overall Script";
+  const author = userNameFromList(comment.createdById, users);
+  const isLong = comment.body.length > 260 || comment.body.includes("\n");
   return (
-    <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3 text-[13px] text-studio-300">
-      <div className="mb-2 flex flex-wrap items-center gap-1.5">
-        <Badge value={noteTypeLabel(metadata.noteType)} subtle />
-        <span className="rounded-full border border-white/10 px-2 py-0.5 text-[11px] font-semibold text-studio-400">{attachedLabel}</span>
-        <span className="rounded-full border border-white/10 px-2 py-0.5 text-[11px] font-semibold text-studio-400">{statusLabel(comment.visibility)}</span>
+    <button type="button" onClick={onOpen} className="w-full rounded-lg border border-white/10 bg-white/[0.03] p-3 text-left text-[13px] text-studio-300 transition hover:border-amberline/35 hover:bg-white/[0.055]">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Badge value={noteTypeLabel(metadata.noteType)} subtle />
+          <span className="rounded-full border border-white/10 px-2 py-0.5 text-[11px] font-semibold text-studio-400">{attachedLabel}</span>
+          <span className="rounded-full border border-white/10 px-2 py-0.5 text-[11px] font-semibold text-studio-400">{statusLabel(comment.visibility)}</span>
+        </div>
+        <span className="text-[11px] text-studio-500">{author} / {formatNoteTimestamp(comment.createdAt)}</span>
       </div>
-      <p className="whitespace-pre-wrap leading-5">{comment.body}</p>
+      <p className="line-clamp-3 whitespace-pre-wrap leading-5">{comment.body}</p>
+      {isLong ? <p className="mt-2 text-xs font-semibold text-amberline">Read more</p> : null}
       {metadata.tags.length ? (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {metadata.tags.map((tag, index) => <span key={`${tag.key}-${tag.value}-${index}`} className="rounded-full border border-emerald-300/20 bg-emerald-400/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-100"><span className="text-emerald-300">{tag.key}</span>: {tag.value}</span>)}
         </div>
       ) : null}
-      <p className="mt-2 text-[11px] text-studio-500">{userName(comment.createdById)} / {comment.createdAt}</p>
+    </button>
+  );
+}
+
+function ScriptNoteDialog({
+  comment,
+  document,
+  version,
+  users,
+  onClose,
+  onUpdateComment,
+  onDeleteComment
+}: {
+  comment: HammerComment;
+  document: HammerDocument;
+  version?: HammerDocumentVersion;
+  users: HammerUser[];
+  onClose: () => void;
+  onUpdateComment?: (commentId: string, input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string; metadataJson?: HammerCommentMetadata }) => Promise<void>;
+  onDeleteComment?: (commentId: string) => Promise<void>;
+}) {
+  const metadata = noteMetadata(comment);
+  const [body, setBody] = useState(comment.body);
+  const [attachTo, setAttachTo] = useState<"VERSION" | "SCRIPT">(comment.targetType === "DOCUMENT_VERSION" && version ? "VERSION" : "SCRIPT");
+  const [noteType, setNoteType] = useState<HammerNoteType>(metadata.noteType);
+  const [visibility, setVisibility] = useState<HammerComment["visibility"]>(comment.visibility);
+  const [tagDrafts, setTagDrafts] = useState<HammerNoteTag[]>(metadata.tags);
+  const [tagKeyDraft, setTagKeyDraft] = useState("");
+  const [tagValueDraft, setTagValueDraft] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState<"save" | "delete" | "">("");
+  const author = userNameFromList(comment.createdById, users);
+
+  useEffect(() => {
+    const nextMetadata = noteMetadata(comment);
+    setBody(comment.body);
+    setAttachTo(comment.targetType === "DOCUMENT_VERSION" && version ? "VERSION" : "SCRIPT");
+    setNoteType(nextMetadata.noteType);
+    setVisibility(comment.visibility);
+    setTagDrafts(nextMetadata.tags);
+    setTagKeyDraft("");
+    setTagValueDraft("");
+    setMessage("");
+    setBusy("");
+  }, [comment, version]);
+
+  function addTag() {
+    const key = normalizeTagKey(tagKeyDraft);
+    const value = tagValueDraft.trim().replace(/\s+/g, " ");
+    if (!key || !value) {
+      setMessage("Add both a tag key and value, or leave tags blank.");
+      return;
+    }
+    const exists = tagDrafts.some((tag) => tag.key.toLowerCase() === key.toLowerCase() && tag.value.toLowerCase() === value.toLowerCase());
+    if (exists) {
+      setMessage("That tag is already attached to this note.");
+      return;
+    }
+    setTagDrafts((current) => [...current, { key, value }]);
+    setTagKeyDraft("");
+    setTagValueDraft("");
+    setMessage("");
+  }
+
+  function importNoteText(text: string) {
+    setBody((current) => current.trim() ? `${current}\n\n${text}` : text);
+  }
+
+  async function save() {
+    if (!onUpdateComment || !body.trim()) {
+      setMessage(body.trim() ? "This note cannot be edited from this view yet." : "Write a note before saving.");
+      return;
+    }
+    const targetType = attachTo === "VERSION" && version ? "DOCUMENT_VERSION" : "DOCUMENT";
+    const targetId = attachTo === "VERSION" && version ? version.id : document.id;
+    setBusy("save");
+    setMessage("");
+    try {
+      await onUpdateComment(comment.id, {
+        targetType,
+        targetId,
+        projectId: document.projectId,
+        body,
+        visibility,
+        metadataJson: { noteType, tags: normalizedDocumentTags(tagDrafts) }
+      });
+      setMessage("Note updated.");
+      onClose();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not update note.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function remove() {
+    if (!onDeleteComment) {
+      setMessage("This note cannot be deleted from this view yet.");
+      return;
+    }
+    setBusy("delete");
+    setMessage("");
+    try {
+      await onDeleteComment(comment.id);
+      onClose();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not delete note.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-studio-950/80 px-4 py-8 backdrop-blur-sm" onMouseDown={onClose}>
+      <div className="w-full max-w-5xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Script Note</p>
+            <h3 className="mt-1 text-xl font-semibold text-studio-100">{author}</h3>
+            <p className="mt-1 text-xs text-studio-400">Created {formatNoteTimestamp(comment.createdAt)}</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close note">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-3">
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Attach To</span>
+            <select className="field" value={attachTo} onChange={(event) => setAttachTo(event.target.value as "VERSION" | "SCRIPT")}>
+              {version ? <option value="VERSION">Current Version v{version.versionNumber}</option> : null}
+              <option value="SCRIPT">Overall Script</option>
+            </select>
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Note Type</span>
+            <select className="field" value={noteType} onChange={(event) => setNoteType(event.target.value as HammerNoteType)}>
+              {hammerNoteTypes.map((type) => <option key={type} value={type}>{noteTypeLabel(type)}</option>)}
+            </select>
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Visibility</span>
+            <select className="field" value={visibility} onChange={(event) => setVisibility(event.target.value as HammerComment["visibility"])}>
+              <option value="PROJECT_TEAM">Project Team</option>
+              <option value="INTERNAL">Internal</option>
+              <option value="EXECUTIVE_ONLY">Executive Only</option>
+            </select>
+          </label>
+        </div>
+        <label className="mt-3 grid gap-1">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Note</span>
+          <textarea className="field min-h-[320px] whitespace-pre-wrap font-sans leading-6" value={body} onChange={(event) => setBody(event.target.value)} />
+        </label>
+        <div className="mt-3">
+          <NoteFileImportControl onImport={importNoteText} disabled={Boolean(busy)} />
+        </div>
+        <div className="mt-3 grid gap-2">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Tags</span>
+          {tagDrafts.length ? (
+            <div className="flex flex-wrap gap-1.5">
+              {tagDrafts.map((tag, index) => (
+                <span key={`${tag.key}-${tag.value}-${index}`} className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-emerald-300/25 bg-emerald-400/10 px-2.5 py-1 text-xs font-semibold text-emerald-100">
+                  <span className="truncate"><span className="text-emerald-300">{tag.key}</span>: {tag.value}</span>
+                  <button type="button" onClick={() => setTagDrafts((current) => current.filter((_, currentIndex) => currentIndex !== index))} className="rounded-full text-emerald-100/70 transition hover:text-white" aria-label={`Remove ${tag.key} tag`}>
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : null}
+          <div className="grid gap-2 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_auto] md:items-end">
+            <label className="grid gap-1">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">Key</span>
+              <input className="field" list="script-note-dialog-tag-key-options" value={tagKeyDraft} onChange={(event) => setTagKeyDraft(event.target.value)} placeholder="concern" />
+            </label>
+            <label className="grid gap-1">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">Value</span>
+              <input className="field" value={tagValueDraft} onChange={(event) => setTagValueDraft(event.target.value)} placeholder="third act" onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addTag(); } }} />
+            </label>
+            <button type="button" onClick={addTag} className="min-h-10 rounded-md border border-white/10 px-3 py-2 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline">Add</button>
+          </div>
+          <datalist id="script-note-dialog-tag-key-options">
+            {["agency", "manager", "concern", "action", "priority", "tone", "rights", "coverage"].map((key) => <option key={key} value={key} />)}
+          </datalist>
+        </div>
+        {message ? <p className="mt-3 rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 text-xs text-studio-300">{message}</p> : null}
+        <div className="mt-4 flex flex-wrap justify-between gap-2 border-t border-white/10 pt-3">
+          <DangerButton label={busy === "delete" ? "Deleting..." : "Delete Note"} onClick={() => void remove()} />
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={onClose} className="rounded border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:text-amberline">Cancel</button>
+            <button type="button" disabled={busy === "save" || !body.trim()} onClick={() => void save()} className="inline-flex items-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">
+              <CheckCircle2 className="h-4 w-4" />
+              {busy === "save" ? "Saving..." : "Save Note"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NoteFileImportControl({ onImport, disabled = false }: { onImport: (text: string) => void; disabled?: boolean }) {
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [resetKey, setResetKey] = useState(0);
+
+  async function importFile(file?: File | null) {
+    if (!file) return;
+    setBusy(true);
+    setMessage(`Reading ${file.name}...`);
+    try {
+      const text = await extractNoteTextFromFile(file);
+      onImport(text);
+      setMessage(`Imported ${file.name}. Review the text before saving.`);
+      setResetKey((key) => key + 1);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not import text from that file.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/[0.025] p-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Import Note From File</p>
+          <p className="mt-1 text-xs leading-5 text-studio-400">TXT, MD, FDX, or readable PDF. Imported text is added to the note editor.</p>
+        </div>
+        <label className={cn(
+          "inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-md border border-white/10 bg-white/[0.035] px-3 py-2 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline",
+          (disabled || busy) && "cursor-not-allowed opacity-55"
+        )}>
+          <FileText className="h-3.5 w-3.5" />
+          {busy ? "Reading..." : "Choose File"}
+          <input
+            key={resetKey}
+            className="sr-only"
+            type="file"
+            accept=".txt,.text,.md,.fdx,.pdf,text/plain,text/markdown,application/pdf"
+            disabled={disabled || busy}
+            onChange={(event) => void importFile(event.target.files?.[0])}
+          />
+        </label>
+      </div>
+      {message ? <p className="mt-2 text-xs text-studio-300">{message}</p> : null}
     </div>
   );
 }
@@ -7143,18 +7819,18 @@ function Contacts({
       const text = await file.text();
       const importedContacts = parseContactsCsv(text);
       if (!importedContacts.length) {
-        setImportMessage("No talent found in CSV.");
+        setImportMessage("No outreach contacts found in CSV.");
         return;
       }
       if (databaseMode && onDatabaseImport) {
         await onDatabaseImport(importedContacts);
-        setImportMessage(`Imported ${importedContacts.length} talent entr${importedContacts.length === 1 ? "y" : "ies"} to database.`);
+        setImportMessage(`Imported ${importedContacts.length} outreach contact${importedContacts.length === 1 ? "" : "s"} to database.`);
         return;
       }
       const nextContacts = [...localContacts, ...importedContacts];
       setLocalContacts(nextContacts);
       window.localStorage.setItem(HAMMER_LOCAL_CONTACTS_STORAGE_KEY, JSON.stringify(nextContacts));
-      setImportMessage(`Imported ${importedContacts.length} talent entr${importedContacts.length === 1 ? "y" : "ies"}.`);
+      setImportMessage(`Imported ${importedContacts.length} outreach contact${importedContacts.length === 1 ? "" : "s"}.`);
     } catch (error) {
       setImportMessage(error instanceof Error ? error.message : "Could not import CSV.");
     }
@@ -7165,7 +7841,7 @@ function Contacts({
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url;
-    link.download = `greenlight-talent-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.download = `greenlight-outreach-${new Date().toISOString().slice(0, 10)}.csv`;
     link.click();
     URL.revokeObjectURL(url);
   }
@@ -7178,7 +7854,7 @@ function Contacts({
     const credits = draft.credits.trim();
     const genre = draft.genre.trim();
     const patch = {
-      name: draft.name.trim() || "Unnamed Talent",
+      name: draft.name.trim() || "Unnamed Contact",
       company: agency,
       type: talentContactType(role, selectedContact.type),
       title: role,
@@ -7209,7 +7885,7 @@ function Contacts({
       setLocalContacts(nextContacts);
       window.localStorage.setItem(HAMMER_LOCAL_CONTACTS_STORAGE_KEY, JSON.stringify(nextContacts));
     }
-    setImportMessage("Talent entry updated.");
+    setImportMessage("Outreach entry updated.");
   }
 
   async function addContactRelationship(event: React.FormEvent<HTMLFormElement>) {
@@ -7222,7 +7898,7 @@ function Contacts({
       notes: relationshipDraft.notes
     });
     setRelationshipDraft({ toContactId: "", relationshipType: "AGENT", notes: "" });
-    setImportMessage("Talent relationship added.");
+    setImportMessage("Outreach relationship added.");
   }
 
   async function createManualContact(input: Omit<HammerContact, "id">) {
@@ -7240,12 +7916,12 @@ function Contacts({
       window.localStorage.setItem(HAMMER_LOCAL_CONTACTS_STORAGE_KEY, JSON.stringify(nextContacts));
     }
     setCreateOpen(false);
-    setImportMessage("Talent entry added.");
+    setImportMessage("Outreach entry added.");
   }
 
   async function deleteSelectedContact() {
     if (!selectedContact) return;
-    if (!window.confirm(`Delete talent entry "${selectedContact.name}"?`)) return;
+    if (!window.confirm(`delete outreach entry "${selectedContact.name}"?`)) return;
     if (databaseMode) {
       await onDeleteContact?.(selectedContact.id);
     } else {
@@ -7254,14 +7930,14 @@ function Contacts({
       window.localStorage.setItem(HAMMER_LOCAL_CONTACTS_STORAGE_KEY, JSON.stringify(nextContacts));
     }
     setSelectedContactId("");
-    setImportMessage("Talent entry deleted.");
+    setImportMessage("Outreach entry deleted.");
   }
 
   return (
     <div className="space-y-4">
       <div className={cn("grid gap-4", selectedContact ? "xl:grid-cols-[minmax(0,1fr)_440px]" : "xl:grid-cols-1")}>
         <Panel>
-          <SectionHeader eyebrow="Talent Directory" title="Talent" action={<div className="flex flex-wrap gap-2"><PrimaryButton icon={Plus} label="Add Talent" onClick={() => setCreateOpen(true)} /><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline"><UploadCloud className="h-3.5 w-3.5" />Import CSV<input className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => importContacts(event.target.files?.[0])} /></label><button type="button" className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 hover:border-amberline/40 hover:text-amberline" onClick={exportContacts}>Export CSV</button></div>} />
+          <SectionHeader eyebrow="Outreach Directory" title="Outreach" action={<div className="flex flex-wrap gap-2"><PrimaryButton icon={Plus} label="Add Contact" onClick={() => setCreateOpen(true)} /><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline"><UploadCloud className="h-3.5 w-3.5" />Import CSV<input className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => importContacts(event.target.files?.[0])} /></label><button type="button" className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 hover:border-amberline/40 hover:text-amberline" onClick={exportContacts}>Export CSV</button></div>} />
           <div className="mb-3 grid gap-2 lg:grid-cols-[1fr_170px_170px_150px_140px]">
             <input className="field" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search names, agencies, credits, genres, roles" />
             <select className="field" value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}>
@@ -7307,7 +7983,7 @@ function Contacts({
                 </tbody>
               </table>
             </div>
-          ) : <EmptyState label="No talent matches this search." />}
+          ) : <EmptyState label="No outreach contacts match this search." />}
         </Panel>
 
         {selectedContact ? (
@@ -7330,7 +8006,7 @@ function Contacts({
                   </div>
                 </div>
                 <div className="mt-4 grid gap-3 md:grid-cols-2">
-                  <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Name</span><input className="field" value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Talent name" /></label>
+                  <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Name</span><input className="field" value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Contact name" /></label>
                   <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Role</span><input className="field" value={draft.role} onChange={(event) => setDraft((current) => ({ ...current, role: event.target.value }))} placeholder="Writer, director, artist..." /></label>
                   <label className="grid gap-1 md:col-span-2"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Agency / Management</span><textarea className="field min-h-20" value={draft.agency} onChange={(event) => setDraft((current) => ({ ...current, agency: event.target.value }))} placeholder="Agency, manager, rep" /></label>
                   <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Genre</span><input className="field" value={draft.genre} onChange={(event) => setDraft((current) => ({ ...current, genre: event.target.value }))} placeholder="Horror, Action" /></label>
@@ -7361,10 +8037,10 @@ function Contacts({
                     })}
                   </div>
                 </div>
-                <div className="mt-3 flex flex-wrap justify-end gap-2"><PrimaryButton icon={CheckCircle2} label="Save Talent" onClick={saveContact} /><button type="button" onClick={deleteSelectedContact} className="inline-flex items-center gap-1.5 rounded border border-rose-400/25 bg-rose-500/5 px-2.5 py-1.5 text-xs font-semibold text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200"><Trash2 className="h-3.5 w-3.5" />Delete</button></div>
+                <div className="mt-3 flex flex-wrap justify-end gap-2"><PrimaryButton icon={CheckCircle2} label="Save Contact" onClick={saveContact} /><button type="button" onClick={deleteSelectedContact} className="inline-flex items-center gap-1.5 rounded border border-rose-400/25 bg-rose-500/5 px-2.5 py-1.5 text-xs font-semibold text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200"><Trash2 className="h-3.5 w-3.5" />Delete</button></div>
               </div>
               <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
-                <SectionHeader eyebrow="Relationship Map" title="Linked Talent / Reps" />
+                <SectionHeader eyebrow="Relationship Map" title="Linked Contacts / Reps" />
                 <form onSubmit={addContactRelationship} className="mt-3 grid gap-2 lg:grid-cols-[1fr_150px_1fr_auto]">
                   <select className="field" value={relationshipDraft.toContactId} onChange={(event) => setRelationshipDraft((current) => ({ ...current, toContactId: event.target.value }))}>
                     <option value="">Choose contact</option>
@@ -7433,7 +8109,7 @@ function ContactNoteModal({ contact, onClose }: { contact: HammerContact; onClos
         <Panel className="shadow-2xl">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Talent Notes</p>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Outreach Notes</p>
               <h3 className="mt-1 text-lg font-semibold text-studio-100">{contact.name}</h3>
               <p className="mt-1 text-xs text-studio-400">{contact.title || "No role"} / {talentAgency(contact)}</p>
             </div>
@@ -7529,7 +8205,7 @@ function ContactCreateModal({
         talentBased: location
       });
     } catch (error) {
-      setError(error instanceof Error ? error.message : "Could not add talent.");
+      setError(error instanceof Error ? error.message : "Could not add contact.");
     } finally {
       setBusy(false);
     }
@@ -7539,15 +8215,15 @@ function ContactCreateModal({
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
       <form onSubmit={submit} className="my-6 w-full max-w-3xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-glow">
         <div className="flex items-start justify-between gap-3">
-          <SectionHeader eyebrow="Talent Directory" title="Add Talent" />
-          <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close add talent">
+          <SectionHeader eyebrow="Outreach Directory" title="Add Contact" />
+          <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close add contact">
             <X className="h-4 w-4" />
           </button>
         </div>
         <div className="grid gap-3 md:grid-cols-2">
           <label className="grid gap-1">
             <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Name</span>
-            <input className="field" value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Talent name" />
+            <input className="field" value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Contact name" />
           </label>
           <label className="grid gap-1">
             <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Contact Type</span>
@@ -7645,7 +8321,7 @@ function ContactCreateModal({
         {error ? <p className="mt-3 rounded border border-rose-400/25 bg-rose-500/5 px-2.5 py-2 text-xs text-rose-200">{error}</p> : null}
         <div className="mt-4 flex justify-end gap-2">
           <button type="button" onClick={onClose} className="rounded border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:text-amberline">Cancel</button>
-          <button type="submit" disabled={busy} className="rounded bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">Add Talent</button>
+          <button type="submit" disabled={busy} className="rounded bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">Add Contact</button>
         </div>
       </form>
     </div>
@@ -10039,7 +10715,7 @@ function parseContactsCsv(csv: string): HammerContact[] {
   return rows.slice(1).map((row, index) => {
     const record = Object.fromEntries(headers.map((header, cellIndex) => [header, csvCell(row[cellIndex]).trim()])) as Record<string, string>;
     const agency = record.agency || record.company || record.management || record.representation || "Independent";
-    const role = record.role || record.title || record.type || "Talent";
+    const role = record.role || record.title || record.type || "Contact";
     const genre = record.genre || record.genres || "";
     const location = record.based || record.location || record.city || "";
     const credits = record.credits || record.notes || "";
@@ -10048,7 +10724,7 @@ function parseContactsCsv(csv: string): HammerContact[] {
     const type = hasTalentColumns ? talentContactType(role) : normalizeContactType(record.type);
     return {
       id: `contact-local-${Date.now()}-${index}`,
-      name: record.name || "Unnamed Talent",
+      name: record.name || "Unnamed Contact",
       company: agency,
       type,
       title: role || statusLabel(type),
@@ -10216,6 +10892,113 @@ function noteMetadata(comment: HammerComment): { noteType: HammerNoteType; tags:
     noteType,
     tags: normalizedDocumentTags(metadata?.tags)
   };
+}
+
+function noteTargetContext(
+  comment: HammerComment,
+  context: {
+    projects: HammerProject[];
+    documents: HammerDocument[];
+    versions: HammerDocumentVersion[];
+    tasks: HammerTask[];
+    assets: HammerAsset[];
+    approvals: HammerApproval[];
+  }
+) {
+  if (comment.targetType === "PROJECT") {
+    const project = context.projects.find((item) => item.id === comment.targetId);
+    return {
+      label: project?.title ?? "Unknown Development Slate Item",
+      parentLabel: "Development Slate",
+      href: project ? `/projects/${project.id}` : undefined,
+      projectId: project?.id
+    };
+  }
+  if (comment.targetType === "DOCUMENT") {
+    const document = context.documents.find((item) => item.id === comment.targetId);
+    return {
+      label: document?.title ?? "Unknown Document",
+      parentLabel: document?.projectId ? projectTitleFromList(document.projectId, context.projects) : "Prospects / Inbox",
+      href: document ? `/scripts/${document.id}` : undefined,
+      projectId: document?.projectId
+    };
+  }
+  if (comment.targetType === "DOCUMENT_VERSION") {
+    const version = context.versions.find((item) => item.id === comment.targetId);
+    const document = version ? context.documents.find((item) => item.id === version.documentId) : undefined;
+    return {
+      label: document ? `${document.title} / v${version?.versionNumber ?? 1}` : "Unknown Script Version",
+      parentLabel: document?.projectId ? projectTitleFromList(document.projectId, context.projects) : "Prospects / Inbox",
+      href: document ? `/scripts/${document.id}` : undefined,
+      projectId: document?.projectId
+    };
+  }
+  if (comment.targetType === "TASK") {
+    const task = context.tasks.find((item) => item.id === comment.targetId);
+    return {
+      label: task?.title ?? "Unknown Task",
+      parentLabel: task?.projectId ? projectTitleFromList(task.projectId, context.projects) : "General Task",
+      href: task ? `/tasks?task=${task.id}` : "/tasks",
+      projectId: task?.projectId
+    };
+  }
+  if (comment.targetType === "ASSET") {
+    const asset = context.assets.find((item) => item.id === comment.targetId);
+    return {
+      label: asset?.title ?? "Unknown Asset",
+      parentLabel: asset?.projectId ? projectTitleFromList(asset.projectId, context.projects) : "Asset",
+      href: asset ? `/assets/${asset.id}` : undefined,
+      projectId: asset?.projectId
+    };
+  }
+  if (comment.targetType === "APPROVAL") {
+    const approval = context.approvals.find((item) => item.id === comment.targetId);
+    return {
+      label: approval ? `Approval / ${statusLabel(approval.status)}` : "Unknown Approval",
+      parentLabel: approval?.projectId ? projectTitleFromList(approval.projectId, context.projects) : "Approval",
+      href: "/reviews",
+      projectId: approval?.projectId
+    };
+  }
+  return {
+    label: statusLabel(comment.targetType),
+    parentLabel: "GreenLight",
+    href: undefined,
+    projectId: undefined
+  };
+}
+
+function userNameFromList(userId: string, users: HammerUser[]) {
+  return users.find((user) => user.id === userId)?.name ?? userName(userId);
+}
+
+function formatNoteTimestamp(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short"
+  }).format(date);
+}
+
+async function extractNoteTextFromFile(file: File) {
+  const extension = file.name.split(".").pop()?.toLowerCase();
+  if (file.type === "application/pdf" || extension === "pdf") {
+    try {
+      return await extractPdfText(file);
+    } catch (error) {
+      throw new Error(error instanceof Error ? `Could not import PDF text: ${error.message}` : "Could not import PDF text from that file.");
+    }
+  }
+  if (extension === "txt" || extension === "text" || extension === "md" || extension === "fdx" || file.type === "text/plain" || file.type === "text/markdown") {
+    const text = await file.text();
+    if (!text.trim()) throw new Error("That file did not contain readable text.");
+    return text;
+  }
+  if (extension === "doc" || extension === "docx") {
+    throw new Error("DOC/DOCX note import is not available yet. Export the note as PDF, TXT, or MD, then import it here.");
+  }
+  throw new Error("Unsupported note import file. Use TXT, MD, FDX, or readable PDF.");
 }
 
 async function extractTextFromUpload(file: File) {
@@ -10456,6 +11239,7 @@ function titleForView(view: HammerView, context: { project: HammerProject; docum
     projects: "Development Slate",
     prospects: "Prospects",
     collections: "Collections",
+    notes: "Notes",
     "project-new": "New Project",
     "project-detail": context.project.title,
     "project-documents": context.project.title,
@@ -10468,7 +11252,7 @@ function titleForView(view: HammerView, context: { project: HammerProject; docum
     assets: "Assets",
     "asset-detail": context.asset.title,
     tasks: "Tasks",
-    contacts: "Talent",
+    contacts: "Outreach",
     reviews: "Reviews",
     reports: "Reports",
     executive: "Executive",

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, type MouseEvent, type PointerEvent } from "react";
-import { BarChart3, ClipboardList, ContactRound, FileBarChart2, FolderKanban, Layers3, LayoutDashboard, LibraryBig, LogOut, Moon, Settings2, Sun, UserRound } from "lucide-react";
+import { BarChart3, ClipboardList, ContactRound, FileBarChart2, FolderKanban, Layers3, LayoutDashboard, LibraryBig, LogOut, MessageSquareText, Moon, Settings2, Sun, UserRound } from "lucide-react";
 import {
   assignedProjectsForUser,
   HAMMER_DOCUMENT_PROJECT_OVERRIDES_STORAGE_KEY,
@@ -33,15 +33,16 @@ const navItems = [
   { href: "/projects", label: "Development Slate", icon: FolderKanban },
   { href: "/prospects", label: "Prospects", icon: LibraryBig },
   { href: "/collections", label: "Collections", icon: Layers3 },
+  { href: "/notes", label: "Notes", icon: MessageSquareText },
   { href: "/tasks", label: "Tasks", icon: ClipboardList }
 ];
 
-const talentNavItem = { href: "/talent", label: "Talent", icon: ContactRound };
+const talentNavItem = { href: "/outreach", label: "Outreach", icon: ContactRound };
 const executiveNavItem = { href: "/executive", label: "Executive", icon: BarChart3 };
 const reportsNavItem = { href: "/reports", label: "Reports", icon: FileBarChart2 };
 const adminNavItem = { href: "/admin/users", label: "Admin", icon: Settings2 };
 const accountNavItem = { href: "/account", label: "Account", icon: UserRound };
-const GREENLIGHT_APP_VERSION = "1.94";
+const GREENLIGHT_APP_VERSION = "1.99";
 const HAMMER_THEME_STORAGE_KEY = "hammer-os-theme";
 type ThemeMode = "dark" | "light";
 type AuthMode = "loading" | "database" | "demo";
