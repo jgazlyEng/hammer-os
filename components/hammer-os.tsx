@@ -3,9 +3,9 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { Archive, ArrowLeft, ArrowUpDown, CheckCircle2, ChevronDown, Download, FileDiff, FileText, Gauge, GripVertical, ImagePlus, Loader2, MessageSquare, PackageCheck, Pencil, Plus, Search, Share2, ShieldCheck, Trash2, UploadCloud, UsersRound, X } from "lucide-react";
+import { Archive, ArrowLeft, ArrowUpDown, CalendarClock, CheckCircle2, ChevronDown, ContactRound, Download, FileDiff, FileText, Gauge, GripVertical, ImagePlus, Loader2, MessageSquare, PackageCheck, Pencil, Plus, Search, Share2, ShieldCheck, Trash2, UploadCloud, UsersRound, X } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
-import { EmptyState, MetricCard, Panel, SectionHeader } from "@/components/ui";
+import { EmptyState, Panel, SectionHeader } from "@/components/ui";
 import {
   currentVersion,
   assignedProjectsForUser,
@@ -84,7 +84,9 @@ import {
   type ContactStatus,
   type HammerContact,
   type HammerContactRelationship,
-  type ContactRelationshipType
+  type ContactRelationshipType,
+  type HammerOutreachEngagement,
+  type OutreachEngagementType
 } from "@/lib/hammer-data";
 import { buildTextDiff } from "@/lib/hammer-diff";
 import { extractPdfText } from "@/lib/pdf-parser";
@@ -100,6 +102,7 @@ type DownloadResourceType = "documentVersion" | "supportingDocument" | "prospect
 const HAMMER_LOCAL_VERSION_NOTES_STORAGE_KEY = "hammer:version-notes";
 const HAMMER_LOCAL_VERSION_MARKDOWN_STORAGE_KEY = "hammer:version-markdown-notes";
 const HAMMER_LOCAL_COMMENTS_STORAGE_KEY = "hammer:comments";
+const HAMMER_LOCAL_OUTREACH_ENGAGEMENTS_STORAGE_KEY = "hammer:outreach-engagements";
 
 type HammerView = "dashboard" | "projects" | "prospects" | "collections" | "notes" | "project-new" | "project-detail" | "project-documents" | "project-assets" | "scripts" | "script-detail" | "script-versions" | "script-diff" | "script-breakdown" | "assets" | "asset-detail" | "tasks" | "contacts" | "reviews" | "reports" | "executive" | "admin-users" | "account";
 type ScriptLibrarySection = "inbox" | "projects" | "all";
@@ -168,6 +171,7 @@ interface HammerWorkspacePayload {
   versions?: HammerDocumentVersion[];
   comments?: HammerComment[];
   contactRelationships?: HammerContactRelationship[];
+  outreachEngagements?: HammerOutreachEngagement[];
   scriptCollections?: HammerScriptCollection[];
   scriptCollectionItems?: HammerScriptCollectionItem[];
   slateCollections?: HammerSlateCollection[];
@@ -408,6 +412,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   const [workspaceAssets, setWorkspaceAssets] = useState<HammerAsset[]>([]);
   const [workspaceContacts, setWorkspaceContacts] = useState<HammerContact[]>([]);
   const [workspaceContactRelationships, setWorkspaceContactRelationships] = useState<HammerContactRelationship[]>([]);
+  const [workspaceOutreachEngagements, setWorkspaceOutreachEngagements] = useState<HammerOutreachEngagement[]>([]);
   const [workspaceApprovals, setWorkspaceApprovals] = useState<HammerApproval[]>([]);
   const [workspaceComments, setWorkspaceComments] = useState<HammerComment[]>([]);
   const [workspaceScriptCollections, setWorkspaceScriptCollections] = useState<HammerScriptCollection[]>([]);
@@ -416,11 +421,10 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   const [workspaceSlateCollectionItems, setWorkspaceSlateCollectionItems] = useState<HammerSlateCollectionItem[]>([]);
   const [workspaceProspectAssets, setWorkspaceProspectAssets] = useState<ProspectAsset[]>([]);
   const [projectLeads, setProjectLeads] = useState<HammerProjectLead[]>([]);
-  const [query, setQuery] = useState("");
   const [sessionUser, setSessionUser] = useState<SessionUser | null>(null);
   const [sessionLoaded, setSessionLoaded] = useState(false);
   const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
-  const [workspaceSyncing, setWorkspaceSyncing] = useState(false);
+  const [, setWorkspaceSyncing] = useState(false);
   const [activeProjectId, setActiveProjectId] = useState("");
   const [localDocuments, setLocalDocuments] = useState<HammerDocument[]>([]);
   const [localVersions, setLocalVersions] = useState<HammerDocumentVersion[]>([]);
@@ -432,6 +436,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   const [localReferenceImages, setLocalReferenceImages] = useState<ProjectReferenceImage[]>([]);
   const [localComments, setLocalComments] = useState<HammerComment[]>([]);
   const [localContactRelationships, setLocalContactRelationships] = useState<HammerContactRelationship[]>([]);
+  const [localOutreachEngagements, setLocalOutreachEngagements] = useState<HammerOutreachEngagement[]>([]);
   const [localScriptCollections, setLocalScriptCollections] = useState<HammerScriptCollection[]>([]);
   const [localScriptCollectionItems, setLocalScriptCollectionItems] = useState<HammerScriptCollectionItem[]>([]);
   const [localSlateCollections, setLocalSlateCollections] = useState<HammerSlateCollection[]>([]);
@@ -450,6 +455,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   const assets = (workspaceMode === "database" ? workspaceAssets : hammerAssets).filter(isValidAsset);
   const contacts = workspaceMode === "database" ? workspaceContacts : hammerContacts;
   const contactRelationships = workspaceMode === "database" ? workspaceContactRelationships : [...hammerContactRelationships, ...localContactRelationships];
+  const outreachEngagements = workspaceMode === "database" ? workspaceOutreachEngagements : localOutreachEngagements;
   const approvals = workspaceMode === "database" ? workspaceApprovals : hammerApprovals;
   const comments = workspaceMode === "database" ? workspaceComments : [...hammerComments, ...localComments];
   const scriptCollections = workspaceMode === "database" ? workspaceScriptCollections : [...hammerScriptCollections, ...localScriptCollections];
@@ -461,7 +467,6 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   const document = documents.find((item) => item.id === id) ?? documents[0] ?? emptyDocument;
   const asset = assets.find((item) => item.id === id) ?? assets[0] ?? emptyAsset;
   const activeProject = projects.find((item) => item.id === activeProjectId) ?? projects[0] ?? emptyProject;
-  const filteredProjects = projects.filter(isValidProject).filter((item) => `${item.title} ${item.logline} ${item.genre} ${item.status} ${item.type}`.toLowerCase().includes(query.toLowerCase()));
   const currentUser = users.find((user) => user.email.toLowerCase() === sessionUser?.email?.toLowerCase()) ?? sessionUserToHammerUser(sessionUser, workspaceMode);
 
   function applyDatabaseWorkspace(data: HammerWorkspacePayload) {
@@ -477,6 +482,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     setLocalTasks(data.tasks ?? []);
     setWorkspaceContacts(data.contacts ?? []);
     setWorkspaceContactRelationships(data.contactRelationships ?? []);
+    setWorkspaceOutreachEngagements(data.outreachEngagements ?? []);
     setProjectLeads(data.projectLeads ?? []);
     setWorkspaceUsers(data.users ?? []);
     setWorkspaceApprovals(data.approvals ?? []);
@@ -499,6 +505,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     setWorkspaceAssets([]);
     setWorkspaceContacts([]);
     setWorkspaceContactRelationships([]);
+    setWorkspaceOutreachEngagements([]);
     setWorkspaceApprovals([]);
     setWorkspaceComments([]);
     setWorkspaceScriptCollections([]);
@@ -624,6 +631,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       const storedReferenceImages = window.localStorage.getItem(HAMMER_REFERENCE_IMAGES_STORAGE_KEY);
       const storedComments = window.localStorage.getItem(HAMMER_LOCAL_COMMENTS_STORAGE_KEY);
       const storedContactRelationships = window.localStorage.getItem(HAMMER_LOCAL_CONTACT_RELATIONSHIPS_STORAGE_KEY);
+      const storedOutreachEngagements = window.localStorage.getItem(HAMMER_LOCAL_OUTREACH_ENGAGEMENTS_STORAGE_KEY);
       const storedScriptCollections = window.localStorage.getItem(HAMMER_LOCAL_SCRIPT_COLLECTIONS_STORAGE_KEY);
       const storedScriptCollectionItems = window.localStorage.getItem(HAMMER_LOCAL_SCRIPT_COLLECTION_ITEMS_STORAGE_KEY);
       const storedSlateCollections = window.localStorage.getItem(HAMMER_LOCAL_SLATE_COLLECTIONS_STORAGE_KEY);
@@ -641,6 +649,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       if (storedReferenceImages) setLocalReferenceImages(JSON.parse(storedReferenceImages) as ProjectReferenceImage[]);
       if (storedComments) setLocalComments(JSON.parse(storedComments) as HammerComment[]);
       if (storedContactRelationships) setLocalContactRelationships(JSON.parse(storedContactRelationships) as HammerContactRelationship[]);
+      if (storedOutreachEngagements) setLocalOutreachEngagements(JSON.parse(storedOutreachEngagements) as HammerOutreachEngagement[]);
       if (storedScriptCollections) setLocalScriptCollections(JSON.parse(storedScriptCollections) as HammerScriptCollection[]);
       if (storedScriptCollectionItems) setLocalScriptCollectionItems(JSON.parse(storedScriptCollectionItems) as HammerScriptCollectionItem[]);
       if (storedSlateCollections) setLocalSlateCollections(JSON.parse(storedSlateCollections) as HammerSlateCollection[]);
@@ -658,6 +667,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       setLocalReferenceImages([]);
       setLocalComments([]);
       setLocalContactRelationships([]);
+      setLocalOutreachEngagements([]);
       setLocalScriptCollections([]);
       setLocalScriptCollectionItems([]);
       setLocalSlateCollections([]);
@@ -1562,6 +1572,77 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     });
   }
 
+  async function createOutreachEngagement(input: {
+    contactId: string;
+    type: OutreachEngagementType;
+    engagementDate: string;
+    status: ContactStatus;
+    summary: string;
+    nextStep?: string;
+    followUpDate?: string;
+  }) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("createOutreachEngagement", input as unknown as Record<string, unknown>);
+      return;
+    }
+    const now = new Date().toISOString();
+    const nextEngagement: HammerOutreachEngagement = {
+      id: `outreach-engagement-local-${Date.now()}`,
+      contactId: input.contactId,
+      type: input.type,
+      engagementDate: input.engagementDate || now.slice(0, 10),
+      status: input.status,
+      summary: input.summary,
+      nextStep: input.nextStep?.trim() || undefined,
+      followUpDate: input.followUpDate || undefined,
+      createdById: currentUser.id,
+      createdAt: now,
+      updatedAt: now
+    };
+    setLocalOutreachEngagements((current) => {
+      const next = [nextEngagement, ...current];
+      window.localStorage.setItem(HAMMER_LOCAL_OUTREACH_ENGAGEMENTS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+    const contact = hammerContacts.find((item) => item.id === input.contactId);
+    if (contact) {
+      const updatedContact = {
+        ...contact,
+        status: input.status,
+        lastContacted: nextEngagement.engagementDate,
+        nextFollowUp: nextEngagement.followUpDate,
+        talentMetWith: nextEngagement.engagementDate
+      };
+      const nextContacts = [updatedContact, ...workspaceContacts.filter((item) => item.id !== input.contactId)];
+      setWorkspaceContacts(nextContacts);
+      window.localStorage.setItem(HAMMER_LOCAL_CONTACTS_STORAGE_KEY, JSON.stringify(nextContacts));
+    }
+  }
+
+  async function updateOutreachEngagement(engagementId: string, patch: Partial<Omit<HammerOutreachEngagement, "id" | "contactId" | "createdById" | "createdAt" | "updatedAt">>) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("updateOutreachEngagement", { engagementId, ...patch });
+      return;
+    }
+    setLocalOutreachEngagements((current) => {
+      const next = current.map((engagement) => engagement.id === engagementId ? { ...engagement, ...patch, updatedAt: new Date().toISOString() } : engagement);
+      window.localStorage.setItem(HAMMER_LOCAL_OUTREACH_ENGAGEMENTS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  async function deleteOutreachEngagement(engagementId: string) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("deleteOutreachEngagement", { engagementId });
+      return;
+    }
+    setLocalOutreachEngagements((current) => {
+      const next = current.filter((engagement) => engagement.id !== engagementId);
+      window.localStorage.setItem(HAMMER_LOCAL_OUTREACH_ENGAGEMENTS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
   async function updateAccount(input: { name: string; email: string; currentPassword: string; newPassword: string }) {
     if (workspaceMode === "database") {
       const data = await runWorkspaceAction("updateAccount", input) as { user?: SessionUser } | null;
@@ -1692,7 +1773,6 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   const isScriptDetailView = scriptDetailViews.includes(view);
   const scriptAccessLoading = isScriptDetailView && !sessionLoaded;
   const scriptAccessDenied = isScriptDetailView && sessionLoaded && !canAccessScriptDocument(currentUser, document);
-  const showWorkspaceSync = workspaceLoaded && workspaceSyncing;
   const showInitialWorkspaceLoading = !sessionLoaded || !workspaceLoaded;
 
   const content = (() => {
@@ -1706,9 +1786,9 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       return <AccessDenied title="Script access required" detail="You can only open scripts attached to Development Slate items you can access. Producers, executives, and admins can review broader prospect materials from the slate." />;
     }
     if (view === "dashboard") return <Dashboard currentUser={currentUser} projects={projects} documents={documents} versions={versions} tasks={tasks} contacts={contacts} approvals={approvals} scriptCollections={scriptCollections} scriptCollectionItems={scriptCollectionItems} slateCollections={slateCollections} slateCollectionItems={slateCollectionItems} />;
-    if (view === "projects") return <Projects mode="development" projects={filteredProjects} projectLeads={projectLeads} prospectAssets={prospectAssets} users={users} tasks={tasks} currentUser={currentUser} canCreateProject={canManageScriptLibrary(currentUser.role)} onCreateProject={addProject} onUpdateLead={updateProjectLead} onCreateLead={createProjectLead} onImportLeads={importProjectLeads} onPromoteLead={promoteProjectLead} onCreateTask={createTask} onUploadProspectAsset={uploadProspectAsset} onDeleteProspectAsset={deleteProspectAsset} />;
-    if (view === "prospects") return <Projects mode="prospects" projects={filteredProjects} projectLeads={projectLeads} prospectAssets={prospectAssets} users={users} tasks={tasks} currentUser={currentUser} canCreateProject={canManageScriptLibrary(currentUser.role)} onCreateProject={addProject} onUpdateLead={updateProjectLead} onCreateLead={createProjectLead} onImportLeads={importProjectLeads} onPromoteLead={promoteProjectLead} onCreateTask={createTask} onUploadProspectAsset={uploadProspectAsset} onDeleteProspectAsset={deleteProspectAsset} />;
-    if (view === "notes") return <NotesCenter comments={comments} users={users} projects={projects} documents={documents} versions={versions} tasks={tasks} assets={assets} approvals={approvals} currentUser={currentUser} onUpdateComment={updateComment} onDeleteComment={deleteComment} />;
+    if (view === "projects") return <Projects mode="development" projects={projects} projectLeads={projectLeads} prospectAssets={prospectAssets} comments={comments} users={users} tasks={tasks} currentUser={currentUser} canCreateProject={canManageScriptLibrary(currentUser.role)} onCreateProject={addProject} onUpdateLead={updateProjectLead} onCreateLead={createProjectLead} onImportLeads={importProjectLeads} onPromoteLead={promoteProjectLead} onCreateTask={createTask} onUploadProspectAsset={uploadProspectAsset} onDeleteProspectAsset={deleteProspectAsset} onCreateComment={createComment} onUpdateComment={updateComment} onDeleteComment={deleteComment} />;
+    if (view === "prospects") return <Projects mode="prospects" projects={projects} projectLeads={projectLeads} prospectAssets={prospectAssets} comments={comments} users={users} tasks={tasks} currentUser={currentUser} canCreateProject={canManageScriptLibrary(currentUser.role)} onCreateProject={addProject} onUpdateLead={updateProjectLead} onCreateLead={createProjectLead} onImportLeads={importProjectLeads} onPromoteLead={promoteProjectLead} onCreateTask={createTask} onUploadProspectAsset={uploadProspectAsset} onDeleteProspectAsset={deleteProspectAsset} onCreateComment={createComment} onUpdateComment={updateComment} onDeleteComment={deleteComment} />;
+    if (view === "notes") return <NotesCenter comments={comments} users={users} projects={projects} prospects={projectLeads} documents={documents} versions={versions} tasks={tasks} assets={assets} approvals={approvals} currentUser={currentUser} onUpdateComment={updateComment} onDeleteComment={deleteComment} />;
     if (view === "collections") return (
       <Collections
         slateCollections={slateCollections}
@@ -1754,7 +1834,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     if (view === "tasks") return <Tasks selectedTaskId={selectedTaskId} currentUser={currentUser} users={users} tasks={tasks} projects={projects} onCreateTask={createTask} onUpdateTask={updateTask} onDeleteTask={deleteTask} onReorderTasks={reorderTasks} onCreateSubtask={createTaskSubtask} onUpdateSubtask={updateTaskSubtask} onDeleteSubtask={deleteTaskSubtask} />;
     if (view === "contacts") {
       if (!canViewContacts(currentUser.role)) return <AccessDenied title="Outreach access required" detail="Only admins, producers, and executives can view the studio outreach directory." />;
-      return <Contacts initialContacts={contacts} contactRelationships={contactRelationships} currentUser={currentUser} users={users} projects={projects} documents={documents} tasks={tasks} databaseMode={workspaceMode === "database"} onDatabaseImport={(importedContacts) => runWorkspaceAction("importContacts", { contacts: importedContacts })} onCreateContact={createContact} onUpdateContact={updateContact} onDeleteContact={deleteContact} onCreateRelationship={createContactRelationship} onDeleteRelationship={deleteContactRelationship} />;
+      return <Contacts initialContacts={contacts} contactRelationships={contactRelationships} outreachEngagements={outreachEngagements} currentUser={currentUser} users={users} projects={projects} documents={documents} tasks={tasks} databaseMode={workspaceMode === "database"} onDatabaseImport={(importedContacts) => runWorkspaceAction("importContacts", { contacts: importedContacts })} onCreateContact={createContact} onUpdateContact={updateContact} onDeleteContact={deleteContact} onCreateRelationship={createContactRelationship} onDeleteRelationship={deleteContactRelationship} onCreateEngagement={createOutreachEngagement} onUpdateEngagement={updateOutreachEngagement} onDeleteEngagement={deleteOutreachEngagement} onCreateTask={createTask} />;
     }
     if (view === "reports") {
       if (!canViewReports(currentUser.role)) return <AccessDenied title="Reports access required" detail="Only admins, producers, and executives can generate executive email reports." />;
@@ -1792,25 +1872,9 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
           <h1 className="mt-1 text-xl font-semibold text-studio-100 md:text-2xl">{scriptAccessDenied ? "Script Access Required" : titleForView(view, { project, document, asset })}</h1>
           {scopedProjectTitle(view, activeProject) ? <p className="mt-1 text-xs text-studio-400">Showing {scopedProjectTitle(view, activeProject)} only</p> : null}
         </div>
-        <div className="relative w-full lg:w-[320px]">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-studio-400" />
-          <input className="field pl-8" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search" />
-        </div>
       </div>
-      {showWorkspaceSync ? <WorkspaceSyncNotice /> : null}
       {content}
     </AppShell>
-  );
-}
-
-function WorkspaceSyncNotice() {
-  return (
-    <div className="mb-3 flex items-center justify-between gap-3 rounded-md border border-emerald-400/15 bg-emerald-400/[0.04] px-3 py-2 text-xs text-emerald-100">
-      <span>Syncing latest changes...</span>
-      <span className="h-1.5 w-24 overflow-hidden rounded-full bg-white/10">
-        <span className="block h-full w-1/2 animate-pulse rounded-full bg-emerald-400" />
-      </span>
-    </div>
   );
 }
 
@@ -2096,6 +2160,7 @@ function Projects({
   projects,
   projectLeads,
   prospectAssets = [],
+  comments = [],
   currentUser,
   users = hammerUsers,
   tasks = hammerTasks,
@@ -2107,12 +2172,16 @@ function Projects({
   onPromoteLead,
   onCreateTask,
   onUploadProspectAsset,
-  onDeleteProspectAsset
+  onDeleteProspectAsset,
+  onCreateComment,
+  onUpdateComment,
+  onDeleteComment
 }: {
   mode?: "development" | "prospects";
   projects: HammerProject[];
   projectLeads: HammerProjectLead[];
   prospectAssets?: ProspectAsset[];
+  comments?: HammerComment[];
   currentUser: HammerUser;
   users?: HammerUser[];
   tasks?: HammerTask[];
@@ -2125,6 +2194,9 @@ function Projects({
   onCreateTask?: (input: { projectId?: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
   onUploadProspectAsset?: (input: { prospectId: string; title: string; description: string; source: string; file: File }) => Promise<void>;
   onDeleteProspectAsset?: (assetId: string) => Promise<void>;
+  onCreateComment?: (input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string; metadataJson?: HammerCommentMetadata }) => Promise<void>;
+  onUpdateComment?: (commentId: string, input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string; metadataJson?: HammerCommentMetadata }) => Promise<void>;
+  onDeleteComment?: (commentId: string) => Promise<void>;
 }) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -2152,12 +2224,6 @@ function Projects({
       && matchesFilter(filters.scriptStatus, lead.scriptStatus)
       && matchesFilter(filters.format, lead.format);
   });
-  const slateStats = {
-    total: displayProjectLeads.length,
-    urgent: displayProjectLeads.filter((lead) => lead.urgencyLabel === "Urgent").length,
-    picks: displayProjectLeads.filter((lead) => lead.myPicks).length,
-    promoted: displayProjectLeads.filter((lead) => lead.promotedProjectId).length
-  };
   const slatePageSize = 100;
   const sortedLeads = useMemo(() => {
     return [...filteredLeads].sort((a, b) => {
@@ -2256,14 +2322,6 @@ function Projects({
       ) : (
         <>
           <div className="space-y-4">
-            <Panel className="min-h-0">
-              <div className="grid gap-2 md:grid-cols-4">
-                <MetricCard label="Prospects" value={`${slateStats.total}`} sub="Materials we might be interested in" />
-                <MetricCard label="Urgent" value={`${slateStats.urgent}`} sub="Needs attention" />
-                <MetricCard label="My Picks" value={`${slateStats.picks}`} sub="Producer marked" />
-                <MetricCard label="Promoted" value={`${slateStats.promoted}`} sub="Now in development" />
-              </div>
-            </Panel>
             <Panel>
               <div className="mb-3 grid gap-2 lg:grid-cols-[1fr_repeat(4,150px)]">
                 <div className="relative">
@@ -2358,7 +2416,7 @@ function Projects({
             </Panel>
           </div>
           {selectedLead ? (
-            <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm" onMouseDown={closeProspect}>
+            <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm" onMouseDown={closeProspect}>
               <div className="w-full max-w-5xl" onMouseDown={(event) => event.stopPropagation()}>
                 <SlateLeadPanel
                   lead={selectedLead}
@@ -2367,10 +2425,14 @@ function Projects({
                   users={users}
                   currentUser={currentUser}
                   tasks={tasks}
+                  comments={comments}
                   onDraftChange={setLeadDraft}
                   onSave={saveLead}
                   onPromote={onPromoteLead}
                   onCreateTask={onCreateTask}
+                  onCreateComment={onCreateComment}
+                  onUpdateComment={onUpdateComment}
+                  onDeleteComment={onDeleteComment}
                   assets={selectedLeadAssets}
                   canManageAssets={canManageScriptLibrary(currentUser.role)}
                   onUploadAsset={onUploadProspectAsset}
@@ -2470,7 +2532,7 @@ function SlateCreateModal({ users, onClose, onCreate }: { users: HammerUser[]; o
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm">
       <form onSubmit={submit} className="w-full max-w-4xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl">
         <div className="flex items-start justify-between gap-3">
           <SectionHeader eyebrow="Prospects" title="Add Prospect" />
@@ -2499,10 +2561,9 @@ function SlateCreateModal({ users, onClose, onCreate }: { users: HammerUser[]; o
           <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Logline</span>
           <textarea className="field min-h-20" value={draft.logline ?? ""} onChange={(event) => setDraft((current) => ({ ...current, logline: event.target.value }))} />
         </label>
-        <label className="mt-3 grid gap-1">
-          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Notes</span>
-          <textarea className="field min-h-24" value={draft.notes ?? ""} onChange={(event) => setDraft((current) => ({ ...current, notes: event.target.value }))} />
-        </label>
+        <p className="mt-3 rounded-md border border-white/10 bg-white/[0.025] px-3 py-2 text-xs leading-5 text-studio-300">
+          After creating the prospect, open it to add dated notes, attachments, and follow-up history.
+        </p>
         {error ? <p className="mt-3 rounded border border-rose-400/25 bg-rose-500/5 px-2.5 py-2 text-xs text-rose-200">{error}</p> : null}
         <div className="mt-4 flex justify-end gap-2">
           <button type="button" onClick={onClose} className="rounded border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:text-amberline">Cancel</button>
@@ -2520,12 +2581,16 @@ function SlateLeadPanel({
   users,
   currentUser,
   tasks,
+  comments = [],
   assets = [],
   canManageAssets = false,
   onDraftChange,
   onSave,
   onPromote,
   onCreateTask,
+  onCreateComment,
+  onUpdateComment,
+  onDeleteComment,
   onUploadAsset,
   onDeleteAsset,
   onClose
@@ -2536,12 +2601,16 @@ function SlateLeadPanel({
   users: HammerUser[];
   currentUser: HammerUser;
   tasks: HammerTask[];
+  comments?: HammerComment[];
   assets?: ProspectAsset[];
   canManageAssets?: boolean;
   onDraftChange: React.Dispatch<React.SetStateAction<Partial<HammerProjectLead>>>;
   onSave: () => Promise<void>;
   onPromote?: (leadId: string) => Promise<void>;
   onCreateTask?: (input: { projectId?: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => void;
+  onCreateComment?: (input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string; metadataJson?: HammerCommentMetadata }) => Promise<void>;
+  onUpdateComment?: (commentId: string, input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string; metadataJson?: HammerCommentMetadata }) => Promise<void>;
+  onDeleteComment?: (commentId: string) => Promise<void>;
   onUploadAsset?: (input: { prospectId: string; title: string; description: string; source: string; file: File }) => Promise<void>;
   onDeleteAsset?: (assetId: string) => Promise<void>;
   onClose?: () => void;
@@ -2604,17 +2673,12 @@ function SlateLeadPanel({
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Source Materials</p>
-            <p className="mt-1 text-[13px] leading-5 text-studio-300">Scripts, PDFs, source links, and status tracking for this prospect.</p>
+            <p className="mt-1 text-[13px] leading-5 text-studio-300">Quick links for scripts, PDFs, and source references attached to this prospect.</p>
           </div>
           <div className="flex flex-wrap gap-1.5">
             {lead.scriptPdf ? <TableLink href={lead.scriptPdf}>Script PDF</TableLink> : null}
             {lead.sourceLink ? <TableLink href={lead.sourceLink}>Source Link</TableLink> : null}
           </div>
-        </div>
-        <div className="mt-3 grid gap-2 md:grid-cols-3">
-          <SmallStat label="Script Status" value={lead.scriptStatus || "-"} />
-          <SmallStat label="Format" value={lead.format || lead.adaptationFormat || "-"} />
-          <SmallStat label="Rights" value={lead.rightsStatus || "-"} />
         </div>
       </div>
       <div className="mt-4 grid gap-2 md:grid-cols-2">
@@ -2656,20 +2720,316 @@ function SlateLeadPanel({
           </div>
         </div>
       ) : null}
-      <label className="mt-3 grid gap-1">
-        <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Notes</span>
-        <textarea className="field min-h-24" value={draft.notes ?? ""} onChange={(event) => onDraftChange((current) => ({ ...current, notes: event.target.value }))} />
-      </label>
-      <div className="mt-3 grid gap-2 md:grid-cols-2">
-        <SmallStat label="Priority" value={`${lead.priorityScore ?? "-"}`} />
-        <SmallStat label="Votes" value={`${lead.votes ?? "-"}`} />
-        <SmallStat label="Year Written" value={lead.yearWritten || "-"} />
-        <SmallStat label="Source" value={lead.sourceLink ? "Available" : "Missing"} />
-      </div>
-      <div className="mt-4 flex justify-end">
-        <PrimaryButton icon={CheckCircle2} label={saving ? "Saving Slate Item" : "Save Slate Item"} onClick={savePanel} />
-      </div>
+      <ProspectNotesPanel
+        prospect={lead}
+        legacyNotes={lead.notes}
+        comments={comments}
+        users={users}
+        currentUser={currentUser}
+        onCreateComment={onCreateComment}
+        onUpdateComment={onUpdateComment}
+        onDeleteComment={onDeleteComment}
+      />
     </Panel>
+  );
+}
+
+function ProspectNotesPanel({
+  prospect,
+  legacyNotes,
+  comments,
+  users,
+  currentUser,
+  onCreateComment,
+  onUpdateComment,
+  onDeleteComment
+}: {
+  prospect: HammerProjectLead;
+  legacyNotes?: string;
+  comments: HammerComment[];
+  users: HammerUser[];
+  currentUser: HammerUser;
+  onCreateComment?: (input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string; metadataJson?: HammerCommentMetadata }) => Promise<void>;
+  onUpdateComment?: (commentId: string, input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string; metadataJson?: HammerCommentMetadata }) => Promise<void>;
+  onDeleteComment?: (commentId: string) => Promise<void>;
+}) {
+  const [body, setBody] = useState("");
+  const [noteType, setNoteType] = useState<HammerNoteType>("GENERAL");
+  const [visibility, setVisibility] = useState<HammerComment["visibility"]>("PROJECT_TEAM");
+  const [selectedCommentId, setSelectedCommentId] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const prospectComments = comments
+    .filter((comment) => comment.targetType === "PROSPECT" && comment.targetId === prospect.id && comment.status !== "ARCHIVED")
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+  const selectedComment = prospectComments.find((comment) => comment.id === selectedCommentId);
+
+  async function saveNote() {
+    if (!onCreateComment || !body.trim()) {
+      setMessage(body.trim() ? "Notes cannot be saved from this view yet." : "Write a note before saving.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      await onCreateComment({
+        targetType: "PROSPECT",
+        targetId: prospect.id,
+        body: body.trim(),
+        visibility,
+        metadataJson: { noteType, tags: [] }
+      });
+      setBody("");
+      setNoteType("GENERAL");
+      setVisibility("PROJECT_TEAM");
+      setMessage("Note saved.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not save note.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 rounded-lg border border-white/10 bg-white/[0.025] p-3">
+      <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Notes</p>
+          <p className="mt-1 text-[13px] leading-5 text-studio-300">Add dated prospect notes for coverage, rights, meetings, and follow-ups.</p>
+        </div>
+        <Badge value={`${prospectComments.length} note${prospectComments.length === 1 ? "" : "s"}`} subtle />
+      </div>
+      <div className="mt-3 grid gap-2 md:grid-cols-[170px_170px_1fr] md:items-end">
+        <label className="grid gap-1">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">Type</span>
+          <select className="field" value={noteType} onChange={(event) => setNoteType(event.target.value as HammerNoteType)}>
+            {hammerNoteTypes.map((type) => <option key={type} value={type}>{noteTypeLabel(type)}</option>)}
+          </select>
+        </label>
+        <label className="grid gap-1">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">Visibility</span>
+          <select className="field" value={visibility} onChange={(event) => setVisibility(event.target.value as HammerComment["visibility"])}>
+            <option value="PROJECT_TEAM">Project Team</option>
+            <option value="INTERNAL">Internal</option>
+            <option value="EXECUTIVE_ONLY">Executive Only</option>
+          </select>
+        </label>
+      </div>
+      <textarea className="field mt-2 min-h-28 whitespace-pre-wrap leading-6" value={body} onChange={(event) => setBody(event.target.value)} placeholder="Add a prospect note..." />
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+        {message ? <p className="text-xs text-studio-300">{message}</p> : <span />}
+        <button type="button" disabled={busy || !body.trim()} onClick={() => void saveNote()} className="inline-flex items-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">
+          <CheckCircle2 className="h-4 w-4" />
+          {busy ? "Saving..." : "Save Note"}
+        </button>
+      </div>
+      {legacyNotes?.trim() ? (
+        <div className="mt-3 rounded-md border border-amber-300/20 bg-amber-300/5 p-2.5">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-amber-200">Imported Prospect Note</p>
+          <p className="mt-1 whitespace-pre-wrap text-[13px] leading-5 text-studio-300">{legacyNotes}</p>
+        </div>
+      ) : null}
+      <div className="mt-3 grid gap-2">
+        {prospectComments.length ? prospectComments.map((comment) => {
+          const metadata = noteMetadata(comment);
+          const isLong = comment.body.length > 240 || comment.body.includes("\n");
+          return (
+            <button key={comment.id} type="button" onClick={() => setSelectedCommentId(comment.id)} className="rounded-md border border-white/10 bg-white/[0.03] p-3 text-left transition hover:border-amberline/35 hover:bg-white/[0.055]">
+              <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Badge value={noteTypeLabel(metadata.noteType)} subtle />
+                  <span className="rounded-full border border-white/10 px-2 py-0.5 text-[11px] font-semibold text-studio-400">{statusLabel(comment.visibility)}</span>
+                </div>
+                <p className="shrink-0 text-xs text-studio-500">{userNameFromList(comment.createdById, users)} / {formatNoteTimestamp(comment.createdAt)}</p>
+              </div>
+              <p className="mt-2 line-clamp-3 whitespace-pre-wrap text-[13px] leading-5 text-studio-300">{comment.body}</p>
+              {metadata.tags.length ? (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {metadata.tags.map((tag, index) => <span key={`${tag.key}-${tag.value}-${index}`} className="rounded-full border border-emerald-300/20 bg-emerald-400/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-100"><span className="text-emerald-300">{tag.key}</span>: {tag.value}</span>)}
+                </div>
+              ) : null}
+              {isLong ? <p className="mt-2 text-xs font-semibold text-amberline">Read more</p> : null}
+            </button>
+          );
+        }) : legacyNotes?.trim() ? null : <EmptyState label="No notes yet." />}
+      </div>
+      {selectedComment ? (
+        <ProspectNoteDialog
+          prospect={prospect}
+          comment={selectedComment}
+          users={users}
+          currentUser={currentUser}
+          onClose={() => setSelectedCommentId("")}
+          onUpdateComment={onUpdateComment}
+          onDeleteComment={onDeleteComment}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ProspectNoteDialog({
+  prospect,
+  comment,
+  users,
+  onClose,
+  onUpdateComment,
+  onDeleteComment
+}: {
+  prospect: HammerProjectLead;
+  comment: HammerComment;
+  users: HammerUser[];
+  currentUser: HammerUser;
+  onClose: () => void;
+  onUpdateComment?: (commentId: string, input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string; metadataJson?: HammerCommentMetadata }) => Promise<void>;
+  onDeleteComment?: (commentId: string) => Promise<void>;
+}) {
+  const metadata = noteMetadata(comment);
+  const [body, setBody] = useState(comment.body);
+  const [noteType, setNoteType] = useState<HammerNoteType>(metadata.noteType);
+  const [visibility, setVisibility] = useState<HammerComment["visibility"]>(comment.visibility);
+  const [tagDrafts, setTagDrafts] = useState<HammerNoteTag[]>(metadata.tags);
+  const [tagKeyDraft, setTagKeyDraft] = useState("");
+  const [tagValueDraft, setTagValueDraft] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState<"save" | "delete" | "">("");
+
+  function addTag() {
+    const key = normalizeTagKey(tagKeyDraft);
+    const value = tagValueDraft.trim().replace(/\s+/g, " ");
+    if (!key || !value) {
+      setMessage("Add both a tag key and value, or leave tags blank.");
+      return;
+    }
+    if (tagDrafts.some((tag) => tag.key.toLowerCase() === key.toLowerCase() && tag.value.toLowerCase() === value.toLowerCase())) {
+      setMessage("That tag is already attached to this note.");
+      return;
+    }
+    setTagDrafts((current) => [...current, { key, value }]);
+    setTagKeyDraft("");
+    setTagValueDraft("");
+    setMessage("");
+  }
+
+  function importNoteText(text: string) {
+    setBody((current) => current.trim() ? `${current}\n\n${text}` : text);
+  }
+
+  async function save() {
+    if (!onUpdateComment || !body.trim()) {
+      setMessage(body.trim() ? "This note cannot be edited from this view yet." : "Write a note before saving.");
+      return;
+    }
+    setBusy("save");
+    setMessage("");
+    try {
+      await onUpdateComment(comment.id, {
+        targetType: "PROSPECT",
+        targetId: prospect.id,
+        body,
+        visibility,
+        metadataJson: { noteType, tags: normalizedDocumentTags(tagDrafts) }
+      });
+      onClose();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not update note.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function remove() {
+    if (!onDeleteComment) {
+      setMessage("This note cannot be deleted from this view yet.");
+      return;
+    }
+    setBusy("delete");
+    setMessage("");
+    try {
+      await onDeleteComment(comment.id);
+      onClose();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not delete note.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[110] flex items-start justify-center overflow-y-auto bg-studio-950/80 px-4 py-8 backdrop-blur-sm" onMouseDown={onClose}>
+      <div className="w-full max-w-5xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Prospect Note</p>
+            <h3 className="mt-1 truncate text-xl font-semibold text-studio-100">{prospect.title}</h3>
+            <p className="mt-1 text-xs text-studio-400">{userNameFromList(comment.createdById, users)} / {formatNoteTimestamp(comment.createdAt)}</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close note">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Note Type</span>
+            <select className="field" value={noteType} onChange={(event) => setNoteType(event.target.value as HammerNoteType)}>
+              {hammerNoteTypes.map((type) => <option key={type} value={type}>{noteTypeLabel(type)}</option>)}
+            </select>
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Visibility</span>
+            <select className="field" value={visibility} onChange={(event) => setVisibility(event.target.value as HammerComment["visibility"])}>
+              <option value="PROJECT_TEAM">Project Team</option>
+              <option value="INTERNAL">Internal</option>
+              <option value="EXECUTIVE_ONLY">Executive Only</option>
+            </select>
+          </label>
+        </div>
+        <label className="mt-3 grid gap-1">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Note</span>
+          <textarea className="field min-h-[300px] whitespace-pre-wrap font-sans leading-6" value={body} onChange={(event) => setBody(event.target.value)} />
+        </label>
+        <div className="mt-3">
+          <NoteFileImportControl onImport={importNoteText} disabled={Boolean(busy)} />
+        </div>
+        <div className="mt-3 grid gap-2">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Tags</span>
+          {tagDrafts.length ? (
+            <div className="flex flex-wrap gap-1.5">
+              {tagDrafts.map((tag, index) => (
+                <span key={`${tag.key}-${tag.value}-${index}`} className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-emerald-300/25 bg-emerald-400/10 px-2.5 py-1 text-xs font-semibold text-emerald-100">
+                  <span className="truncate"><span className="text-emerald-300">{tag.key}</span>: {tag.value}</span>
+                  <button type="button" onClick={() => setTagDrafts((current) => current.filter((_, currentIndex) => currentIndex !== index))} className="rounded-full text-emerald-100/70 transition hover:text-white" aria-label={`Remove ${tag.key} tag`}>
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          ) : null}
+          <div className="grid gap-2 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_auto] md:items-end">
+            <label className="grid gap-1">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">Key</span>
+              <input className="field" value={tagKeyDraft} onChange={(event) => setTagKeyDraft(event.target.value)} placeholder="priority" />
+            </label>
+            <label className="grid gap-1">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">Value</span>
+              <input className="field" value={tagValueDraft} onChange={(event) => setTagValueDraft(event.target.value)} placeholder="follow-up" onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addTag(); } }} />
+            </label>
+            <button type="button" onClick={addTag} className="min-h-10 rounded-md border border-white/10 px-3 py-2 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline">Add</button>
+          </div>
+        </div>
+        {message ? <p className="mt-3 rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 text-xs text-studio-300">{message}</p> : null}
+        <div className="mt-4 flex flex-wrap justify-between gap-2 border-t border-white/10 pt-3">
+          <DangerButton label={busy === "delete" ? "Deleting..." : "Delete Note"} onClick={() => void remove()} />
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={onClose} className="rounded border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:text-amberline">Cancel</button>
+            <button type="button" disabled={busy === "save" || !body.trim()} onClick={() => void save()} className="inline-flex items-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">
+              <CheckCircle2 className="h-4 w-4" />
+              {busy === "save" ? "Saving..." : "Save Note"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -4554,7 +4914,7 @@ function Collections({
                 onClick={() => { setMode("slate"); router.replace("/collections?type=slate", { scroll: false }); }}
               />
               <CollectionModeButton
-                label="Script Groups"
+                label="Document Packets"
                 count={visibleScriptCollections.length}
                 detail={`${scriptItemCount} item${scriptItemCount === 1 ? "" : "s"}`}
                 active={mode === "scripts"}
@@ -4869,7 +5229,7 @@ function SlateCollections({
     <div className="collections-grid grid h-full min-h-0 gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
       <div className="collections-column flex min-h-0 flex-col gap-4">
         <Panel className="flex min-h-0 flex-1 flex-col">
-          <SectionHeader eyebrow="Review Packets" title="Slate Collections" action={canManage ? <PrimaryButton icon={Plus} label="Create" onClick={() => setCreateOpen(true)} /> : undefined} />
+          <SectionHeader eyebrow="Packets" title="Slate Packets" action={canManage ? <PrimaryButton icon={Plus} label="Create Packet" onClick={() => setCreateOpen(true)} /> : undefined} />
           <div className="collections-list mt-3 grid min-h-0 flex-1 content-start gap-2 overflow-y-auto pr-0.5">
             {collections.length ? collections.map((collection) => {
               const count = items.filter((item) => item.collectionId === collection.id).length;
@@ -4887,7 +5247,7 @@ function SlateCollections({
                   <p className="mt-1 line-clamp-2 text-xs leading-5 text-studio-400">{collection.description || "No description yet."}</p>
                 </button>
               );
-            }) : <EmptyState label="No slate collections yet." />}
+            }) : <EmptyState label="No slate packets yet." />}
           </div>
         </Panel>
 
@@ -5373,7 +5733,7 @@ function ScriptCollections({
     <div className="collections-grid grid h-full min-h-0 gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
       <div className="collections-column flex min-h-0 flex-col gap-4">
         <Panel className="flex min-h-0 flex-1 flex-col">
-          <SectionHeader eyebrow="Review Groups" title="Collections" action={canManage ? <PrimaryButton icon={Plus} label="Create" onClick={() => setCreateOpen(true)} /> : undefined} />
+          <SectionHeader eyebrow="Packets" title="Document Packets" action={canManage ? <PrimaryButton icon={Plus} label="Create Packet" onClick={() => setCreateOpen(true)} /> : undefined} />
           <div className="collections-list mt-3 grid min-h-0 flex-1 content-start gap-2 overflow-y-auto pr-0.5">
             {collections.length ? collections.map((collection) => {
               const count = items.filter((item) => item.collectionId === collection.id).length;
@@ -5391,7 +5751,7 @@ function ScriptCollections({
                   <p className="mt-1 line-clamp-2 text-xs leading-5 text-studio-400">{collection.description || "No description yet."}</p>
                 </button>
               );
-            }) : <EmptyState label="No collections yet." />}
+            }) : <EmptyState label="No document packets yet." />}
           </div>
         </Panel>
 
@@ -6192,6 +6552,7 @@ function NotesCenter({
   comments,
   users,
   projects,
+  prospects = [],
   documents,
   versions,
   tasks,
@@ -6204,6 +6565,7 @@ function NotesCenter({
   comments: HammerComment[];
   users: HammerUser[];
   projects: HammerProject[];
+  prospects?: HammerProjectLead[];
   documents: HammerDocument[];
   versions: HammerDocumentVersion[];
   tasks: HammerTask[];
@@ -6224,7 +6586,7 @@ function NotesCenter({
   const filteredNotes = visibleNotes
     .filter((comment) => {
       const metadata = noteMetadata(comment);
-      const context = noteTargetContext(comment, { projects, documents, versions, tasks, assets, approvals });
+      const context = noteTargetContext(comment, { projects, prospects, documents, versions, tasks, assets, approvals });
       const haystack = `${comment.body} ${metadata.noteType} ${metadata.tags.map((tag) => `${tag.key} ${tag.value}`).join(" ")} ${context.label} ${context.parentLabel} ${userNameFromList(comment.createdById, users)}`.toLowerCase();
       if (targetFilter !== "ALL" && comment.targetType !== targetFilter) return false;
       if (typeFilter !== "ALL" && metadata.noteType !== typeFilter) return false;
@@ -6279,6 +6641,7 @@ function NotesCenter({
                 comment={comment}
                 users={users}
                 projects={projects}
+                prospects={prospects}
                 documents={documents}
                 versions={versions}
                 tasks={tasks}
@@ -6295,6 +6658,7 @@ function NotesCenter({
           comment={selectedComment}
           users={users}
           projects={projects}
+          prospects={prospects}
           documents={documents}
           versions={versions}
           tasks={tasks}
@@ -6314,6 +6678,7 @@ function GlobalNoteCard({
   comment,
   users,
   projects,
+  prospects = [],
   documents,
   versions,
   tasks,
@@ -6324,6 +6689,7 @@ function GlobalNoteCard({
   comment: HammerComment;
   users: HammerUser[];
   projects: HammerProject[];
+  prospects?: HammerProjectLead[];
   documents: HammerDocument[];
   versions: HammerDocumentVersion[];
   tasks: HammerTask[];
@@ -6332,7 +6698,7 @@ function GlobalNoteCard({
   onOpen: () => void;
 }) {
   const metadata = noteMetadata(comment);
-  const context = noteTargetContext(comment, { projects, documents, versions, tasks, assets, approvals });
+  const context = noteTargetContext(comment, { projects, prospects, documents, versions, tasks, assets, approvals });
   const isLong = comment.body.length > 300 || comment.body.includes("\n");
   return (
     <button type="button" onClick={onOpen} className="w-full rounded-lg border border-white/10 bg-white/[0.03] p-3 text-left transition hover:border-amberline/35 hover:bg-white/[0.055]">
@@ -6363,6 +6729,7 @@ function GlobalNoteDialog({
   comment,
   users,
   projects,
+  prospects = [],
   documents,
   versions,
   tasks,
@@ -6375,6 +6742,7 @@ function GlobalNoteDialog({
   comment: HammerComment;
   users: HammerUser[];
   projects: HammerProject[];
+  prospects?: HammerProjectLead[];
   documents: HammerDocument[];
   versions: HammerDocumentVersion[];
   tasks: HammerTask[];
@@ -6385,7 +6753,7 @@ function GlobalNoteDialog({
   onUpdateComment?: (commentId: string, input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string; metadataJson?: HammerCommentMetadata }) => Promise<void>;
   onDeleteComment?: (commentId: string) => Promise<void>;
 }) {
-  const context = noteTargetContext(comment, { projects, documents, versions, tasks, assets, approvals });
+  const context = noteTargetContext(comment, { projects, prospects, documents, versions, tasks, assets, approvals });
   const metadata = noteMetadata(comment);
   const [body, setBody] = useState(comment.body);
   const [noteType, setNoteType] = useState<HammerNoteType>(metadata.noteType);
@@ -7622,6 +7990,39 @@ function NewTaskDialog({
 const contactTypes: ContactType[] = ["WRITER", "PRODUCER", "ARTIST", "EXECUTIVE", "AGENCY", "MANAGEMENT", "LEGAL", "VENDOR", "OTHER"];
 const contactStatuses: ContactStatus[] = ["NEW", "ACTIVE", "FOLLOW_UP", "WAITING", "DO_NOT_CONTACT", "ARCHIVED"];
 const contactRelationshipTypes: ContactRelationshipType[] = ["AGENT", "MANAGER", "REPRESENTS", "WORKS_WITH", "ASSISTANT", "LEGAL_REP", "REFERRED_BY", "OTHER"];
+const outreachEngagementTypes: OutreachEngagementType[] = ["CALL", "MEETING", "EMAIL", "INTRO", "MATERIALS_SENT", "FOLLOW_UP", "NOTE", "OTHER"];
+
+type OutreachContactDraft = {
+  name: string;
+  agency: string;
+  role: string;
+  genre: string;
+  location: string;
+  metWith: string;
+  email: string;
+  phone: string;
+  website: string;
+  status: ContactStatus;
+  ownerId: string;
+  tags: string;
+  lastContacted: string;
+  nextFollowUp: string;
+  projectIds: string[];
+  credits: string;
+  notes: string;
+};
+
+type OutreachEngagementDraft = {
+  type: OutreachEngagementType;
+  engagementDate: string;
+  status: ContactStatus;
+  summary: string;
+  nextStep: string;
+  followUpDate: string;
+  assignedToId: string;
+  priority: TaskPriority;
+  createTask: boolean;
+};
 
 function isTalentContact(contact: HammerContact) {
   return Boolean(contact.isTalent || contact.talentRole || contact.talentGenre || contact.talentAgency || contact.tags?.some((tag) => tag.toLowerCase() === "talent"));
@@ -7679,9 +8080,33 @@ function talentTags(genre: string, tags?: string) {
   return Array.from(new Set(["talent", ...genreTags, ...extraTags]));
 }
 
+function contactDraftFromContact(contact: HammerContact): OutreachContactDraft {
+  const genre = talentGenre(contact);
+  return {
+    name: contact.name,
+    agency: talentAgency(contact),
+    role: talentRole(contact),
+    genre: genre === "-" ? "" : genre,
+    location: talentLocation(contact),
+    metWith: talentMetWith(contact),
+    email: contact.email,
+    phone: contact.phone,
+    website: contact.website ?? "",
+    status: contact.status ?? "ACTIVE",
+    ownerId: contact.ownerId ?? "",
+    tags: (contact.tags ?? []).filter((tag) => tag.toLowerCase() !== "talent" && !splitTalentGenres(genre).includes(tag)).join(", "),
+    lastContacted: contact.lastContacted ?? "",
+    nextFollowUp: contact.nextFollowUp ?? "",
+    projectIds: contact.projectIds,
+    credits: talentCredits(contact),
+    notes: contact.notes === talentCredits(contact) ? "" : contact.notes
+  };
+}
+
 function Contacts({
   initialContacts = hammerContacts,
   contactRelationships = hammerContactRelationships,
+  outreachEngagements = [],
   currentUser,
   users = hammerUsers,
   projects = hammerProjects,
@@ -7693,10 +8118,15 @@ function Contacts({
   onUpdateContact,
   onDeleteContact,
   onCreateRelationship,
-  onDeleteRelationship
+  onDeleteRelationship,
+  onCreateEngagement,
+  onUpdateEngagement,
+  onDeleteEngagement,
+  onCreateTask
 }: {
   initialContacts?: HammerContact[];
   contactRelationships?: HammerContactRelationship[];
+  outreachEngagements?: HammerOutreachEngagement[];
   currentUser: HammerUser;
   users?: HammerUser[];
   projects?: HammerProject[];
@@ -7709,6 +8139,10 @@ function Contacts({
   onDeleteContact?: (contactId: string) => Promise<void>;
   onCreateRelationship?: (input: { fromContactId: string; toContactId: string; relationshipType: ContactRelationshipType; notes?: string }) => Promise<void>;
   onDeleteRelationship?: (relationshipId: string) => Promise<void>;
+  onCreateEngagement?: (input: { contactId: string; type: OutreachEngagementType; engagementDate: string; status: ContactStatus; summary: string; nextStep?: string; followUpDate?: string }) => Promise<void>;
+  onUpdateEngagement?: (engagementId: string, patch: Partial<Omit<HammerOutreachEngagement, "id" | "contactId" | "createdById" | "createdAt" | "updatedAt">>) => Promise<void>;
+  onDeleteEngagement?: (engagementId: string) => Promise<void>;
+  onCreateTask?: (input: { projectId?: string; title: string; description: string; assignedToId: string; dueDate: string; priority: TaskPriority; status?: TaskStatus; targetType: string; targetId: string }) => Promise<void>;
 }) {
   const searchParams = useSearchParams();
   const [search, setSearch] = useState("");
@@ -7720,8 +8154,11 @@ function Contacts({
   const [selectedContactId, setSelectedContactId] = useState("");
   const [expandedNoteContactId, setExpandedNoteContactId] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
+  const [contactEditOpen, setContactEditOpen] = useState(false);
+  const [engagementOpen, setEngagementOpen] = useState(false);
+  const [outreachTab, setOutreachTab] = useState<"contact" | "timeline">("contact");
   const [importMessage, setImportMessage] = useState("");
-  const [draft, setDraft] = useState({
+  const [draft, setDraft] = useState<OutreachContactDraft>({
     name: "",
     agency: "",
     role: "",
@@ -7741,6 +8178,19 @@ function Contacts({
     notes: ""
   });
   const [relationshipDraft, setRelationshipDraft] = useState({ toContactId: "", relationshipType: "AGENT" as ContactRelationshipType, notes: "" });
+  const [engagementDraft, setEngagementDraft] = useState<OutreachEngagementDraft>({
+    type: "MEETING" as OutreachEngagementType,
+    engagementDate: new Date().toISOString().slice(0, 10),
+    status: "ACTIVE" as ContactStatus,
+    summary: "",
+    nextStep: "",
+    followUpDate: "",
+    assignedToId: currentUser.id,
+    priority: "MEDIUM" as TaskPriority,
+    createTask: true
+  });
+  const [editingEngagement, setEditingEngagement] = useState<HammerOutreachEngagement | null>(null);
+  const [engagementBusy, setEngagementBusy] = useState(false);
   const contacts = useMemo(() => {
     if (databaseMode) return initialContacts;
     const localById = new Map(localContacts.map((contact) => [contact.id, contact]));
@@ -7773,6 +8223,17 @@ function Contacts({
   const relationshipScripts = selectedContact ? documents.filter((document) => document.contactId === selectedContact.id || document.source === talentAgency(selectedContact) || document.writerName === selectedContact.name) : [];
   const relationshipTasks = selectedContact ? tasks.filter((task) => task.targetType === "CONTACT" && task.targetId === selectedContact.id) : [];
   const linkedContacts = selectedContact ? contactRelationships.filter((relationship) => relationship.fromContactId === selectedContact.id || relationship.toContactId === selectedContact.id) : [];
+  const selectedEngagements = selectedContact ? outreachEngagements
+    .filter((engagement) => engagement.contactId === selectedContact.id)
+    .sort((left, right) => new Date(right.engagementDate).getTime() - new Date(left.engagementDate).getTime() || new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()) : [];
+  const latestEngagementByContact = useMemo(() => {
+    const latest = new Map<string, string>();
+    outreachEngagements.forEach((engagement) => {
+      const existing = latest.get(engagement.contactId);
+      if (!existing || new Date(engagement.engagementDate).getTime() > new Date(existing).getTime()) latest.set(engagement.contactId, engagement.engagementDate);
+    });
+    return latest;
+  }, [outreachEngagements]);
 
   useEffect(() => {
     try {
@@ -7792,25 +8253,7 @@ function Contacts({
 
   useEffect(() => {
     if (!selectedContact) return;
-    setDraft({
-      name: selectedContact.name,
-      agency: talentAgency(selectedContact),
-      role: talentRole(selectedContact),
-      genre: talentGenre(selectedContact) === "-" ? "" : talentGenre(selectedContact),
-      location: talentLocation(selectedContact),
-      metWith: talentMetWith(selectedContact),
-      email: selectedContact.email,
-      phone: selectedContact.phone,
-      website: selectedContact.website ?? "",
-      status: selectedContact.status ?? "ACTIVE",
-      ownerId: selectedContact.ownerId ?? "",
-      tags: (selectedContact.tags ?? []).filter((tag) => tag.toLowerCase() !== "talent" && !splitTalentGenres(talentGenre(selectedContact)).includes(tag)).join(", "),
-      lastContacted: selectedContact.lastContacted ?? "",
-      nextFollowUp: selectedContact.nextFollowUp ?? "",
-      projectIds: selectedContact.projectIds,
-      credits: talentCredits(selectedContact),
-      notes: selectedContact.notes === talentCredits(selectedContact) ? "" : selectedContact.notes
-    });
+    setDraft(contactDraftFromContact(selectedContact));
   }, [selectedContact]);
 
   async function importContacts(file?: File | null) {
@@ -7886,6 +8329,7 @@ function Contacts({
       window.localStorage.setItem(HAMMER_LOCAL_CONTACTS_STORAGE_KEY, JSON.stringify(nextContacts));
     }
     setImportMessage("Outreach entry updated.");
+    setContactEditOpen(false);
   }
 
   async function addContactRelationship(event: React.FormEvent<HTMLFormElement>) {
@@ -7899,6 +8343,84 @@ function Contacts({
     });
     setRelationshipDraft({ toContactId: "", relationshipType: "AGENT", notes: "" });
     setImportMessage("Outreach relationship added.");
+  }
+
+  async function createEngagement(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedContact || !onCreateEngagement || !engagementDraft.summary.trim()) {
+      setImportMessage("Add meeting notes before saving an engagement.");
+      return;
+    }
+    setEngagementBusy(true);
+    setImportMessage("");
+    try {
+      await onCreateEngagement({
+        contactId: selectedContact.id,
+        type: engagementDraft.type,
+        engagementDate: engagementDraft.engagementDate,
+        status: engagementDraft.status,
+        summary: engagementDraft.summary,
+        nextStep: engagementDraft.nextStep,
+        followUpDate: engagementDraft.followUpDate || undefined
+      });
+      if (engagementDraft.createTask && onCreateTask && engagementDraft.nextStep.trim()) {
+        await onCreateTask({
+          projectId: "",
+          title: `Follow up with ${selectedContact.name}`,
+          description: engagementDraft.nextStep,
+          assignedToId: engagementDraft.assignedToId || currentUser.id,
+          dueDate: engagementDraft.followUpDate,
+          priority: engagementDraft.priority,
+          status: "TODO",
+          targetType: "CONTACT",
+          targetId: selectedContact.id
+        });
+      }
+      setEngagementDraft((current) => ({
+        ...current,
+        type: "MEETING",
+        engagementDate: new Date().toISOString().slice(0, 10),
+        status: "ACTIVE",
+        summary: "",
+        nextStep: "",
+        followUpDate: "",
+        createTask: true
+      }));
+      setImportMessage("Engagement logged.");
+      setEngagementOpen(false);
+    } catch (error) {
+      setImportMessage(error instanceof Error ? error.message : "Could not log engagement.");
+    } finally {
+      setEngagementBusy(false);
+    }
+  }
+
+  async function saveEngagementEdit(input: HammerOutreachEngagement) {
+    if (!onUpdateEngagement) return;
+    setEngagementBusy(true);
+    try {
+      await onUpdateEngagement(input.id, {
+        type: input.type,
+        engagementDate: input.engagementDate,
+        status: input.status,
+        summary: input.summary,
+        nextStep: input.nextStep,
+        followUpDate: input.followUpDate
+      });
+      setEditingEngagement(null);
+      setImportMessage("Engagement updated.");
+    } catch (error) {
+      setImportMessage(error instanceof Error ? error.message : "Could not update engagement.");
+    } finally {
+      setEngagementBusy(false);
+    }
+  }
+
+  async function removeEngagement(engagementId: string) {
+    if (!onDeleteEngagement) return;
+    if (!window.confirm("Delete this outreach engagement?")) return;
+    await onDeleteEngagement(engagementId);
+    setImportMessage("Engagement deleted.");
   }
 
   async function createManualContact(input: Omit<HammerContact, "id">) {
@@ -7933,9 +8455,20 @@ function Contacts({
     setImportMessage("Outreach entry deleted.");
   }
 
+  function openContactDetails(contact: HammerContact) {
+    setSelectedContactId(contact.id);
+    setDraft(contactDraftFromContact(contact));
+    setContactEditOpen(true);
+  }
+
+  function openEngagementTimeline(contact: HammerContact) {
+    setSelectedContactId(contact.id);
+    setEngagementOpen(true);
+  }
+
   return (
     <div className="space-y-4">
-      <div className={cn("grid gap-4", selectedContact ? "xl:grid-cols-[minmax(0,1fr)_440px]" : "xl:grid-cols-1")}>
+      <div className="space-y-4">
         <Panel>
           <SectionHeader eyebrow="Outreach Directory" title="Outreach" action={<div className="flex flex-wrap gap-2"><PrimaryButton icon={Plus} label="Add Contact" onClick={() => setCreateOpen(true)} /><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline"><UploadCloud className="h-3.5 w-3.5" />Import CSV<input className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => importContacts(event.target.files?.[0])} /></label><button type="button" className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 hover:border-amberline/40 hover:text-amberline" onClick={exportContacts}>Export CSV</button></div>} />
           <div className="mb-3 grid gap-2 lg:grid-cols-[1fr_170px_170px_150px_140px]">
@@ -7961,34 +8494,64 @@ function Contacts({
           {importMessage ? <p className="mb-3 text-xs text-studio-300">{importMessage}</p> : null}
           {filteredContacts.length ? (
             <div className="data-scroll contacts-list-scroll">
-              <table className="data-table min-w-[1120px]">
+              <table className="data-table table-fixed">
                 <thead className="text-[11px] uppercase tracking-[0.12em] text-studio-400">
-                  <tr><th className="py-2">Name</th><th>Role</th><th>Agency / Management</th><th>Genre</th><th>Location</th><th>Met With?</th><th>Credits</th></tr>
+                  <tr><th className="w-[24%] py-2">Name</th><th className="w-[13%]">Role</th><th className="w-[18%]">Agency / Management</th><th className="w-[15%]">Genre</th><th className="w-[11%]">Last Contact</th><th className="w-[11%]">Follow-Up</th><th className="w-[8%] text-right">Actions</th></tr>
                 </thead>
                 <tbody className="divide-y divide-white/10">
-                  {filteredContacts.map((contact) => (
-                    <tr key={contact.id} onClick={() => setSelectedContactId(contact.id)} className={cn("cursor-pointer text-studio-200 transition hover:bg-white/[0.035]", selectedContact?.id === contact.id && "bg-emerald-400/10")}>
-                      <td className="py-2.5">
-                        <p className="font-semibold text-studio-100">{contact.name}</p>
-                        <p className="mt-0.5 text-xs text-studio-400">{contact.email || contact.phone || "Click to view contact info"}</p>
-                      </td>
-                      <td><Badge value={talentRole(contact)} subtle /></td>
-                      <td className="max-w-[230px] whitespace-pre-line text-studio-300">{talentAgency(contact)}</td>
-                      <td className="max-w-[180px] text-studio-300">{talentGenre(contact)}</td>
-                      <td className="text-studio-300">{talentLocation(contact) || "-"}</td>
-                      <td className="text-studio-300">{talentMetWith(contact) || "-"}</td>
-                      <td className="max-w-[320px] text-studio-300"><ContactNotesPreview notes={talentCredits(contact)} onReadMore={() => setExpandedNoteContactId(contact.id)} /></td>
-                    </tr>
-                  ))}
+                  {filteredContacts.map((contact) => {
+                    const lastContact = contact.lastContacted || latestEngagementByContact.get(contact.id) || "";
+                    return (
+                      <tr key={contact.id} className={cn("text-studio-200 transition hover:bg-white/[0.035]", selectedContact?.id === contact.id && "bg-emerald-400/10")}>
+                        <td className="py-2.5">
+                          <p className="truncate font-semibold text-studio-100" title={contact.name}>{contact.name}</p>
+                          <p className="mt-0.5 truncate text-xs text-studio-400" title={contact.email || contact.phone || "No contact info yet"}>{contact.email || contact.phone || "No contact info yet"}</p>
+                        </td>
+                        <td><Badge value={talentRole(contact)} subtle /></td>
+                        <td className="truncate text-studio-300" title={talentAgency(contact)}>{talentAgency(contact)}</td>
+                        <td className="truncate text-studio-300" title={talentGenre(contact)}>{talentGenre(contact)}</td>
+                        <td className="truncate text-studio-300">{lastContact || "-"}</td>
+                        <td className="truncate text-studio-300">{contact.nextFollowUp || "-"}</td>
+                        <td className="py-2.5">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button type="button" onClick={() => openContactDetails(contact)} title="Contact details" className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/10 bg-white/[0.025] text-studio-200 transition hover:border-emerald-300/40 hover:text-emerald-200">
+                              <ContactRound className="h-3.5 w-3.5" />
+                            </button>
+                            <button type="button" onClick={() => openEngagementTimeline(contact)} title="Engagement timeline" className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/10 bg-white/[0.025] text-studio-200 transition hover:border-amberline/40 hover:text-amberline">
+                              <CalendarClock className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           ) : <EmptyState label="No outreach contacts match this search." />}
         </Panel>
 
-        {selectedContact ? (
-          <Panel>
-            <div className="space-y-3">
+      </div>
+
+      {selectedContact ? (
+        <div className="hidden fixed inset-0 z-[90] items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm" onMouseDown={() => setSelectedContactId("")}>
+          <div className="w-full max-w-6xl" onMouseDown={(event) => event.stopPropagation()}>
+            <Panel className="max-h-[calc(100vh-4rem)] overflow-hidden shadow-2xl">
+              <div className="mb-3 flex flex-col gap-3 border-b border-white/10 pb-3 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Outreach Record</p>
+                  <h2 className="mt-1 text-2xl font-semibold text-studio-100">{selectedContact.name}</h2>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button type="button" onClick={() => setOutreachTab("contact")} className={cn("rounded-md border px-3 py-2 text-sm font-semibold transition", outreachTab === "contact" ? "border-emerald-300/40 bg-emerald-400/15 text-emerald-100" : "border-white/10 bg-white/[0.03] text-studio-300 hover:border-amberline/40 hover:text-studio-100")}>Contact</button>
+                  <button type="button" onClick={() => setOutreachTab("timeline")} className={cn("rounded-md border px-3 py-2 text-sm font-semibold transition", outreachTab === "timeline" ? "border-emerald-300/40 bg-emerald-400/15 text-emerald-100" : "border-white/10 bg-white/[0.03] text-studio-300 hover:border-amberline/40 hover:text-studio-100")}>Engagement Timeline</button>
+                  <button type="button" onClick={() => setSelectedContactId("")} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close outreach record">
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+              <div className="max-h-[calc(100vh-10rem)] overflow-y-auto pr-1">
+                <div className="space-y-3">
               <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                   <div>
@@ -8005,40 +8568,45 @@ function Contacts({
                     <button type="button" onClick={() => setSelectedContactId("")} className="rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-xs font-semibold text-studio-300 transition hover:border-amberline/40 hover:text-studio-100">Collapse</button>
                   </div>
                 </div>
-                <div className="mt-4 grid gap-3 md:grid-cols-2">
-                  <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Name</span><input className="field" value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Contact name" /></label>
-                  <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Role</span><input className="field" value={draft.role} onChange={(event) => setDraft((current) => ({ ...current, role: event.target.value }))} placeholder="Writer, director, artist..." /></label>
-                  <label className="grid gap-1 md:col-span-2"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Agency / Management</span><textarea className="field min-h-20" value={draft.agency} onChange={(event) => setDraft((current) => ({ ...current, agency: event.target.value }))} placeholder="Agency, manager, rep" /></label>
-                  <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Genre</span><input className="field" value={draft.genre} onChange={(event) => setDraft((current) => ({ ...current, genre: event.target.value }))} placeholder="Horror, Action" /></label>
-                  <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Location</span><input className="field" value={draft.location} onChange={(event) => setDraft((current) => ({ ...current, location: event.target.value }))} placeholder="US, UK, Los Angeles" /></label>
-                  <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Met With?</span><input className="field" value={draft.metWith} onChange={(event) => setDraft((current) => ({ ...current, metWith: event.target.value }))} placeholder="Yes, no, date, notes" /></label>
-                  <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Status</span><select className="field" value={draft.status} onChange={(event) => setDraft((current) => ({ ...current, status: event.target.value as ContactStatus }))}>{contactStatuses.map((contactStatus) => <option key={contactStatus} value={contactStatus}>{statusLabel(contactStatus)}</option>)}</select></label>
-                  <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Email</span><input className="field" type="email" value={draft.email} onChange={(event) => setDraft((current) => ({ ...current, email: event.target.value }))} placeholder="name@example.com" /></label>
-                  <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Phone</span><input className="field" value={draft.phone} onChange={(event) => setDraft((current) => ({ ...current, phone: event.target.value }))} placeholder="Phone number" /></label>
-                  <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Website</span><input className="field" value={draft.website} onChange={(event) => setDraft((current) => ({ ...current, website: event.target.value }))} placeholder="https://..." /></label>
-                  <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Relationship Owner</span><select className="field" value={draft.ownerId} onChange={(event) => setDraft((current) => ({ ...current, ownerId: event.target.value }))}><option value="">Unassigned owner</option>{users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label>
-                  <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Last Contacted</span><input className="field" type="date" value={draft.lastContacted} onChange={(event) => setDraft((current) => ({ ...current, lastContacted: event.target.value }))} /></label>
-                  <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Next Follow-Up</span><input className="field" type="date" value={draft.nextFollowUp} onChange={(event) => setDraft((current) => ({ ...current, nextFollowUp: event.target.value }))} /></label>
+                <div className="mt-4 grid gap-3 md:grid-cols-4">
+                  <MiniMeta label="Email" value={selectedContact.email || "-"} />
+                  <MiniMeta label="Phone" value={selectedContact.phone || "-"} />
+                  <MiniMeta label="Last Contact" value={selectedContact.lastContacted || latestEngagementByContact.get(selectedContact.id) || "-"} />
+                  <MiniMeta label="Next Follow-Up" value={selectedContact.nextFollowUp || "-"} />
                 </div>
-                <label className="mt-3 grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Credits</span><textarea className="field min-h-28" value={draft.credits} onChange={(event) => setDraft((current) => ({ ...current, credits: event.target.value }))} placeholder="Film, TV, theatre, awards, relevant credits" /></label>
-                <label className="mt-3 grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Internal Notes / Next Step</span><textarea className="field min-h-24" value={draft.notes} onChange={(event) => setDraft((current) => ({ ...current, notes: event.target.value }))} placeholder="What should happen next with this person?" /></label>
-                <label className="mt-3 grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Additional Tags</span><input className="field" value={draft.tags} onChange={(event) => setDraft((current) => ({ ...current, tags: event.target.value }))} placeholder="Tags, separated by commas" /></label>
-                <div className="mt-3">
-                  <div className="mb-1 flex items-center justify-between gap-2"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Assigned Development Slate</span><span className="text-[11px] text-studio-500">{draft.projectIds.length} selected</span></div>
-                  <div className="grid max-h-36 gap-1 overflow-auto rounded-md border border-white/10 bg-white/[0.025] p-2 md:grid-cols-2">
-                    {projects.map((project) => {
-                      const checked = draft.projectIds.includes(project.id);
-                      return (
-                        <label key={project.id} className={cn("flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-[13px] text-studio-300 transition hover:bg-white/[0.04] hover:text-studio-100", checked && "bg-emerald-400/10 text-studio-100")}>
-                          <input type="checkbox" className="h-3.5 w-3.5 accent-emerald-400" checked={checked} onChange={(event) => setDraft((current) => ({ ...current, projectIds: event.target.checked ? [...current.projectIds, project.id] : current.projectIds.filter((projectId) => projectId !== project.id) }))} />
-                          <span className="truncate">{project.title}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <PrimaryButton icon={Pencil} label="Contact Details" onClick={() => setContactEditOpen(true)} />
+                  <PrimaryButton icon={Plus} label="Engagement" onClick={() => setEngagementOpen(true)} />
+                  <button type="button" onClick={deleteSelectedContact} className="inline-flex items-center gap-1.5 rounded border border-rose-400/25 bg-rose-500/5 px-2.5 py-1.5 text-xs font-semibold text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200"><Trash2 className="h-3.5 w-3.5" />Delete</button>
                 </div>
-                <div className="mt-3 flex flex-wrap justify-end gap-2"><PrimaryButton icon={CheckCircle2} label="Save Contact" onClick={saveContact} /><button type="button" onClick={deleteSelectedContact} className="inline-flex items-center gap-1.5 rounded border border-rose-400/25 bg-rose-500/5 px-2.5 py-1.5 text-xs font-semibold text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200"><Trash2 className="h-3.5 w-3.5" />Delete</button></div>
               </div>
+              {outreachTab === "timeline" ? (
+              <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
+                <SectionHeader eyebrow="Engagement Timeline" title="Calls, Meetings, Notes" action={<PrimaryButton icon={Plus} label="Engagement" onClick={() => setEngagementOpen(true)} />} />
+                <div className="mt-3 grid max-h-[420px] gap-2 overflow-y-auto pr-1">
+                  {selectedEngagements.length ? selectedEngagements.map((engagement) => (
+                    <div key={engagement.id} className="rounded-md border border-white/10 bg-white/[0.025] p-3">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge value={engagement.type} />
+                          <Badge value={engagement.status} subtle />
+                          <span className="text-xs text-studio-400">{engagement.engagementDate}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <button type="button" onClick={() => setEditingEngagement(engagement)} className="rounded border border-white/10 px-2 py-1 text-[11px] font-semibold text-studio-300 transition hover:border-amberline/40 hover:text-studio-100">Edit</button>
+                          {onDeleteEngagement ? <button type="button" onClick={() => removeEngagement(engagement.id)} className="rounded border border-rose-400/25 px-2 py-1 text-[11px] font-semibold text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200">Delete</button> : null}
+                        </div>
+                      </div>
+                      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-studio-200">{engagement.summary}</p>
+                      {engagement.nextStep ? <p className="mt-2 rounded border border-emerald-300/15 bg-emerald-400/5 px-2.5 py-2 text-xs leading-5 text-emerald-100"><span className="font-semibold text-emerald-300">Next:</span> {engagement.nextStep}</p> : null}
+                      <p className="mt-2 text-[11px] text-studio-500">Logged by {userNameFromList(engagement.createdById ?? "", users)}{engagement.followUpDate ? ` / Follow-up ${engagement.followUpDate}` : ""}</p>
+                    </div>
+                  )) : <EmptyState label="No engagement history yet. Log the first call, meeting, email, or internal note here." />}
+                </div>
+              </div>
+              ) : null}
+              {outreachTab === "contact" ? (
+              <>
               <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
                 <SectionHeader eyebrow="Relationship Map" title="Linked Contacts / Reps" />
                 <form onSubmit={addContactRelationship} className="mt-3 grid gap-2 lg:grid-cols-[1fr_150px_1fr_auto]">
@@ -8069,12 +8637,287 @@ function Contacts({
                 <RelationshipList title="Scripts" empty="No linked scripts." items={relationshipScripts.map((document) => ({ id: document.id, title: document.title, detail: document.writerName ?? document.source ?? statusLabel(document.type), href: `/scripts/${document.id}` }))} />
                 <RelationshipList title="Follow-Ups" empty="No contact tasks yet." items={relationshipTasks.map((task) => ({ id: task.id, title: task.title, detail: `${statusLabel(task.status)} / ${task.dueDate || "No due date"}`, href: `/tasks?task=${task.id}` }))} />
               </div>
+              </>
+              ) : null}
             </div>
-          </Panel>
+              </div>
+            </Panel>
+          </div>
+        </div>
         ) : null}
-      </div>
       {expandedNoteContact ? (<ContactNoteModal contact={expandedNoteContact} onClose={() => setExpandedNoteContactId("")} />) : null}
       {createOpen ? (<ContactCreateModal users={users} projects={projects} currentUser={currentUser} onClose={() => setCreateOpen(false)} onCreate={createManualContact} />) : null}
+      {contactEditOpen && selectedContact ? (<OutreachContactEditModal contact={selectedContact} draft={draft} setDraft={setDraft} users={users} projects={projects} onClose={() => setContactEditOpen(false)} onSave={saveContact} />) : null}
+      {engagementOpen && selectedContact ? (<OutreachEngagementCreateModal contact={selectedContact} users={users} engagements={selectedEngagements} draft={engagementDraft} setDraft={setEngagementDraft} busy={engagementBusy} onClose={() => setEngagementOpen(false)} onSubmit={createEngagement} onEdit={(engagement) => { setEngagementOpen(false); setEditingEngagement(engagement); }} onDelete={onDeleteEngagement ? removeEngagement : undefined} />) : null}
+      {editingEngagement ? (<OutreachEngagementEditModal engagement={editingEngagement} busy={engagementBusy} onClose={() => setEditingEngagement(null)} onSave={saveEngagementEdit} />) : null}
+    </div>
+  );
+}
+
+function MiniMeta({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-white/10 bg-white/[0.025] px-3 py-2">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">{label}</p>
+      <p className="mt-1 truncate text-[13px] font-semibold text-studio-100">{value}</p>
+    </div>
+  );
+}
+
+function OutreachContactEditModal({
+  contact,
+  draft,
+  setDraft,
+  users,
+  projects,
+  onClose,
+  onSave
+}: {
+  contact: HammerContact;
+  draft: OutreachContactDraft;
+  setDraft: (updater: (current: OutreachContactDraft) => OutreachContactDraft) => void;
+  users: HammerUser[];
+  projects: HammerProject[];
+  onClose: () => void;
+  onSave: () => Promise<void>;
+}) {
+  return (
+    <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm" onMouseDown={onClose}>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          void onSave();
+        }}
+        className="w-full max-w-5xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <SectionHeader eyebrow="Outreach Contact" title={`Contact Details / ${contact.name}`} />
+          <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close contact details">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Name</span><input className="field" value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} placeholder="Contact name" /></label>
+          <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Role</span><input className="field" value={draft.role} onChange={(event) => setDraft((current) => ({ ...current, role: event.target.value }))} placeholder="Writer, director, artist..." /></label>
+          <label className="grid gap-1 md:col-span-2"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Agency / Management</span><textarea className="field min-h-20" value={draft.agency} onChange={(event) => setDraft((current) => ({ ...current, agency: event.target.value }))} placeholder="Agency, manager, rep" /></label>
+          <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Genre</span><input className="field" value={draft.genre} onChange={(event) => setDraft((current) => ({ ...current, genre: event.target.value }))} placeholder="Horror, Action" /></label>
+          <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Location</span><input className="field" value={draft.location} onChange={(event) => setDraft((current) => ({ ...current, location: event.target.value }))} placeholder="US, UK, Los Angeles" /></label>
+          <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Status</span><select className="field" value={draft.status} onChange={(event) => setDraft((current) => ({ ...current, status: event.target.value as ContactStatus }))}>{contactStatuses.map((contactStatus) => <option key={contactStatus} value={contactStatus}>{statusLabel(contactStatus)}</option>)}</select></label>
+          <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Email</span><input className="field" type="email" value={draft.email} onChange={(event) => setDraft((current) => ({ ...current, email: event.target.value }))} placeholder="name@example.com" /></label>
+          <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Phone</span><input className="field" value={draft.phone} onChange={(event) => setDraft((current) => ({ ...current, phone: event.target.value }))} placeholder="Phone number" /></label>
+          <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Website</span><input className="field" value={draft.website} onChange={(event) => setDraft((current) => ({ ...current, website: event.target.value }))} placeholder="https://..." /></label>
+          <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Relationship Owner</span><select className="field" value={draft.ownerId} onChange={(event) => setDraft((current) => ({ ...current, ownerId: event.target.value }))}><option value="">Unassigned owner</option>{users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></label>
+          <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Last Contacted</span><input className="field" type="date" value={draft.lastContacted} onChange={(event) => setDraft((current) => ({ ...current, lastContacted: event.target.value }))} /></label>
+          <label className="grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Next Follow-Up</span><input className="field" type="date" value={draft.nextFollowUp} onChange={(event) => setDraft((current) => ({ ...current, nextFollowUp: event.target.value }))} /></label>
+        </div>
+        <label className="mt-3 grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Credits</span><textarea className="field min-h-28" value={draft.credits} onChange={(event) => setDraft((current) => ({ ...current, credits: event.target.value }))} placeholder="Film, TV, theatre, awards, relevant credits" /></label>
+        <label className="mt-3 grid gap-1"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Additional Tags</span><input className="field" value={draft.tags} onChange={(event) => setDraft((current) => ({ ...current, tags: event.target.value }))} placeholder="Tags, separated by commas" /></label>
+        <div className="mt-3">
+          <div className="mb-1 flex items-center justify-between gap-2"><span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Assigned Development Slate</span><span className="text-[11px] text-studio-500">{draft.projectIds.length} selected</span></div>
+          <div className="grid max-h-44 gap-1 overflow-auto rounded-md border border-white/10 bg-white/[0.025] p-2 md:grid-cols-2">
+            {projects.map((project) => {
+              const checked = draft.projectIds.includes(project.id);
+              return (
+                <label key={project.id} className={cn("flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-[13px] text-studio-300 transition hover:bg-white/[0.04] hover:text-studio-100", checked && "bg-emerald-400/10 text-studio-100")}>
+                  <input type="checkbox" className="h-3.5 w-3.5 accent-emerald-400" checked={checked} onChange={(event) => setDraft((current) => ({ ...current, projectIds: event.target.checked ? [...current.projectIds, project.id] : current.projectIds.filter((projectId) => projectId !== project.id) }))} />
+                  <span className="truncate">{project.title}</span>
+                </label>
+              );
+            })}
+          </div>
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:text-amberline">Cancel</button>
+          <button type="submit" className="rounded bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300">Save Contact</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function OutreachEngagementCreateModal({
+  contact,
+  users,
+  engagements = [],
+  draft,
+  setDraft,
+  busy,
+  onClose,
+  onSubmit,
+  onEdit,
+  onDelete
+}: {
+  contact: HammerContact;
+  users: HammerUser[];
+  engagements?: HammerOutreachEngagement[];
+  draft: OutreachEngagementDraft;
+  setDraft: (updater: (current: OutreachEngagementDraft) => OutreachEngagementDraft) => void;
+  busy: boolean;
+  onClose: () => void;
+  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
+  onEdit?: (engagement: HammerOutreachEngagement) => void;
+  onDelete?: (engagementId: string) => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm" onMouseDown={onClose}>
+      <form onSubmit={onSubmit} className="w-full max-w-5xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="flex items-start justify-between gap-3">
+          <SectionHeader eyebrow="Outreach Timeline" title={`Engagement / ${contact.name}`} />
+          <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close engagement form">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="mb-4 rounded-lg border border-white/10 bg-white/[0.025] p-3">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">History</p>
+              <p className="mt-0.5 text-sm font-semibold text-studio-100">Calls, meetings, emails, and internal notes</p>
+            </div>
+            <Badge value={`${engagements.length} logged`} subtle />
+          </div>
+          <div className="grid max-h-64 gap-2 overflow-y-auto pr-1">
+            {engagements.length ? engagements.map((engagement) => (
+              <div key={engagement.id} className="rounded-md border border-white/10 bg-studio-950/40 p-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge value={engagement.type} />
+                    <Badge value={engagement.status} subtle />
+                    <span className="text-xs text-studio-400">{engagement.engagementDate}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {onEdit ? <button type="button" onClick={() => onEdit(engagement)} className="rounded border border-white/10 px-2 py-1 text-[11px] font-semibold text-studio-300 transition hover:border-amberline/40 hover:text-studio-100">Edit</button> : null}
+                    {onDelete ? <button type="button" onClick={() => onDelete(engagement.id)} className="rounded border border-rose-400/25 px-2 py-1 text-[11px] font-semibold text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200">Delete</button> : null}
+                  </div>
+                </div>
+                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-studio-200">{engagement.summary}</p>
+                {engagement.nextStep ? <p className="mt-2 rounded border border-emerald-300/15 bg-emerald-400/5 px-2.5 py-2 text-xs leading-5 text-emerald-100"><span className="font-semibold text-emerald-300">Next:</span> {engagement.nextStep}</p> : null}
+                <p className="mt-2 text-[11px] text-studio-500">Logged by {userNameFromList(engagement.createdById ?? "", users)}{engagement.followUpDate ? ` / Follow-up ${engagement.followUpDate}` : ""}</p>
+              </div>
+            )) : <EmptyState label="No engagement history yet. Log the first call, meeting, email, or internal note below." />}
+          </div>
+        </div>
+        <div className="grid gap-2 md:grid-cols-4">
+          <label className="grid gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">Type</span>
+            <select className="field" value={draft.type} onChange={(event) => setDraft((current) => ({ ...current, type: event.target.value as OutreachEngagementType }))}>
+              {outreachEngagementTypes.map((type) => <option key={type} value={type}>{statusLabel(type)}</option>)}
+            </select>
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">Date</span>
+            <input className="field" type="date" value={draft.engagementDate} onChange={(event) => setDraft((current) => ({ ...current, engagementDate: event.target.value }))} />
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">Status</span>
+            <select className="field" value={draft.status} onChange={(event) => setDraft((current) => ({ ...current, status: event.target.value as ContactStatus }))}>
+              {contactStatuses.filter((status) => status !== "ARCHIVED").map((contactStatus) => <option key={contactStatus} value={contactStatus}>{statusLabel(contactStatus)}</option>)}
+            </select>
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">Follow-Up Date</span>
+            <input className="field" type="date" value={draft.followUpDate} onChange={(event) => setDraft((current) => ({ ...current, followUpDate: event.target.value }))} />
+          </label>
+        </div>
+        <label className="mt-3 grid gap-1">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">Meeting Notes</span>
+          <textarea className="field min-h-36 whitespace-pre-wrap" value={draft.summary} onChange={(event) => setDraft((current) => ({ ...current, summary: event.target.value }))} placeholder="What happened, who was on the call, what did they respond to?" />
+        </label>
+        <label className="mt-3 grid gap-1">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">Next Step</span>
+          <textarea className="field min-h-24 whitespace-pre-wrap" value={draft.nextStep} onChange={(event) => setDraft((current) => ({ ...current, nextStep: event.target.value }))} placeholder="What should happen next?" />
+        </label>
+        <div className="mt-3 grid gap-2 md:grid-cols-[1fr_170px_150px] md:items-end">
+          <label className="flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.025] px-3 py-2 text-xs font-semibold text-studio-200">
+            <input type="checkbox" className="h-3.5 w-3.5 accent-emerald-400" checked={draft.createTask} onChange={(event) => setDraft((current) => ({ ...current, createTask: event.target.checked }))} />
+            Create follow-up task from next step
+          </label>
+          <select className="field" value={draft.assignedToId} onChange={(event) => setDraft((current) => ({ ...current, assignedToId: event.target.value }))}>
+            {users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+          </select>
+          <select className="field" value={draft.priority} onChange={(event) => setDraft((current) => ({ ...current, priority: event.target.value as TaskPriority }))}>
+            {(["LOW", "MEDIUM", "HIGH", "URGENT"] as TaskPriority[]).map((priority) => <option key={priority} value={priority}>{statusLabel(priority)}</option>)}
+          </select>
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:text-amberline">Cancel</button>
+          <button type="submit" disabled={busy || !draft.summary.trim()} className="inline-flex items-center gap-1.5 rounded bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60">
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            Log Engagement
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function OutreachEngagementEditModal({
+  engagement,
+  busy,
+  onClose,
+  onSave
+}: {
+  engagement: HammerOutreachEngagement;
+  busy: boolean;
+  onClose: () => void;
+  onSave: (engagement: HammerOutreachEngagement) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState(engagement);
+
+  useEffect(() => {
+    setDraft(engagement);
+  }, [engagement]);
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm" onMouseDown={onClose}>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          void onSave(draft);
+        }}
+        className="w-full max-w-3xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <SectionHeader eyebrow="Outreach Timeline" title="Edit Engagement" />
+          <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close engagement editor">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="grid gap-3 md:grid-cols-4">
+          <label className="grid gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">Type</span>
+            <select className="field" value={draft.type} onChange={(event) => setDraft((current) => ({ ...current, type: event.target.value as OutreachEngagementType }))}>
+              {outreachEngagementTypes.map((type) => <option key={type} value={type}>{statusLabel(type)}</option>)}
+            </select>
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">Date</span>
+            <input className="field" type="date" value={draft.engagementDate} onChange={(event) => setDraft((current) => ({ ...current, engagementDate: event.target.value }))} />
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">Status</span>
+            <select className="field" value={draft.status} onChange={(event) => setDraft((current) => ({ ...current, status: event.target.value as ContactStatus }))}>
+              {contactStatuses.filter((status) => status !== "ARCHIVED").map((contactStatus) => <option key={contactStatus} value={contactStatus}>{statusLabel(contactStatus)}</option>)}
+            </select>
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">Follow-Up Date</span>
+            <input className="field" type="date" value={draft.followUpDate ?? ""} onChange={(event) => setDraft((current) => ({ ...current, followUpDate: event.target.value || undefined }))} />
+          </label>
+        </div>
+        <label className="mt-3 grid gap-1">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">Meeting Notes</span>
+          <textarea className="field min-h-48 whitespace-pre-wrap" value={draft.summary} onChange={(event) => setDraft((current) => ({ ...current, summary: event.target.value }))} />
+        </label>
+        <label className="mt-3 grid gap-1">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">Next Step</span>
+          <textarea className="field min-h-28 whitespace-pre-wrap" value={draft.nextStep ?? ""} onChange={(event) => setDraft((current) => ({ ...current, nextStep: event.target.value }))} />
+        </label>
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:text-amberline">Cancel</button>
+          <button type="submit" disabled={busy || !draft.summary.trim()} className="rounded bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-60">Save Engagement</button>
+        </div>
+      </form>
     </div>
   );
 }
@@ -8104,7 +8947,7 @@ function ContactNotesPreview({ notes, onReadMore }: { notes?: string; onReadMore
 
 function ContactNoteModal({ contact, onClose }: { contact: HammerContact; onClose: () => void }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm" onMouseDown={onClose}>
       <div className="w-full max-w-2xl" onMouseDown={(event) => event.stopPropagation()}>
         <Panel className="shadow-2xl">
           <div className="flex items-start justify-between gap-3">
@@ -8562,24 +9405,22 @@ function Reports({
 
   return (
     <div className="space-y-4">
-      <Panel className="border-amberline/20 bg-amberline/[0.045]">
-        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div>
-            <p className="font-display text-[10px] uppercase tracking-[0.16em] text-amberline">Reports</p>
-            <h2 className="mt-1 text-xl font-semibold text-studio-100">Send an Executive Update</h2>
-            <p className="mt-1 text-[13px] leading-5 text-studio-300">Pick a scope and window. GreenLight turns tasks, decisions, and material changes into an email draft.</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={() => applyPreset("TODAY")} className="rounded-md border border-white/10 px-2.5 py-1.5 text-xs font-semibold text-studio-300 hover:border-amberline/40 hover:text-amberline">Today</button>
-            <button type="button" onClick={() => applyPreset("24H")} className="rounded-md border border-white/10 px-2.5 py-1.5 text-xs font-semibold text-studio-300 hover:border-amberline/40 hover:text-amberline">Last 24h</button>
-            <button type="button" onClick={() => applyPreset("WEEK")} className="rounded-md border border-white/10 px-2.5 py-1.5 text-xs font-semibold text-studio-300 hover:border-amberline/40 hover:text-amberline">Last 7 days</button>
-          </div>
+      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+        <div>
+          <p className="font-display text-[10px] uppercase tracking-[0.16em] text-amberline">Reports</p>
+          <h2 className="mt-1 text-xl font-semibold text-studio-100">Executive Update Builder</h2>
+          <p className="mt-1 max-w-3xl text-[13px] leading-5 text-studio-400">Choose a scope and time window. GreenLight gathers tasks, decisions, notes, and material changes into a clean email draft.</p>
         </div>
-      </Panel>
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <button type="button" onClick={() => applyPreset("TODAY")} className="rounded-md border border-white/10 px-2.5 py-1.5 text-xs font-semibold text-studio-300 hover:border-amberline/40 hover:text-amberline">Today</button>
+          <button type="button" onClick={() => applyPreset("24H")} className="rounded-md border border-white/10 px-2.5 py-1.5 text-xs font-semibold text-studio-300 hover:border-amberline/40 hover:text-amberline">Last 24h</button>
+          <button type="button" onClick={() => applyPreset("WEEK")} className="rounded-md border border-white/10 px-2.5 py-1.5 text-xs font-semibold text-studio-300 hover:border-amberline/40 hover:text-amberline">Last 7 days</button>
+        </div>
+      </div>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(360px,460px)_minmax(0,1fr)]">
         <Panel>
-          <SectionHeader eyebrow="Compose" title="Report Settings" />
+          <SectionHeader eyebrow="Compose" title="Build Report" />
           <div className="space-y-3">
             <label className="grid gap-1">
               <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-400">Scope</span>
@@ -8618,7 +9459,7 @@ function Reports({
 
         <div>
           <Panel>
-            <SectionHeader eyebrow="Included" title="Report Snapshot" />
+            <SectionHeader eyebrow="Included" title="What Will Be Sent" />
             <div className="grid gap-2 md:grid-cols-2">
               {reportSignals.map((signal) => (
                 <div key={signal.label} className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
@@ -8640,8 +9481,8 @@ function Reports({
             <div className="mt-4 border-t border-white/10 pt-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <p className="font-display text-[10px] uppercase tracking-[0.16em] text-amberline">Tasks Created</p>
-                  <h3 className="text-sm font-semibold text-studio-100">Included In Report</h3>
+                  <p className="font-display text-[10px] uppercase tracking-[0.16em] text-amberline">Tasks</p>
+                  <h3 className="text-sm font-semibold text-studio-100">Created In This Window</h3>
                 </div>
                 <TableLink href="/tasks">Open Tasks</TableLink>
               </div>
@@ -10898,6 +11739,7 @@ function noteTargetContext(
   comment: HammerComment,
   context: {
     projects: HammerProject[];
+    prospects?: HammerProjectLead[];
     documents: HammerDocument[];
     versions: HammerDocumentVersion[];
     tasks: HammerTask[];
@@ -10912,6 +11754,15 @@ function noteTargetContext(
       parentLabel: "Development Slate",
       href: project ? `/projects/${project.id}` : undefined,
       projectId: project?.id
+    };
+  }
+  if (comment.targetType === "PROSPECT") {
+    const prospect = context.prospects?.find((item) => item.id === comment.targetId);
+    return {
+      label: prospect?.title ?? "Unknown Prospect",
+      parentLabel: "Prospects",
+      href: prospect ? `/prospects?prospect=${encodeURIComponent(prospect.id)}` : "/prospects",
+      projectId: prospect?.promotedProjectId
     };
   }
   if (comment.targetType === "DOCUMENT") {

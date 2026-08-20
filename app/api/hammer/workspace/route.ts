@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import type { AssetStatus, AssetType, CommentTargetType, CommentVisibility, ContactRelationshipType, ContactStatus, ContactType, DocumentType, DocumentVersionStatus, Prisma, ProjectStatus, ProjectStage, Prospect, SlateCollectionItemType, SupportingDocumentType, TaskPriority, TaskStatus, TaskTargetType, UserRole } from "@prisma/client";
+import type { AssetStatus, AssetType, CommentTargetType, CommentVisibility, ContactRelationshipType, ContactStatus, ContactType, DocumentType, DocumentVersionStatus, OutreachEngagementType, Prisma, ProjectStatus, ProjectStage, Prospect, SlateCollectionItemType, SupportingDocumentType, TaskPriority, TaskStatus, TaskTargetType, UserRole } from "@prisma/client";
 import { forbidden, hashPassword, isDatabaseConfigured, requireUser, verifyPassword } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
@@ -18,7 +18,7 @@ export async function GET(request: Request) {
     const projectWhere = canViewAllProjects(auth.user.appRole) ? { deletedAt: null } : { deletedAt: null, memberships: { some: { userId: auth.user.id } } };
     const documentWhere = canSeeLibrary ? { deletedAt: null } : { deletedAt: null, projectId: { in: projectIds } };
 
-    const [projects, projectLeads, prospectAssets, documents, versions, supportingDocuments, assets, tasks, contacts, contactRelationships, users, approvals, comments, scriptCollections, scriptCollectionItems, slateCollections, slateCollectionItems] = await Promise.all([
+    const [projects, projectLeads, prospectAssets, documents, versions, supportingDocuments, assets, tasks, contacts, contactRelationships, outreachEngagements, users, approvals, comments, scriptCollections, scriptCollectionItems, slateCollections, slateCollectionItems] = await Promise.all([
       prisma.project.findMany({ where: projectWhere, orderBy: { updatedAt: "desc" } }),
       prisma.prospect.findMany({ where: { deletedAt: null }, orderBy: [{ promotedProjectId: "asc" }, { updatedAt: "desc" }] }),
       prisma.prospectAsset.findMany({ where: { deletedAt: null, prospect: { deletedAt: null } }, orderBy: { createdAt: "desc" } }),
@@ -50,6 +50,7 @@ export async function GET(request: Request) {
       }),
       prisma.contact.findMany({ where: { deletedAt: null }, orderBy: { updatedAt: "desc" } }),
       prisma.contactRelationship.findMany({ orderBy: { createdAt: "desc" } }),
+      prisma.outreachEngagement.findMany({ where: { contact: { deletedAt: null } }, orderBy: [{ engagementDate: "desc" }, { createdAt: "desc" }] }),
       prisma.user.findMany({ orderBy: { name: "asc" } }),
       prisma.hammerApproval.findMany({ where: canSeeLibrary ? undefined : { projectId: { in: projectIds } }, orderBy: { createdAt: "desc" } }),
       prisma.comment.findMany({ where: canSeeLibrary ? undefined : { projectId: { in: projectIds } }, orderBy: { createdAt: "desc" } }),
@@ -97,6 +98,7 @@ export async function GET(request: Request) {
       tasks: tasks.map(toTask),
       contacts: contacts.map(toContact),
       contactRelationships: contactRelationships.map(toContactRelationship),
+      outreachEngagements: outreachEngagements.map(toOutreachEngagement),
       users: users.map(toUser),
       approvals: approvals.map(toApproval),
       comments: comments.map(toComment),
@@ -842,6 +844,64 @@ export async function POST(request: Request) {
         await prisma.contactRelationship.delete({ where: { id: stringField(body.relationshipId) } });
         return NextResponse.json({ ok: true });
 
+      case "createOutreachEngagement": {
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        const contactId = stringField(body.contactId);
+        const contact = await prisma.contact.findUnique({ where: { id: contactId }, select: { id: true, deletedAt: true } });
+        if (!contact || contact.deletedAt) return NextResponse.json({ error: "Contact not found." }, { status: 404 });
+        const engagementDate = dateField(body.engagementDate) ?? new Date();
+        const followUpDate = dateField(body.followUpDate);
+        const summary = textField(body.summary).trim();
+        if (!summary) return NextResponse.json({ error: "Engagement notes are required." }, { status: 400 });
+        const engagement = await prisma.$transaction(async (tx) => {
+          const createdEngagement = await tx.outreachEngagement.create({
+            data: {
+              contactId,
+              type: outreachEngagementTypeField(body.type),
+              engagementDate,
+              status: contactStatusField(body.status),
+              summary,
+              nextStep: optionalText(body.nextStep),
+              followUpDate,
+              createdById: auth.user.id
+            }
+          });
+          await tx.contact.update({
+            where: { id: contactId },
+            data: {
+              status: contactStatusField(body.status),
+              lastContacted: engagementDate,
+              nextFollowUp: followUpDate ?? undefined,
+              talentMetWith: dateString(engagementDate)
+            }
+          });
+          return createdEngagement;
+        });
+        return NextResponse.json({ outreachEngagement: toOutreachEngagement(engagement) }, { status: 201 });
+      }
+
+      case "updateOutreachEngagement": {
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        const engagement = await prisma.outreachEngagement.findUnique({ where: { id: stringField(body.engagementId) }, select: { id: true, contactId: true } });
+        if (!engagement) return NextResponse.json({ error: "Engagement not found." }, { status: 404 });
+        return NextResponse.json({ outreachEngagement: toOutreachEngagement(await prisma.outreachEngagement.update({
+          where: { id: engagement.id },
+          data: {
+            type: body.type !== undefined ? outreachEngagementTypeField(body.type) : undefined,
+            engagementDate: body.engagementDate !== undefined ? dateField(body.engagementDate) ?? new Date() : undefined,
+            status: body.status !== undefined ? contactStatusField(body.status) : undefined,
+            summary: body.summary !== undefined ? textField(body.summary).trim() || "Updated engagement note." : undefined,
+            nextStep: body.nextStep !== undefined ? optionalText(body.nextStep) : undefined,
+            followUpDate: body.followUpDate !== undefined ? dateField(body.followUpDate) ?? null : undefined
+          }
+        })) });
+      }
+
+      case "deleteOutreachEngagement":
+        if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
+        await prisma.outreachEngagement.delete({ where: { id: stringField(body.engagementId) } });
+        return NextResponse.json({ ok: true });
+
       default:
         return NextResponse.json({ error: "Unknown GreenLight action." }, { status: 400 });
     }
@@ -1072,6 +1132,22 @@ function toContactRelationship(relationship: { id: string; fromContactId: string
   return { id: relationship.id, fromContactId: relationship.fromContactId, toContactId: relationship.toContactId, relationshipType: relationship.relationshipType, notes: relationship.notes ?? undefined, createdAt: dateString(relationship.createdAt) };
 }
 
+function toOutreachEngagement(engagement: { id: string; contactId: string; type: OutreachEngagementType; engagementDate: Date; status: ContactStatus; summary: string; nextStep: string | null; followUpDate: Date | null; createdById: string | null; createdAt: Date; updatedAt: Date }) {
+  return {
+    id: engagement.id,
+    contactId: engagement.contactId,
+    type: engagement.type,
+    engagementDate: dateString(engagement.engagementDate),
+    status: engagement.status,
+    summary: engagement.summary,
+    nextStep: engagement.nextStep ?? undefined,
+    followUpDate: engagement.followUpDate ? dateString(engagement.followUpDate) : undefined,
+    createdById: engagement.createdById ?? undefined,
+    createdAt: dateTimeString(engagement.createdAt),
+    updatedAt: dateTimeString(engagement.updatedAt)
+  };
+}
+
 function toApproval(approval: { id: string; projectId: string | null; targetType: string; targetId: string; requestedById: string | null; reviewerId: string | null; status: string; decisionNotes: string | null; createdAt: Date; decidedAt: Date | null }) {
   return { id: approval.id, projectId: approval.projectId ?? "", targetType: approval.targetType, targetId: approval.targetId, requestedById: approval.requestedById ?? "", reviewerId: approval.reviewerId ?? "", status: approval.status, decisionNotes: approval.decisionNotes ?? undefined, createdAt: dateString(approval.createdAt), decidedAt: approval.decidedAt ? dateString(approval.decidedAt) : undefined };
 }
@@ -1153,6 +1229,10 @@ async function resolveCommentTargetAssociation(targetType: CommentTargetType, ta
   if (targetType === "PROJECT") {
     const project = await prisma.project.findUnique({ where: { id: targetId }, select: { id: true, deletedAt: true } });
     return { exists: Boolean(project && !project.deletedAt), projectId: project?.id };
+  }
+  if (targetType === "PROSPECT") {
+    const prospect = await prisma.prospect.findUnique({ where: { id: targetId }, select: { id: true, promotedProjectId: true, deletedAt: true } });
+    return { exists: Boolean(prospect && !prospect.deletedAt), projectId: prospect?.promotedProjectId };
   }
   if (targetType === "DOCUMENT") {
     const document = await prisma.document.findUnique({ where: { id: targetId }, select: { projectId: true, deletedAt: true } });
@@ -1276,6 +1356,11 @@ function optionalString(value: unknown) {
   return string || undefined;
 }
 
+function optionalText(value: unknown) {
+  const text = textField(value).trim();
+  return text || undefined;
+}
+
 function stringArrayField(value: unknown) {
   if (!Array.isArray(value)) return [];
   return Array.from(new Set(value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean)));
@@ -1332,9 +1417,15 @@ function contactRelationshipTypeField(value: unknown): ContactRelationshipType {
   return "OTHER";
 }
 
+function outreachEngagementTypeField(value: unknown): OutreachEngagementType {
+  const engagementType = stringField(value).toUpperCase();
+  if (["CALL", "MEETING", "EMAIL", "INTRO", "MATERIALS_SENT", "FOLLOW_UP", "NOTE", "OTHER"].includes(engagementType)) return engagementType as OutreachEngagementType;
+  return "MEETING";
+}
+
 function commentTargetTypeField(value: unknown): CommentTargetType {
   const targetType = stringField(value).toUpperCase();
-  if (["PROJECT", "DOCUMENT", "DOCUMENT_VERSION", "SCENE", "ENTITY", "ASSET", "TASK", "APPROVAL"].includes(targetType)) return targetType as CommentTargetType;
+  if (["PROJECT", "PROSPECT", "DOCUMENT", "DOCUMENT_VERSION", "SCENE", "ENTITY", "ASSET", "TASK", "APPROVAL"].includes(targetType)) return targetType as CommentTargetType;
   return "DOCUMENT_VERSION";
 }
 

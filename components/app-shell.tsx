@@ -42,7 +42,7 @@ const executiveNavItem = { href: "/executive", label: "Executive", icon: BarChar
 const reportsNavItem = { href: "/reports", label: "Reports", icon: FileBarChart2 };
 const adminNavItem = { href: "/admin/users", label: "Admin", icon: Settings2 };
 const accountNavItem = { href: "/account", label: "Account", icon: UserRound };
-const GREENLIGHT_APP_VERSION = "1.99";
+const GREENLIGHT_APP_VERSION = "2.11";
 const HAMMER_THEME_STORAGE_KEY = "hammer-os-theme";
 type ThemeMode = "dark" | "light";
 type AuthMode = "loading" | "database" | "demo";
@@ -390,7 +390,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      <main className="relative z-0 ml-[60px] px-3 py-3 md:ml-56 md:px-4 md:py-4 xl:px-5">
+      <main className="relative ml-[60px] px-3 py-3 md:ml-56 md:px-4 md:py-4 xl:px-5">
         <div className="mx-auto max-w-[1320px]">
           {showProjectContext ? (
             <ProjectTopBar activeProject={activeProject} projects={availableProjects} onChange={changeProject} user={user} mode={authMode} />

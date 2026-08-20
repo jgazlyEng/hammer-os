@@ -12,6 +12,7 @@ export type TaskPriority = "LOW" | "MEDIUM" | "HIGH" | "URGENT";
 export type ContactType = "WRITER" | "PRODUCER" | "ARTIST" | "EXECUTIVE" | "AGENCY" | "MANAGEMENT" | "LEGAL" | "VENDOR" | "OTHER";
 export type ContactStatus = "NEW" | "ACTIVE" | "FOLLOW_UP" | "WAITING" | "DO_NOT_CONTACT" | "ARCHIVED";
 export type ContactRelationshipType = "AGENT" | "MANAGER" | "REPRESENTS" | "WORKS_WITH" | "ASSISTANT" | "LEGAL_REP" | "REFERRED_BY" | "OTHER";
+export type OutreachEngagementType = "CALL" | "MEETING" | "EMAIL" | "INTRO" | "MATERIALS_SENT" | "FOLLOW_UP" | "NOTE" | "OTHER";
 
 export const HAMMER_ACTIVE_PROJECT_STORAGE_KEY = "hammer-os-active-project-id";
 export const HAMMER_ACTIVE_PROJECT_EVENT = "hammer-os-active-project-changed";
@@ -387,6 +388,20 @@ export interface HammerContactRelationship {
   relationshipType: ContactRelationshipType;
   notes?: string;
   createdAt: string;
+}
+
+export interface HammerOutreachEngagement {
+  id: string;
+  contactId: string;
+  type: OutreachEngagementType;
+  engagementDate: string;
+  status: ContactStatus;
+  summary: string;
+  nextStep?: string;
+  followUpDate?: string;
+  createdById?: string;
+  createdAt: string;
+  updatedAt?: string;
 }
 
 export const hammerUsers: HammerUser[] = [

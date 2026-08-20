@@ -120,6 +120,7 @@ enum LinkType {
 
 enum CommentTargetType {
   PROJECT
+  PROSPECT
   DOCUMENT
   DOCUMENT_VERSION
   SCENE
@@ -208,6 +209,17 @@ enum ContactRelationshipType {
   ASSISTANT
   LEGAL_REP
   REFERRED_BY
+  OTHER
+}
+
+enum OutreachEngagementType {
+  CALL
+  MEETING
+  EMAIL
+  INTRO
+  MATERIALS_SENT
+  FOLLOW_UP
+  NOTE
   OTHER
 }
 
@@ -435,6 +447,7 @@ model User {
   approvalsReviewing HammerApproval[] @relation("ApprovalReviewer")
   tasksAssigned Task[]             @relation("TaskAssignee")
   tasksCreated Task[]              @relation("TaskCreator")
+  outreachEngagementsCreated OutreachEngagement[] @relation("OutreachEngagementCreator")
   auditEvents AuditEvent[]
   memberships  ProjectMembership[]
   auditLogs    AuditLog[]
@@ -990,6 +1003,7 @@ model Contact {
   updatedAt      DateTime      @updatedAt
   relationshipsFrom ContactRelationship[] @relation("ContactRelationshipFrom")
   relationshipsTo   ContactRelationship[] @relation("ContactRelationshipTo")
+  engagements         OutreachEngagement[]
 
   @@index([type])
   @@index([status])
@@ -1012,6 +1026,28 @@ model ContactRelationship {
 
   @@unique([fromContactId, toContactId, relationshipType])
   @@index([toContactId])
+}
+
+model OutreachEngagement {
+  id             String                 @id @default(cuid())
+  contactId      String
+  type           OutreachEngagementType @default(MEETING)
+  engagementDate DateTime               @default(now())
+  status         ContactStatus          @default(ACTIVE)
+  summary        String                 @db.Text
+  nextStep       String?                @db.Text
+  followUpDate   DateTime?
+  createdById    String?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  contact        Contact                @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  createdBy      User?                  @relation("OutreachEngagementCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([contactId])
+  @@index([engagementDate])
+  @@index([followUpDate])
+  @@index([createdById])
 }
 
 model AssetLink {
