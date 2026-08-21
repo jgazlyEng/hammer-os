@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { Archive, ArrowLeft, ArrowUpDown, CalendarClock, CheckCircle2, ChevronDown, ContactRound, Download, FileDiff, FileText, Gauge, GripVertical, ImagePlus, Loader2, MessageSquare, PackageCheck, Pencil, Plus, Search, Share2, ShieldCheck, Trash2, UploadCloud, UsersRound, X } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { EmptyState, Panel, SectionHeader } from "@/components/ui";
@@ -1866,14 +1867,20 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
 
   return (
     <AppShell>
-      <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-        <div className="min-w-0">
-          <PageBreadcrumbs view={view} project={project} document={document} asset={asset} projects={projects} accessDenied={scriptAccessDenied} />
-          <h1 className="mt-1 text-xl font-semibold text-studio-100 md:text-2xl">{scriptAccessDenied ? "Script Access Required" : titleForView(view, { project, document, asset })}</h1>
-          {scopedProjectTitle(view, activeProject) ? <p className="mt-1 text-xs text-studio-400">Showing {scopedProjectTitle(view, activeProject)} only</p> : null}
+      <div className="hammer-page flex h-full min-h-0 flex-col">
+        <div className="hammer-page-header shrink-0 pb-3">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="min-w-0">
+              <PageBreadcrumbs view={view} project={project} document={document} asset={asset} projects={projects} accessDenied={scriptAccessDenied} />
+              <h1 className="mt-1 text-xl font-semibold text-studio-100 md:text-2xl">{scriptAccessDenied ? "Script Access Required" : titleForView(view, { project, document, asset })}</h1>
+              {scopedProjectTitle(view, activeProject) ? <p className="mt-1 text-xs text-studio-400">Showing {scopedProjectTitle(view, activeProject)} only</p> : null}
+            </div>
+          </div>
+        </div>
+        <div className={cn("hammer-page-body min-h-0 flex-1 pr-0.5", view === "tasks" || view === "notes" ? "overflow-hidden pb-0" : "overflow-y-auto pb-5")}>
+          {content}
         </div>
       </div>
-      {content}
     </AppShell>
   );
 }
@@ -1974,6 +1981,9 @@ function Dashboard({
     .filter((task) => !immediateTaskIds.has(task.id) && (task.priority === "URGENT" || task.priority === "HIGH" || task.status === "BLOCKED" || task.status === "ON_HOLD" || task.status === "REVIEW"))
     .sort(compareTasksByPriorityThenDue)
     .slice(0, 6);
+  const priorityTasks = [...immediateTasks, ...keyTasks]
+    .sort(compareTasksByDueThenPriority)
+    .slice(0, 8);
   const talentFollowUps = contacts
     .filter((contact) => isTalentContact(contact) && contact.nextFollowUp && (contact.status ?? "ACTIVE") !== "ARCHIVED")
     .filter((contact) => canSeeLibrary || contact.ownerId === currentUser.id)
@@ -2024,17 +2034,10 @@ function Dashboard({
         )}
       </Panel>
 
-      <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
-        <Panel>
-          <SectionHeader eyebrow="Date Sensitive" title="Due Now" action={<TableLink href="/tasks">Open Tasks</TableLink>} />
-          <DashboardTaskList tasks={immediateTasks} emptyLabel="No assigned tasks are due in the next seven days." />
-        </Panel>
-
-        <Panel>
-          <SectionHeader eyebrow="High Priority" title="Key Tasks" action={<TableLink href="/tasks">Open Tasks</TableLink>} />
-          <DashboardTaskList tasks={keyTasks} emptyLabel="No urgent or high-priority assigned tasks outside the due-now window." />
-        </Panel>
-      </div>
+      <Panel>
+        <SectionHeader eyebrow="Immediate Work" title="My Priorities" action={<TableLink href="/tasks">Open Tasks</TableLink>} />
+        <DashboardTaskList tasks={priorityTasks} emptyLabel="No urgent, blocked, review, or upcoming assigned tasks." />
+      </Panel>
 
       <Panel>
         <SectionHeader eyebrow="Outreach" title="Upcoming Follow-Ups" action={<TableLink href="/outreach">Open Outreach</TableLink>} />
@@ -2203,15 +2206,19 @@ function Projects({
   const section = mode === "prospects" ? "slate" : "active";
   const [slateSearch, setSlateSearch] = useState("");
   const [filters, setFilters] = useState({ lane: "ALL", genre: "ALL", urgency: "ALL", rights: "ALL", nextAction: "ALL", owner: "ALL", scriptStatus: "ALL", format: "ALL" });
+  const [showSlateFilters, setShowSlateFilters] = useState(false);
   const [selectedLeadId, setSelectedLeadId] = useState("");
   const [selectedLeadTitle, setSelectedLeadTitle] = useState("");
+  const [dismissedProspectId, setDismissedProspectId] = useState("");
   const [leadDraft, setLeadDraft] = useState<Partial<HammerProjectLead>>({});
   const [createProjectOpen, setCreateProjectOpen] = useState(false);
   const [addSlateOpen, setAddSlateOpen] = useState(false);
   const [slatePage, setSlatePage] = useState(1);
+  const [slatePageSize, setSlatePageSize] = useState(12);
   const [slateImportMessage, setSlateImportMessage] = useState("");
   const [prospectSort, setProspectSort] = useState<{ key: ProspectSortKey; direction: "asc" | "desc" }>({ key: "title", direction: "asc" });
   const displayProjectLeads = useMemo(() => dedupeProjectLeads(projectLeads), [projectLeads]);
+  const activeSlateFilterCount = Object.values(filters).filter((value) => value !== "ALL").length;
   const filteredLeads = displayProjectLeads.filter((lead) => {
     const matchesSearch = `${lead.title} ${lead.logline ?? ""} ${lead.creator ?? ""} ${lead.genre ?? ""} ${lead.lane ?? ""} ${lead.notes ?? ""} ${lead.searchKeywords ?? ""} ${lead.contactRep ?? ""}`.toLowerCase().includes(slateSearch.toLowerCase());
     return matchesSearch
@@ -2224,7 +2231,6 @@ function Projects({
       && matchesFilter(filters.scriptStatus, lead.scriptStatus)
       && matchesFilter(filters.format, lead.format);
   });
-  const slatePageSize = 100;
   const sortedLeads = useMemo(() => {
     return [...filteredLeads].sort((a, b) => {
       const aValue = prospectSortValue(a, prospectSort.key, users);
@@ -2247,12 +2253,16 @@ function Projects({
   useEffect(() => {
     if (mode !== "prospects") return;
     const prospectId = searchParams.get("prospect");
-    if (!prospectId || selectedLeadId === prospectId) return;
+    if (!prospectId) {
+      if (dismissedProspectId) setDismissedProspectId("");
+      return;
+    }
+    if (prospectId === dismissedProspectId || selectedLeadId === prospectId) return;
     const linkedLead = displayProjectLeads.find((lead) => lead.id === prospectId);
     if (!linkedLead) return;
     setSelectedLeadId(linkedLead.id);
     setSelectedLeadTitle(linkedLead.title);
-  }, [displayProjectLeads, mode, searchParams, selectedLeadId]);
+  }, [dismissedProspectId, displayProjectLeads, mode, searchParams, selectedLeadId]);
 
   useEffect(() => {
     if (!selectedLead) return;
@@ -2261,7 +2271,20 @@ function Projects({
 
   useEffect(() => {
     setSlatePage(1);
-  }, [filters.format, filters.genre, filters.lane, filters.nextAction, filters.owner, filters.rights, filters.scriptStatus, filters.urgency, slateSearch]);
+  }, [filters.format, filters.genre, filters.lane, filters.nextAction, filters.owner, filters.rights, filters.scriptStatus, filters.urgency, slatePageSize, slateSearch]);
+
+  useEffect(() => {
+    function updateSlatePageSize() {
+      const filterPanelOpen = showSlateFilters || activeSlateFilterCount > 0;
+      const reservedHeight = filterPanelOpen ? 470 : 385;
+      const availableTableHeight = Math.max(300, window.innerHeight - reservedHeight);
+      setSlatePageSize(Math.max(6, Math.min(18, Math.floor(availableTableHeight / 49))));
+    }
+
+    updateSlatePageSize();
+    window.addEventListener("resize", updateSlatePageSize);
+    return () => window.removeEventListener("resize", updateSlatePageSize);
+  }, [activeSlateFilterCount, showSlateFilters]);
 
   async function saveLead() {
     if (!selectedLead || !onUpdateLead) return;
@@ -2296,20 +2319,23 @@ function Projects({
   }
 
   function openProspect(lead: HammerProjectLead) {
+    setDismissedProspectId("");
     setSelectedLeadId(lead.id);
     setSelectedLeadTitle(lead.title);
     if (mode === "prospects") router.replace(`/prospects?prospect=${encodeURIComponent(lead.id)}`, { scroll: false });
   }
 
   function closeProspect() {
+    const prospectId = selectedLeadId || searchParams.get("prospect") || "";
+    setDismissedProspectId(prospectId);
     setSelectedLeadId("");
     setSelectedLeadTitle("");
     if (mode === "prospects") router.replace("/prospects", { scroll: false });
   }
 
   return (
-    <div className="space-y-4">
-      <Panel>
+    <div className={cn(section === "active" ? "space-y-4" : "flex h-full min-h-0 flex-col gap-3")}>
+      <Panel className="shrink-0">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <SectionHeader eyebrow={section === "active" ? "Development Slate" : "Prospects"} title={section === "active" ? "Development Slate" : "Prospects"} action={section === "active" ? (canCreateProject ? <PrimaryButton icon={Plus} label="Create Slate Item" onClick={() => setCreateProjectOpen(true)} /> : undefined) : <div className="flex flex-wrap gap-1.5"><PrimaryButton icon={Plus} label="Add Prospect" onClick={() => setAddSlateOpen(true)} /><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline"><UploadCloud className="h-3.5 w-3.5" />Import CSV<input className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => importSlateCsv(event.target.files?.[0])} /></label></div>} />
         </div>
@@ -2321,30 +2347,37 @@ function Projects({
         </Panel>
       ) : (
         <>
-          <div className="space-y-4">
-            <Panel>
-              <div className="mb-3 grid gap-2 lg:grid-cols-[1fr_repeat(4,150px)]">
+          <div className="flex min-h-0 flex-1 flex-col">
+            <Panel className="flex min-h-0 flex-1 flex-col">
+              <div className="mb-3 grid gap-2 lg:grid-cols-[1fr_auto] lg:items-center">
                 <div className="relative">
                   <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-studio-400" />
                   <input className="field pl-8" value={slateSearch} onChange={(event) => setSlateSearch(event.target.value)} placeholder="Search title, creator, logline, vendor, contact, notes" />
                 </div>
-                <SlateFilter label="Lane" value={filters.lane} options={uniqueLeadOptions(displayProjectLeads, "lane")} onChange={(value) => setFilter("lane", value)} />
-                <SlateFilter label="Genre" value={filters.genre} options={uniqueLeadOptions(displayProjectLeads, "genre")} onChange={(value) => setFilter("genre", value)} />
-                <SlateFilter label="Rights" value={filters.rights} options={uniqueLeadOptions(displayProjectLeads, "rightsStatus")} onChange={(value) => setFilter("rights", value)} />
-                <ProspectOwnerFilter label="Owner" value={filters.owner} users={users} leads={displayProjectLeads} onChange={(value) => setFilter("owner", value)} />
+                <button type="button" onClick={() => setShowSlateFilters((open) => !open)} className={cn("inline-flex min-h-10 items-center justify-center gap-2 rounded-md border px-3 py-2 text-xs font-semibold transition", activeSlateFilterCount ? "border-amberline/35 bg-amberline/10 text-amberline" : "border-white/10 bg-white/[0.025] text-studio-300 hover:border-amberline/35 hover:text-amberline")} aria-expanded={showSlateFilters}>
+                  Filters
+                  {activeSlateFilterCount ? <span className="rounded-full bg-amberline px-1.5 py-0.5 text-[10px] text-studio-950">{activeSlateFilterCount}</span> : null}
+                  <ChevronDown className={cn("h-3.5 w-3.5 transition", showSlateFilters && "rotate-180")} />
+                </button>
               </div>
-              <div className="mb-3 grid gap-2 md:grid-cols-4">
-                <SlateFilter label="Urgency" value={filters.urgency} options={uniqueLeadOptions(displayProjectLeads, "urgencyLabel")} onChange={(value) => setFilter("urgency", value)} />
-                <SlateFilter label="Action Status" value={filters.nextAction} options={uniqueLeadOptions(displayProjectLeads, "nextActionStatus")} onChange={(value) => setFilter("nextAction", value)} />
-                <SlateFilter label="Script Status" value={filters.scriptStatus} options={uniqueLeadOptions(displayProjectLeads, "scriptStatus")} onChange={(value) => setFilter("scriptStatus", value)} />
-                <SlateFilter label="Format" value={filters.format} options={uniqueLeadOptions(displayProjectLeads, "format")} onChange={(value) => setFilter("format", value)} />
-              </div>
+              {(showSlateFilters || activeSlateFilterCount > 0) ? (
+                <div className="mb-3 grid gap-2 rounded-md border border-white/10 bg-white/[0.025] p-2 md:grid-cols-4">
+                  <SlateFilter label="Lane" value={filters.lane} options={uniqueLeadOptions(displayProjectLeads, "lane")} onChange={(value) => setFilter("lane", value)} />
+                  <SlateFilter label="Genre" value={filters.genre} options={uniqueLeadOptions(displayProjectLeads, "genre")} onChange={(value) => setFilter("genre", value)} />
+                  <SlateFilter label="Rights" value={filters.rights} options={uniqueLeadOptions(displayProjectLeads, "rightsStatus")} onChange={(value) => setFilter("rights", value)} />
+                  <ProspectOwnerFilter label="Owner" value={filters.owner} users={users} leads={displayProjectLeads} onChange={(value) => setFilter("owner", value)} />
+                  <SlateFilter label="Urgency" value={filters.urgency} options={uniqueLeadOptions(displayProjectLeads, "urgencyLabel")} onChange={(value) => setFilter("urgency", value)} />
+                  <SlateFilter label="Action Status" value={filters.nextAction} options={uniqueLeadOptions(displayProjectLeads, "nextActionStatus")} onChange={(value) => setFilter("nextAction", value)} />
+                  <SlateFilter label="Script Status" value={filters.scriptStatus} options={uniqueLeadOptions(displayProjectLeads, "scriptStatus")} onChange={(value) => setFilter("scriptStatus", value)} />
+                  <SlateFilter label="Format" value={filters.format} options={uniqueLeadOptions(displayProjectLeads, "format")} onChange={(value) => setFilter("format", value)} />
+                </div>
+              ) : null}
               <div className="mb-2 flex items-center justify-between text-xs text-studio-400">
                 <span>{filteredLeads.length} of {displayProjectLeads.length} prospects</span>
                 <button type="button" className="font-semibold text-amberline" onClick={() => { setSlateSearch(""); setFilters({ lane: "ALL", genre: "ALL", urgency: "ALL", rights: "ALL", nextAction: "ALL", owner: "ALL", scriptStatus: "ALL", format: "ALL" }); }}>Clear filters</button>
               </div>
               {slateImportMessage ? <p className="mb-2 text-xs text-studio-300">{slateImportMessage}</p> : null}
-              <div className="data-scroll data-scroll-slate">
+              <div className="data-scroll data-scroll-slate prospects-table-scroll">
                 <table className="data-table min-w-[1540px] table-fixed">
                   <colgroup>
                     <col className="w-[260px]" />
@@ -2388,7 +2421,7 @@ function Projects({
                 </table>
               </div>
               {filteredLeads.length > slatePageSize ? (
-                <div className="mt-3 flex flex-col gap-2 text-xs text-studio-400 md:flex-row md:items-center md:justify-between">
+                <div className="shrink-0 pt-3 flex flex-col gap-2 text-xs text-studio-400 md:flex-row md:items-center md:justify-between">
                   <span>
                     Showing {(normalizedSlatePage - 1) * slatePageSize + 1}-{Math.min(normalizedSlatePage * slatePageSize, filteredLeads.length)} of {filteredLeads.length}
                   </span>
@@ -2416,8 +2449,8 @@ function Projects({
             </Panel>
           </div>
           {selectedLead ? (
-            <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm" onMouseDown={closeProspect}>
-              <div className="w-full max-w-5xl" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="modal-overlay" onPointerDown={(event) => { event.preventDefault(); closeProspect(); }}>
+              <div className="w-full max-w-[980px]" onPointerDown={(event) => event.stopPropagation()}>
                 <SlateLeadPanel
                   lead={selectedLead}
                   draft={leadDraft}
@@ -2533,7 +2566,7 @@ function SlateCreateModal({ users, onClose, onCreate }: { users: HammerUser[]; o
 
   return (
     <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm">
-      <form onSubmit={submit} className="w-full max-w-4xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl">
+      <form onSubmit={submit} className="modal-card w-full max-w-4xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl">
         <div className="flex items-start justify-between gap-3">
           <SectionHeader eyebrow="Prospects" title="Add Prospect" />
           <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close add slate">
@@ -2635,7 +2668,7 @@ function SlateLeadPanel({
   const promotedProject = lead.promotedProjectId ? projects.find((project) => project.id === lead.promotedProjectId) : undefined;
   const slateTasks = tasks.filter((task) => task.targetType === "PROJECT_LEAD" && task.targetId === lead.id);
   return (
-    <Panel className="max-h-[calc(100vh-4rem)] overflow-y-auto shadow-2xl">
+    <div className="modal-panel max-h-[calc(100vh-4rem)] overflow-y-auto">
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="flex flex-wrap gap-1.5">
@@ -2651,7 +2684,7 @@ function SlateLeadPanel({
           <PrimaryButton icon={CheckCircle2} label={saving ? "Saving" : "Save"} onClick={savePanel} />
           {promotedProject ? <TableLink href={`/projects/${promotedProject.id}`}>Open Development Slate</TableLink> : <button type="button" onClick={() => onPromote?.(lead.id)} className="rounded-md bg-amberline px-2.5 py-1.5 text-xs font-semibold text-studio-950">Promote</button>}
           {onClose ? (
-            <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close slate details">
+            <button type="button" onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); onClose(); }} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close slate details">
               <X className="h-4 w-4" />
             </button>
           ) : null}
@@ -2730,7 +2763,7 @@ function SlateLeadPanel({
         onUpdateComment={onUpdateComment}
         onDeleteComment={onDeleteComment}
       />
-    </Panel>
+    </div>
   );
 }
 
@@ -2957,7 +2990,7 @@ function ProspectNoteDialog({
 
   return (
     <div className="fixed inset-0 z-[110] flex items-start justify-center overflow-y-auto bg-studio-950/80 px-4 py-8 backdrop-blur-sm" onMouseDown={onClose}>
-      <div className="w-full max-w-5xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+      <div className="modal-card w-full max-w-5xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Prospect Note</p>
@@ -3325,7 +3358,7 @@ function ProjectCreateModal({ users, currentUser, onClose, onCreate }: { users: 
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
-      <form onSubmit={submit} className="my-6 w-full max-w-3xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-glow">
+      <form onSubmit={submit} className="modal-card my-6 w-full max-w-3xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-glow">
         <div className="flex items-start justify-between gap-3">
           <SectionHeader eyebrow="Development Slate" title="Create Slate Item" />
           <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close create project">
@@ -4750,6 +4783,16 @@ function DocumentRows({
 }) {
   const [assignmentDrafts, setAssignmentDrafts] = useState<Record<string, string>>({});
   const [deletingDocumentId, setDeletingDocumentId] = useState("");
+  const [page, setPage] = useState(1);
+  const pageSize = useResponsiveTablePageSize({ max: 16, reservedHeight: 360 });
+  const totalPages = Math.max(1, Math.ceil(docs.length / pageSize));
+  const normalizedPage = Math.min(page, totalPages);
+  const pagedDocs = docs.slice((normalizedPage - 1) * pageSize, normalizedPage * pageSize);
+
+  useEffect(() => {
+    setPage(1);
+  }, [docs.length, pageSize]);
+
   async function deleteDocumentFromSlate(document: HammerDocument) {
     if (!onDelete || deletingDocumentId) return;
     const locationLabel = document.projectId ? projectTitleFromList(document.projectId, projects) : "Inbox";
@@ -4763,22 +4806,23 @@ function DocumentRows({
   }
   if (!docs.length) return <EmptyState label={emptyLabel} />;
   return (
-    <div className="data-scroll">
-      <table className={cn("data-table", omitProject ? "min-w-[760px]" : "min-w-[860px]")}>
-        <thead className="text-[11px] uppercase tracking-[0.12em] text-studio-400">
-          <tr>
-            <th className="py-2">Title</th>
-            {!omitProject ? <th>Project</th> : null}
-            {showInboxMeta ? <th>Source</th> : null}
-            <th>Version</th>
-            <th>Status</th>
-            <th>Writer</th>
-            <th>Updated</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-white/10">
-          {docs.map((doc) => {
+    <div className="table-workspace">
+      <div className="data-scroll table-workspace-scroll">
+        <table className={cn("data-table", omitProject ? "min-w-[760px]" : "min-w-[860px]")}>
+          <thead className="text-[11px] uppercase tracking-[0.12em] text-studio-400">
+            <tr>
+              <th className="py-2">Title</th>
+              {!omitProject ? <th>Project</th> : null}
+              {showInboxMeta ? <th>Source</th> : null}
+              <th>Version</th>
+              <th>Status</th>
+              <th>Writer</th>
+              <th>Updated</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/10">
+            {pagedDocs.map((doc) => {
             const version = currentVersionFor(doc.id, docs, versions);
             const selectedProjectId = assignmentDrafts[doc.id] ?? "";
             const canMoveDocument = Boolean(onAssignToProject && assignableProjects.length);
@@ -4822,9 +4866,11 @@ function DocumentRows({
                 </td>
               </tr>
             );
-          })}
-        </tbody>
-      </table>
+            })}
+          </tbody>
+        </table>
+      </div>
+      <PaginationFooter page={normalizedPage} pageSize={pageSize} total={docs.length} onPageChange={setPage} />
     </div>
   );
 }
@@ -4901,33 +4947,34 @@ function Collections({
 
   return (
     <div className="collections-page flex min-h-0 flex-col gap-3 overflow-hidden">
-      <Panel>
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <SectionHeader eyebrow="Collections" title="Review Packets" />
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="inline-flex rounded-md border border-white/10 bg-white/[0.025] p-1">
-              <CollectionModeButton
-                label="Slate Packets"
-                count={visibleSlateCollections.length}
-                detail={`${slateItemCount} item${slateItemCount === 1 ? "" : "s"}`}
-                active={mode === "slate"}
-                onClick={() => { setMode("slate"); router.replace("/collections?type=slate", { scroll: false }); }}
-              />
-              <CollectionModeButton
-                label="Document Packets"
-                count={visibleScriptCollections.length}
-                detail={`${scriptItemCount} item${scriptItemCount === 1 ? "" : "s"}`}
-                active={mode === "scripts"}
-                onClick={() => { setMode("scripts"); router.replace("/collections?type=scripts", { scroll: false }); }}
-              />
-            </div>
-            <label className="inline-flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-2 text-xs font-semibold text-studio-300">
-              <input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />
-              Show archived
-            </label>
-          </div>
+      <div className="flex flex-col gap-3 rounded-lg border border-white/10 bg-white/[0.018] p-2 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <p className="font-display text-[10px] uppercase tracking-[0.16em] text-amberline/80">Collections</p>
+          <h2 className="mt-0.5 text-[15px] font-semibold text-studio-100">Review Packets</h2>
         </div>
-      </Panel>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex rounded-md border border-white/10 bg-white/[0.025] p-1">
+            <CollectionModeButton
+              label="Slate Packets"
+              count={visibleSlateCollections.length}
+              detail={`${slateItemCount} item${slateItemCount === 1 ? "" : "s"}`}
+              active={mode === "slate"}
+              onClick={() => { setMode("slate"); router.replace("/collections?type=slate", { scroll: false }); }}
+            />
+            <CollectionModeButton
+              label="Document Packets"
+              count={visibleScriptCollections.length}
+              detail={`${scriptItemCount} item${scriptItemCount === 1 ? "" : "s"}`}
+              active={mode === "scripts"}
+              onClick={() => { setMode("scripts"); router.replace("/collections?type=scripts", { scroll: false }); }}
+            />
+          </div>
+          <label className="inline-flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-2 text-xs font-semibold text-studio-300">
+            <input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />
+            Show archived
+          </label>
+        </div>
+      </div>
 
       <div className="collections-body min-h-0 flex-1">
         {mode === "slate" ? (
@@ -5422,7 +5469,7 @@ function CollectionSlateItemAddModal({
   const allVisibleSelected = Boolean(visibleItems.length) && visibleSelectedCount === visibleItems.length;
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
-      <form onSubmit={onSubmit} className="mt-10 flex max-h-[88vh] w-full max-w-3xl flex-col rounded-xl border border-white/10 bg-studio-950 p-4 shadow-2xl">
+      <form onSubmit={onSubmit} className="modal-card mt-10 flex max-h-[88vh] w-full max-w-3xl flex-col rounded-xl border border-white/10 bg-studio-950 p-4 shadow-2xl">
         <div className="mb-4 flex items-start justify-between gap-3">
           <SectionHeader eyebrow="Review List" title="Add Items" />
           <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close add items">
@@ -5536,7 +5583,7 @@ function CollectionCreateModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
-      <form onSubmit={submit} className="mt-16 w-full max-w-lg rounded-xl border border-white/10 bg-studio-950 p-4 shadow-2xl">
+      <form onSubmit={submit} className="modal-card mt-16 w-full max-w-lg rounded-xl border border-white/10 bg-studio-950 p-4 shadow-2xl">
         <div className="mb-4 flex items-start justify-between gap-3">
           <SectionHeader eyebrow="Collections" title={title} />
           <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close create collection">
@@ -5912,7 +5959,7 @@ function CollectionDocumentAddModal({
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
-      <form onSubmit={onSubmit} className="mt-10 flex max-h-[88vh] w-full max-w-3xl flex-col rounded-xl border border-white/10 bg-studio-950 p-4 shadow-2xl">
+      <form onSubmit={onSubmit} className="modal-card mt-10 flex max-h-[88vh] w-full max-w-3xl flex-col rounded-xl border border-white/10 bg-studio-950 p-4 shadow-2xl">
         <div className="mb-4 flex items-start justify-between gap-3">
           <SectionHeader eyebrow="Review List" title="Add Documents" />
           <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close add documents">
@@ -6580,6 +6627,8 @@ function NotesCenter({
   const [typeFilter, setTypeFilter] = useState("ALL");
   const [authorFilter, setAuthorFilter] = useState("ALL");
   const [selectedCommentId, setSelectedCommentId] = useState("");
+  const [page, setPage] = useState(1);
+  const pageSize = useResponsiveTablePageSize({ max: 12, reservedHeight: 360, rowHeight: 112 });
   const visibleNotes = comments.filter((comment) => comment.status !== "ARCHIVED");
   const authorIds = Array.from(new Set(visibleNotes.map((comment) => comment.createdById).filter(Boolean))).sort((left, right) => userNameFromList(left, users).localeCompare(userNameFromList(right, users)));
   const targetTypes = Array.from(new Set(visibleNotes.map((comment) => comment.targetType))).sort();
@@ -6594,11 +6643,18 @@ function NotesCenter({
       return !search.trim() || haystack.includes(search.trim().toLowerCase());
     })
     .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+  const totalPages = Math.max(1, Math.ceil(filteredNotes.length / pageSize));
+  const normalizedPage = Math.min(page, totalPages);
+  const pagedNotes = filteredNotes.slice((normalizedPage - 1) * pageSize, normalizedPage * pageSize);
   const selectedComment = visibleNotes.find((comment) => comment.id === selectedCommentId);
 
+  useEffect(() => {
+    setPage(1);
+  }, [authorFilter, pageSize, search, targetFilter, typeFilter, visibleNotes.length]);
+
   return (
-    <div className="space-y-4">
-      <Panel>
+    <div className="flex h-full min-h-0 flex-col gap-4">
+      <Panel className="shrink-0">
         <SectionHeader eyebrow="Notes" title="Studio Notes" />
         <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_170px_170px_190px]">
           <label className="grid gap-1">
@@ -6632,10 +6688,10 @@ function NotesCenter({
           <button type="button" className="font-semibold text-amberline" onClick={() => { setSearch(""); setTargetFilter("ALL"); setTypeFilter("ALL"); setAuthorFilter("ALL"); }}>Clear filters</button>
         </div>
       </Panel>
-      <Panel>
-        <div className="data-scroll max-h-[calc(100vh-330px)] min-h-[360px]">
+      <Panel className="flex min-h-0 flex-1 flex-col">
+        <div className="data-scroll table-workspace-scroll">
           <div className="grid gap-2 pr-2">
-            {filteredNotes.length ? filteredNotes.map((comment) => (
+            {filteredNotes.length ? pagedNotes.map((comment) => (
               <GlobalNoteCard
                 key={comment.id}
                 comment={comment}
@@ -6652,6 +6708,7 @@ function NotesCenter({
             )) : <EmptyState label="No notes match the current filters." />}
           </div>
         </div>
+        {filteredNotes.length ? <PaginationFooter page={normalizedPage} pageSize={pageSize} total={filteredNotes.length} onPageChange={setPage} /> : null}
       </Panel>
       {selectedComment ? (
         <GlobalNoteDialog
@@ -6841,7 +6898,7 @@ function GlobalNoteDialog({
 
   return (
     <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-studio-950/80 px-4 py-8 backdrop-blur-sm" onMouseDown={onClose}>
-      <div className="w-full max-w-5xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+      <div className="modal-card w-full max-w-5xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Note</p>
@@ -7262,7 +7319,7 @@ function ScriptNoteDialog({
 
   return (
     <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-studio-950/80 px-4 py-8 backdrop-blur-sm" onMouseDown={onClose}>
-      <div className="w-full max-w-5xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+      <div className="modal-card w-full max-w-5xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Script Note</p>
@@ -7849,9 +7906,9 @@ function Tasks({
   const taskTitle = compact ? "Tasks" : canViewAllTasks ? "All Tasks" : "My Tasks";
 
   return (
-    <Panel>
+    <Panel className="flex h-full min-h-0 flex-col">
       <SectionHeader eyebrow={projectName ? `Showing ${projectName}` : "Flexible Tracking"} title={taskTitle} action={onCreateTask ? <NewTaskDialog projects={projects} users={users} onCreateTask={onCreateTask} /> : undefined} />
-      <div className="mb-3 grid gap-2 rounded-lg border border-white/10 bg-white/[0.025] p-3 md:grid-cols-[minmax(180px,1.4fr)_repeat(3,minmax(130px,1fr))_auto] md:items-end">
+      <div className="mb-3 grid shrink-0 gap-2 rounded-lg border border-white/10 bg-white/[0.025] p-3 md:grid-cols-[minmax(180px,1.4fr)_repeat(3,minmax(130px,1fr))_auto] md:items-end">
         <label className="grid gap-1">
           <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Name</span>
           <input className="field" value={nameFilter} onChange={(event) => setNameFilter(event.target.value)} placeholder="Filter by task name" />
@@ -7881,7 +7938,7 @@ function Tasks({
           Clear
         </button>
       </div>
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs text-studio-400">
+      <div className="mb-2 flex shrink-0 flex-wrap items-center justify-between gap-2 text-xs text-studio-400">
         <span>{filteredTasks.length} of {visibleTasks.length} task{visibleTasks.length === 1 ? "" : "s"} shown</span>
         {activeFilterCount ? <span>{activeFilterCount} active filter{activeFilterCount === 1 ? "" : "s"}</span> : null}
       </div>
@@ -8150,6 +8207,10 @@ function Contacts({
   const [genreFilter, setGenreFilter] = useState("ALL");
   const [locationFilter, setLocationFilter] = useState("ALL");
   const [metWithFilter, setMetWithFilter] = useState<"ALL" | "MET" | "NOT_MET">("ALL");
+  const [outreachSort, setOutreachSort] = useState<{ key: OutreachSortKey; direction: "asc" | "desc" }>({ key: "name", direction: "asc" });
+  const [showOutreachFilters, setShowOutreachFilters] = useState(false);
+  const [showOutreachTools, setShowOutreachTools] = useState(false);
+  const [outreachPage, setOutreachPage] = useState(1);
   const [localContacts, setLocalContacts] = useState<HammerContact[]>([]);
   const [selectedContactId, setSelectedContactId] = useState("");
   const [expandedNoteContactId, setExpandedNoteContactId] = useState("");
@@ -8217,6 +8278,7 @@ function Contacts({
     const haystack = `${contact.name} ${talentAgency(contact)} ${role} ${genre} ${location} ${contact.email} ${contact.phone} ${talentCredits(contact)} ${contact.notes} ${(contact.tags ?? []).join(" ")}`.toLowerCase();
     return matchesRole && matchesGenre && matchesLocation && matchesMetWith && haystack.includes(search.toLowerCase());
   });
+  const activeOutreachFilterCount = [roleFilter !== "ALL", genreFilter !== "ALL", locationFilter !== "ALL", metWithFilter !== "ALL"].filter(Boolean).length;
   const selectedContact = contacts.find((contact) => contact.id === selectedContactId);
   const expandedNoteContact = contacts.find((contact) => contact.id === expandedNoteContactId);
   const relationshipProjects = selectedContact ? projects.filter((project) => draft.projectIds.includes(project.id)) : [];
@@ -8234,6 +8296,22 @@ function Contacts({
     });
     return latest;
   }, [outreachEngagements]);
+  const sortedContacts = useMemo(() => {
+    return [...filteredContacts].sort((left, right) => {
+      const leftValue = outreachSortValue(left, outreachSort.key, latestEngagementByContact);
+      const rightValue = outreachSortValue(right, outreachSort.key, latestEngagementByContact);
+      const comparison = leftValue.localeCompare(rightValue, undefined, { numeric: true, sensitivity: "base" });
+      return outreachSort.direction === "asc" ? comparison : -comparison;
+    });
+  }, [filteredContacts, latestEngagementByContact, outreachSort.direction, outreachSort.key]);
+  const outreachPageSize = useResponsiveTablePageSize({ max: 18, reservedHeight: showOutreachFilters || activeOutreachFilterCount > 0 || showOutreachTools ? 465 : 360 });
+  const outreachTotalPages = Math.max(1, Math.ceil(sortedContacts.length / outreachPageSize));
+  const normalizedOutreachPage = Math.min(outreachPage, outreachTotalPages);
+  const pagedContacts = sortedContacts.slice((normalizedOutreachPage - 1) * outreachPageSize, normalizedOutreachPage * outreachPageSize);
+
+  useEffect(() => {
+    setOutreachPage(1);
+  }, [activeOutreachFilterCount, outreachPageSize, outreachSort.direction, outreachSort.key, search, showOutreachFilters, showOutreachTools]);
 
   useEffect(() => {
     try {
@@ -8330,6 +8408,22 @@ function Contacts({
     }
     setImportMessage("Outreach entry updated.");
     setContactEditOpen(false);
+  }
+
+  async function updateContactFollowUp(contact: HammerContact, nextFollowUp: string) {
+    const patch = { nextFollowUp: nextFollowUp || undefined };
+    if (databaseMode) {
+      await onUpdateContact?.(contact.id, patch);
+    } else {
+      const updatedContact = { ...contact, ...patch };
+      const nextContacts = [...localContacts.filter((item) => item.id !== contact.id), updatedContact];
+      setLocalContacts(nextContacts);
+      window.localStorage.setItem(HAMMER_LOCAL_CONTACTS_STORAGE_KEY, JSON.stringify(nextContacts));
+    }
+    if (selectedContactId === contact.id) {
+      setDraft((current) => ({ ...current, nextFollowUp }));
+    }
+    setImportMessage(nextFollowUp ? `Follow-up updated for ${contact.name}.` : `Follow-up cleared for ${contact.name}.`);
   }
 
   async function addContactRelationship(event: React.FormEvent<HTMLFormElement>) {
@@ -8466,40 +8560,77 @@ function Contacts({
     setEngagementOpen(true);
   }
 
+  function toggleOutreachSort(key: OutreachSortKey) {
+    setOutreachSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === "asc" ? "desc" : "asc"
+    }));
+  }
+
   return (
-    <div className="space-y-4">
-      <div className="space-y-4">
-        <Panel>
-          <SectionHeader eyebrow="Outreach Directory" title="Outreach" action={<div className="flex flex-wrap gap-2"><PrimaryButton icon={Plus} label="Add Contact" onClick={() => setCreateOpen(true)} /><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline"><UploadCloud className="h-3.5 w-3.5" />Import CSV<input className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => importContacts(event.target.files?.[0])} /></label><button type="button" className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 hover:border-amberline/40 hover:text-amberline" onClick={exportContacts}>Export CSV</button></div>} />
-          <div className="mb-3 grid gap-2 lg:grid-cols-[1fr_170px_170px_150px_140px]">
-            <input className="field" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search names, agencies, credits, genres, roles" />
-            <select className="field" value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}>
-              <option value="ALL">All roles</option>
-              {roleOptions.map((role) => <option key={role} value={role}>{role}</option>)}
-            </select>
-            <select className="field" value={genreFilter} onChange={(event) => setGenreFilter(event.target.value)}>
-              <option value="ALL">All genres</option>
-              {genreOptions.map((genre) => <option key={genre} value={genre}>{genre}</option>)}
-            </select>
-            <select className="field" value={locationFilter} onChange={(event) => setLocationFilter(event.target.value)}>
-              <option value="ALL">All locations</option>
-              {locationOptions.map((location) => <option key={location} value={location}>{location}</option>)}
-            </select>
-            <select className="field" value={metWithFilter} onChange={(event) => setMetWithFilter(event.target.value as "ALL" | "MET" | "NOT_MET")}>
-              <option value="ALL">Any meeting</option>
-              <option value="MET">Met with</option>
-              <option value="NOT_MET">Not met yet</option>
-            </select>
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex min-h-0 flex-1 flex-col">
+        <Panel className="flex min-h-0 flex-1 flex-col">
+          <SectionHeader eyebrow="Outreach Directory" title="Outreach" action={<div className="flex flex-wrap gap-2"><PrimaryButton icon={Plus} label="Add Contact" onClick={() => setCreateOpen(true)} /><button type="button" onClick={() => setShowOutreachTools((open) => !open)} className="inline-flex items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline">Tools<ChevronDown className={cn("h-3.5 w-3.5 transition", showOutreachTools && "rotate-180")} /></button></div>} />
+          {showOutreachTools ? (
+            <div className="mb-3 flex flex-wrap gap-2 rounded-md border border-white/10 bg-white/[0.025] p-2">
+              <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline">
+                <UploadCloud className="h-3.5 w-3.5" />
+                Import CSV
+                <input className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => importContacts(event.target.files?.[0])} />
+              </label>
+              <button type="button" className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 hover:border-amberline/40 hover:text-amberline" onClick={exportContacts}>Export CSV</button>
+            </div>
+          ) : null}
+          <div className="mb-3 grid gap-2 lg:grid-cols-[1fr_auto] lg:items-center">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-studio-400" />
+              <input className="field pl-8" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search names, agencies, credits, genres, roles" />
+            </div>
+            <button type="button" onClick={() => setShowOutreachFilters((open) => !open)} className={cn("inline-flex min-h-10 items-center justify-center gap-2 rounded-md border px-3 py-2 text-xs font-semibold transition", activeOutreachFilterCount ? "border-amberline/35 bg-amberline/10 text-amberline" : "border-white/10 bg-white/[0.025] text-studio-300 hover:border-amberline/35 hover:text-amberline")} aria-expanded={showOutreachFilters}>
+              Filters
+              {activeOutreachFilterCount ? <span className="rounded-full bg-amberline px-1.5 py-0.5 text-[10px] text-studio-950">{activeOutreachFilterCount}</span> : null}
+              <ChevronDown className={cn("h-3.5 w-3.5 transition", showOutreachFilters && "rotate-180")} />
+            </button>
           </div>
+          {(showOutreachFilters || activeOutreachFilterCount > 0) ? (
+            <div className="mb-3 grid gap-2 rounded-md border border-white/10 bg-white/[0.025] p-2 md:grid-cols-4">
+              <select className="field" value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}>
+                <option value="ALL">All roles</option>
+                {roleOptions.map((role) => <option key={role} value={role}>{role}</option>)}
+              </select>
+              <select className="field" value={genreFilter} onChange={(event) => setGenreFilter(event.target.value)}>
+                <option value="ALL">All genres</option>
+                {genreOptions.map((genre) => <option key={genre} value={genre}>{genre}</option>)}
+              </select>
+              <select className="field" value={locationFilter} onChange={(event) => setLocationFilter(event.target.value)}>
+                <option value="ALL">All locations</option>
+                {locationOptions.map((location) => <option key={location} value={location}>{location}</option>)}
+              </select>
+              <select className="field" value={metWithFilter} onChange={(event) => setMetWithFilter(event.target.value as "ALL" | "MET" | "NOT_MET")}>
+                <option value="ALL">Any meeting</option>
+                <option value="MET">Met with</option>
+                <option value="NOT_MET">Not met yet</option>
+              </select>
+            </div>
+          ) : null}
           {importMessage ? <p className="mb-3 text-xs text-studio-300">{importMessage}</p> : null}
           {filteredContacts.length ? (
-            <div className="data-scroll contacts-list-scroll">
+            <div className="data-scroll contacts-list-scroll table-workspace-scroll">
               <table className="data-table table-fixed">
                 <thead className="text-[11px] uppercase tracking-[0.12em] text-studio-400">
-                  <tr><th className="w-[24%] py-2">Name</th><th className="w-[13%]">Role</th><th className="w-[18%]">Agency / Management</th><th className="w-[15%]">Genre</th><th className="w-[11%]">Last Contact</th><th className="w-[11%]">Follow-Up</th><th className="w-[8%] text-right">Actions</th></tr>
+                  <tr>
+                    <SortableHeader label="Name" sortKey="name" activeSort={outreachSort} onSort={toggleOutreachSort} className="w-[24%] py-2" />
+                    <SortableHeader label="Role" sortKey="role" activeSort={outreachSort} onSort={toggleOutreachSort} className="w-[13%]" />
+                    <SortableHeader label="Agency / Management" sortKey="agency" activeSort={outreachSort} onSort={toggleOutreachSort} className="w-[18%]" />
+                    <SortableHeader label="Genre" sortKey="genre" activeSort={outreachSort} onSort={toggleOutreachSort} className="w-[15%]" />
+                    <SortableHeader label="Last Contact" sortKey="lastContact" activeSort={outreachSort} onSort={toggleOutreachSort} className="w-[11%]" />
+                    <SortableHeader label="Follow-Up" sortKey="followUp" activeSort={outreachSort} onSort={toggleOutreachSort} className="w-[11%]" />
+                    <th className="w-[8%] text-right">Actions</th>
+                  </tr>
                 </thead>
                 <tbody className="divide-y divide-white/10">
-                  {filteredContacts.map((contact) => {
+                  {pagedContacts.map((contact) => {
                     const lastContact = contact.lastContacted || latestEngagementByContact.get(contact.id) || "";
                     return (
                       <tr key={contact.id} className={cn("text-studio-200 transition hover:bg-white/[0.035]", selectedContact?.id === contact.id && "bg-emerald-400/10")}>
@@ -8511,7 +8642,16 @@ function Contacts({
                         <td className="truncate text-studio-300" title={talentAgency(contact)}>{talentAgency(contact)}</td>
                         <td className="truncate text-studio-300" title={talentGenre(contact)}>{talentGenre(contact)}</td>
                         <td className="truncate text-studio-300">{lastContact || "-"}</td>
-                        <td className="truncate text-studio-300">{contact.nextFollowUp || "-"}</td>
+                        <td>
+                          <input
+                            className="field min-h-8 px-2 py-1 text-xs"
+                            type="date"
+                            value={contact.nextFollowUp ?? ""}
+                            onClick={(event) => event.stopPropagation()}
+                            onChange={(event) => void updateContactFollowUp(contact, event.target.value)}
+                            aria-label={`Follow-up date for ${contact.name}`}
+                          />
+                        </td>
                         <td className="py-2.5">
                           <div className="flex items-center justify-end gap-1.5">
                             <button type="button" onClick={() => openContactDetails(contact)} title="Contact details" className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/10 bg-white/[0.025] text-studio-200 transition hover:border-emerald-300/40 hover:text-emerald-200">
@@ -8529,6 +8669,7 @@ function Contacts({
               </table>
             </div>
           ) : <EmptyState label="No outreach contacts match this search." />}
+          {filteredContacts.length ? <PaginationFooter page={normalizedOutreachPage} pageSize={outreachPageSize} total={sortedContacts.length} onPageChange={setOutreachPage} /> : null}
         </Panel>
 
       </div>
@@ -8687,7 +8828,7 @@ function OutreachContactEditModal({
           event.preventDefault();
           void onSave();
         }}
-        className="w-full max-w-5xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl"
+        className="modal-card w-full max-w-5xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl"
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3">
@@ -8760,7 +8901,7 @@ function OutreachEngagementCreateModal({
 }) {
   return (
     <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm" onMouseDown={onClose}>
-      <form onSubmit={onSubmit} className="w-full max-w-5xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+      <form onSubmit={onSubmit} className="modal-card w-full max-w-5xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
         <div className="flex items-start justify-between gap-3">
           <SectionHeader eyebrow="Outreach Timeline" title={`Engagement / ${contact.name}`} />
           <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close engagement form">
@@ -8874,7 +9015,7 @@ function OutreachEngagementEditModal({
           event.preventDefault();
           void onSave(draft);
         }}
-        className="w-full max-w-3xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl"
+        className="modal-card w-full max-w-3xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl"
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3">
@@ -9872,24 +10013,37 @@ function ExecutiveBriefMetric({ label, value, detail }: { label: string; value: 
 }
 
 function ExecutiveSlateTable({ briefs }: { briefs: ExecutiveProjectBrief[] }) {
+  const [page, setPage] = useState(1);
+  const pageSize = useResponsiveTablePageSize({ max: 18, reservedHeight: 360 });
+  const totalPages = Math.max(1, Math.ceil(briefs.length / pageSize));
+  const normalizedPage = Math.min(page, totalPages);
+  const pagedBriefs = briefs.slice((normalizedPage - 1) * pageSize, normalizedPage * pageSize);
+
+  useEffect(() => {
+    setPage(1);
+  }, [briefs.length, pageSize]);
+
   return (
-    <div className="data-scroll">
-      <table className="data-table min-w-[860px]">
-        <thead className="text-[11px] uppercase tracking-[0.12em] text-studio-400">
-          <tr><th className="py-2">Project</th><th>Overall Status</th><th>Current Material</th><th>Open Items</th><th>Next Step</th></tr>
-        </thead>
-        <tbody className="divide-y divide-white/10">
-          {briefs.map((brief) => (
-            <tr key={brief.project.id} className="transition hover:bg-white/[0.035]">
-              <td className="py-2.5"><Link href={`/projects/${brief.project.id}`} className="font-semibold text-studio-100 hover:text-amberline">{brief.project.title}</Link><p className="mt-0.5 text-xs text-studio-400">{brief.project.genre}</p></td>
-              <td><ExecutiveHealthBadge health={brief.health} /></td>
-              <td className="text-studio-300">{brief.currentDocument ? `${brief.currentDocument.title} / ${statusLabel(brief.currentVersion?.status ?? "RECEIVED")}` : "No current material"}</td>
-              <td className="text-studio-300">{brief.openTasks.length} tasks / {brief.pendingApprovals.length} approvals / {brief.reviewAssets.length} assets</td>
-              <td className="text-studio-300">{brief.nextAction}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="table-workspace">
+      <div className="data-scroll table-workspace-scroll">
+        <table className="data-table min-w-[860px]">
+          <thead className="text-[11px] uppercase tracking-[0.12em] text-studio-400">
+            <tr><th className="py-2">Project</th><th>Overall Status</th><th>Current Material</th><th>Open Items</th><th>Next Step</th></tr>
+          </thead>
+          <tbody className="divide-y divide-white/10">
+            {pagedBriefs.map((brief) => (
+              <tr key={brief.project.id} className="transition hover:bg-white/[0.035]">
+                <td className="py-2.5"><Link href={`/projects/${brief.project.id}`} className="font-semibold text-studio-100 hover:text-amberline">{brief.project.title}</Link><p className="mt-0.5 text-xs text-studio-400">{brief.project.genre}</p></td>
+                <td><ExecutiveHealthBadge health={brief.health} /></td>
+                <td className="text-studio-300">{brief.currentDocument ? `${brief.currentDocument.title} / ${statusLabel(brief.currentVersion?.status ?? "RECEIVED")}` : "No current material"}</td>
+                <td className="text-studio-300">{brief.openTasks.length} tasks / {brief.pendingApprovals.length} approvals / {brief.reviewAssets.length} assets</td>
+                <td className="text-studio-300">{brief.nextAction}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <PaginationFooter page={normalizedPage} pageSize={pageSize} total={briefs.length} onPageChange={setPage} />
     </div>
   );
 }
@@ -9923,6 +10077,10 @@ function AdminUsers({
   const [createdUserReceipt, setCreatedUserReceipt] = useState<{ name: string; email: string; password: string } | null>(null);
   const [projectStatusMessage, setProjectStatusMessage] = useState("");
   const [localUserStates, setLocalUserStates] = useState<Record<string, { inactive?: boolean; deleted?: boolean }>>({});
+  const [adminProjectPage, setAdminProjectPage] = useState(1);
+  const [adminUserPage, setAdminUserPage] = useState(1);
+  const adminProjectPageSize = useResponsiveTablePageSize({ max: 14, reservedHeight: 520 });
+  const adminUserPageSize = useResponsiveTablePageSize({ max: 14, reservedHeight: 520 });
   const [projectDraft, setProjectDraft] = useState<ProjectDraft>({
     title: "",
     logline: "",
@@ -9947,6 +10105,20 @@ function AdminUsers({
   }, []);
 
   const visibleUsers = users.filter((user) => !localUserStates[user.id]?.deleted);
+  const adminProjectTotalPages = Math.max(1, Math.ceil(projects.length / adminProjectPageSize));
+  const normalizedAdminProjectPage = Math.min(adminProjectPage, adminProjectTotalPages);
+  const pagedAdminProjects = projects.slice((normalizedAdminProjectPage - 1) * adminProjectPageSize, normalizedAdminProjectPage * adminProjectPageSize);
+  const adminUserTotalPages = Math.max(1, Math.ceil(visibleUsers.length / adminUserPageSize));
+  const normalizedAdminUserPage = Math.min(adminUserPage, adminUserTotalPages);
+  const pagedAdminUsers = visibleUsers.slice((normalizedAdminUserPage - 1) * adminUserPageSize, normalizedAdminUserPage * adminUserPageSize);
+
+  useEffect(() => {
+    setAdminProjectPage(1);
+  }, [adminProjectPageSize, projects.length]);
+
+  useEffect(() => {
+    setAdminUserPage(1);
+  }, [adminUserPageSize, visibleUsers.length]);
 
   async function createAdminUser(input: { name: string; email: string; password: string; appRole: AppRole }) {
     await onCreateUser(input);
@@ -10041,11 +10213,11 @@ function AdminUsers({
       <Panel>
         <SectionHeader eyebrow="Development Slate" title="Slate Status" />
         {projectStatusMessage ? <p className="mb-3 text-xs text-studio-300">{projectStatusMessage}</p> : null}
-        <div className="data-scroll">
+        <div className="data-scroll table-workspace-scroll">
           <table className="data-table min-w-[720px]">
             <thead className="text-xs uppercase tracking-[0.16em] text-studio-400"><tr><th className="py-2">Project</th><th>Current Status</th><th>Status Control</th><th>Updated</th><th>Admin</th></tr></thead>
             <tbody className="divide-y divide-white/10">
-              {projects.map((project) => (
+              {pagedAdminProjects.map((project) => (
                 <tr key={project.id}>
                   <td className="py-2.5 font-semibold text-studio-100">{project.title}</td>
                   <td><Badge value={project.status} /></td>
@@ -10079,6 +10251,7 @@ function AdminUsers({
             </tbody>
           </table>
         </div>
+        <PaginationFooter page={normalizedAdminProjectPage} pageSize={adminProjectPageSize} total={projects.length} onPageChange={setAdminProjectPage} />
       </Panel>
 
       <Panel>
@@ -10090,11 +10263,11 @@ function AdminUsers({
             <div className="mt-2 rounded border border-white/10 bg-white/[0.035] px-2.5 py-2 font-mono text-sm text-emerald-200">{createdUserReceipt.password}</div>
           </div>
         ) : null}
-        <div className="data-scroll">
+        <div className="data-scroll table-workspace-scroll">
           <table className="data-table min-w-[900px]">
             <thead className="text-xs uppercase tracking-[0.16em] text-studio-400"><tr><th className="py-2">Name</th><th>Email</th><th>Global Role</th><th>Status</th><th>Project Access</th><th>Actions</th></tr></thead>
             <tbody className="divide-y divide-white/10">
-              {visibleUsers.map((user) => {
+              {pagedAdminUsers.map((user) => {
                 const inactive = Boolean(localUserStates[user.id]?.inactive);
                 const isCurrentUser = user.id === currentUser.id;
                 return (
@@ -10139,6 +10312,7 @@ function AdminUsers({
             </tbody>
           </table>
         </div>
+        <PaginationFooter page={normalizedAdminUserPage} pageSize={adminUserPageSize} total={visibleUsers.length} onPageChange={setAdminUserPage} />
       </Panel>
       {createUserOpen ? (
         <CreateUserModal
@@ -10281,10 +10455,64 @@ function temporaryPassword() {
 
 type ProjectSortKey = "title" | "logline" | "status" | "owner" | "updatedAt";
 type ProspectSortKey = "title" | "logline" | "lane" | "genre" | "urgency" | "rights" | "owner" | "actionStatus" | "score";
+type OutreachSortKey = "name" | "role" | "agency" | "genre" | "lastContact" | "followUp";
 type TaskSortKey = "manual" | "title" | "assignee" | "type" | "context" | "priority" | "status" | "createdAt" | "dueDate";
+
+function useResponsiveTablePageSize({ min = 6, max = 18, reservedHeight = 385, rowHeight = 49 }: { min?: number; max?: number; reservedHeight?: number; rowHeight?: number } = {}) {
+  const [pageSize, setPageSize] = useState(12);
+
+  useEffect(() => {
+    function updatePageSize() {
+      const availableTableHeight = Math.max(280, window.innerHeight - reservedHeight);
+      setPageSize(Math.max(min, Math.min(max, Math.floor(availableTableHeight / rowHeight))));
+    }
+
+    updatePageSize();
+    window.addEventListener("resize", updatePageSize);
+    return () => window.removeEventListener("resize", updatePageSize);
+  }, [max, min, reservedHeight, rowHeight]);
+
+  return pageSize;
+}
+
+function PaginationFooter({ page, pageSize, total, onPageChange }: { page: number; pageSize: number; total: number; onPageChange: (page: number) => void }) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const normalizedPage = Math.min(page, totalPages);
+  if (total <= pageSize) {
+    return <div className="shrink-0 pt-3 text-xs text-studio-400">Showing {total} item{total === 1 ? "" : "s"}</div>;
+  }
+  return (
+    <div className="shrink-0 pt-3 flex flex-col gap-2 text-xs text-studio-400 md:flex-row md:items-center md:justify-between">
+      <span>
+        Showing {(normalizedPage - 1) * pageSize + 1}-{Math.min(normalizedPage * pageSize, total)} of {total}
+      </span>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          disabled={normalizedPage <= 1}
+          onClick={() => onPageChange(Math.max(1, normalizedPage - 1))}
+          className="rounded border border-white/10 px-2 py-1 font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Previous
+        </button>
+        <span className="min-w-24 text-center">Page {normalizedPage} of {totalPages}</span>
+        <button
+          type="button"
+          disabled={normalizedPage >= totalPages}
+          onClick={() => onPageChange(Math.min(totalPages, normalizedPage + 1))}
+          className="rounded border border-white/10 px-2 py-1 font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function ProjectTable({ projects }: { projects: HammerProject[] }) {
   const [sort, setSort] = useState<{ key: ProjectSortKey; direction: "asc" | "desc" }>({ key: "title", direction: "asc" });
+  const [page, setPage] = useState(1);
+  const pageSize = useResponsiveTablePageSize({ max: 20, reservedHeight: 330 });
   const sortedProjects = useMemo(() => {
     return [...projects].sort((a, b) => {
       const aValue = projectSortValue(a, sort.key);
@@ -10301,14 +10529,32 @@ function ProjectTable({ projects }: { projects: HammerProject[] }) {
     }));
   }
 
+  useEffect(() => {
+    setPage(1);
+  }, [pageSize, projects.length, sort.direction, sort.key]);
+
+  const totalPages = Math.max(1, Math.ceil(sortedProjects.length / pageSize));
+  const normalizedPage = Math.min(page, totalPages);
+  const pagedProjects = sortedProjects.slice((normalizedPage - 1) * pageSize, normalizedPage * pageSize);
+
   if (!projects.length) return <EmptyState label="No projects match this view." />;
-  return <div className="data-scroll"><table className="data-table min-w-[980px]"><thead><tr><SortableHeader label="Project" sortKey="title" activeSort={sort} onSort={toggleSort} /><SortableHeader label="Logline" sortKey="logline" activeSort={sort} onSort={toggleSort} /><SortableHeader label="Status" sortKey="status" activeSort={sort} onSort={toggleSort} /><SortableHeader label="Owner" sortKey="owner" activeSort={sort} onSort={toggleSort} /><SortableHeader label="Updated" sortKey="updatedAt" activeSort={sort} onSort={toggleSort} /></tr></thead><tbody>{sortedProjects.map((project) => <tr key={project.id} className="transition hover:bg-white/[0.035]"><td><Link className="block font-semibold text-studio-100" href={`/projects/${project.id}`}>{project.title}<p className="mt-0.5 text-xs font-normal text-studio-400">{project.genre}</p></Link></td><td><Link className="line-clamp-2 max-w-[420px] text-[13px] leading-5 text-studio-300" href={`/projects/${project.id}`}>{project.logline || "-"}</Link></td><td><Link className="block" href={`/projects/${project.id}`}><Badge value={project.status} /></Link></td><td><Link className="block text-studio-300" href={`/projects/${project.id}`}>{userName(project.ownerId)}</Link></td><td><Link className="block text-studio-300" href={`/projects/${project.id}`}>{project.updatedAt}</Link></td></tr>)}</tbody></table></div>;
+  return (
+    <div className="table-workspace">
+      <div className="data-scroll table-workspace-scroll">
+        <table className="data-table min-w-[980px]">
+          <thead><tr><SortableHeader label="Project" sortKey="title" activeSort={sort} onSort={toggleSort} /><SortableHeader label="Logline" sortKey="logline" activeSort={sort} onSort={toggleSort} /><SortableHeader label="Status" sortKey="status" activeSort={sort} onSort={toggleSort} /><SortableHeader label="Owner" sortKey="owner" activeSort={sort} onSort={toggleSort} /><SortableHeader label="Updated" sortKey="updatedAt" activeSort={sort} onSort={toggleSort} /></tr></thead>
+          <tbody>{pagedProjects.map((project) => <tr key={project.id} className="transition hover:bg-white/[0.035]"><td><Link className="block font-semibold text-studio-100" href={`/projects/${project.id}`}>{project.title}<p className="mt-0.5 text-xs font-normal text-studio-400">{project.genre}</p></Link></td><td><Link className="line-clamp-2 max-w-[420px] text-[13px] leading-5 text-studio-300" href={`/projects/${project.id}`}>{project.logline || "-"}</Link></td><td><Link className="block" href={`/projects/${project.id}`}><Badge value={project.status} /></Link></td><td><Link className="block text-studio-300" href={`/projects/${project.id}`}>{userName(project.ownerId)}</Link></td><td><Link className="block text-studio-300" href={`/projects/${project.id}`}>{project.updatedAt}</Link></td></tr>)}</tbody>
+        </table>
+      </div>
+      <PaginationFooter page={normalizedPage} pageSize={pageSize} total={sortedProjects.length} onPageChange={setPage} />
+    </div>
+  );
 }
 
-function SortableHeader<TSortKey extends string>({ label, sortKey, activeSort, onSort }: { label: string; sortKey: TSortKey; activeSort: { key: TSortKey; direction: "asc" | "desc" }; onSort: (key: TSortKey) => void }) {
+function SortableHeader<TSortKey extends string>({ label, sortKey, activeSort, onSort, className }: { label: string; sortKey: TSortKey; activeSort: { key: TSortKey; direction: "asc" | "desc" }; onSort: (key: TSortKey) => void; className?: string }) {
   const active = activeSort.key === sortKey;
   return (
-    <th>
+    <th className={className}>
       <button type="button" onClick={() => onSort(sortKey)} className={cn("inline-flex items-center gap-1 text-left uppercase tracking-[0.12em] transition hover:text-amberline", active && "text-amberline")}>
         {label}
         <ArrowUpDown className="h-3 w-3" />
@@ -10336,6 +10582,15 @@ function prospectSortValue(lead: HammerProjectLead, key: ProspectSortKey, users:
   if (key === "owner") return prospectOwnerLabel(lead, users);
   if (key === "actionStatus") return lead.nextActionStatus ?? "";
   return lead.priorityScore === undefined || lead.priorityScore === null ? "" : String(lead.priorityScore).padStart(6, "0");
+}
+
+function outreachSortValue(contact: HammerContact, key: OutreachSortKey, latestEngagementByContact: Map<string, string>) {
+  if (key === "name") return contact.name;
+  if (key === "role") return talentRole(contact);
+  if (key === "agency") return talentAgency(contact);
+  if (key === "genre") return talentGenre(contact);
+  if (key === "lastContact") return contact.lastContacted || latestEngagementByContact.get(contact.id) || "";
+  return contact.nextFollowUp || "";
 }
 
 function taskTypeLabel(task: HammerTask) {
@@ -10393,18 +10648,29 @@ function TaskRows({
   const [sort, setSort] = useState<{ key: TaskSortKey; direction: "asc" | "desc" }>({ key: "manual", direction: "asc" });
   const [draggedTaskId, setDraggedTaskId] = useState("");
   const [dragOverTaskId, setDragOverTaskId] = useState("");
-  const [expandedSubtasks, setExpandedSubtasks] = useState<Record<string, boolean>>({});
+  const [editingTaskId, setEditingTaskId] = useState("");
+  const [expandedTaskIds, setExpandedTaskIds] = useState<string[]>([]);
+  const [page, setPage] = useState(1);
+  const pageSize = useResponsiveTablePageSize({ max: 14, reservedHeight: 380, rowHeight: 66 });
   const gridClass = showAssignee
     ? showType
-      ? "md:grid-cols-[34px_minmax(220px,1fr)_130px_140px_120px_110px_105px_100px_128px]"
-      : showContext ? "md:grid-cols-[34px_1fr_130px_120px_120px_110px_100px_128px]" : "md:grid-cols-[34px_1fr_130px_120px_110px_100px_128px]"
+      ? "md:grid-cols-[34px_minmax(220px,1fr)_130px_140px_120px_118px_110px_105px_100px]"
+      : showContext ? "md:grid-cols-[34px_1fr_130px_120px_118px_120px_110px_100px]" : "md:grid-cols-[34px_1fr_130px_118px_120px_110px_100px]"
     : showType
-      ? "md:grid-cols-[34px_minmax(220px,1fr)_140px_120px_110px_105px_100px_128px]"
-      : showContext ? "md:grid-cols-[34px_1fr_120px_120px_110px_100px_128px]" : "md:grid-cols-[34px_1fr_120px_110px_100px_128px]";
+      ? "md:grid-cols-[34px_minmax(220px,1fr)_140px_118px_120px_110px_105px_100px]"
+      : showContext ? "md:grid-cols-[34px_1fr_120px_118px_120px_110px_100px]" : "md:grid-cols-[34px_1fr_118px_120px_110px_100px]";
   const nameForUser = (userId: string) => users.find((user) => user.id === userId)?.name ?? userName(userId);
   const sortedTasks = useMemo(() => {
     return [...tasks].sort((a, b) => compareTasks(a, b, sort, users, projects));
   }, [projects, sort, tasks, users]);
+  const totalPages = Math.max(1, Math.ceil(sortedTasks.length / pageSize));
+  const normalizedPage = Math.min(page, totalPages);
+  const pagedTasks = sortedTasks.slice((normalizedPage - 1) * pageSize, normalizedPage * pageSize);
+
+  useEffect(() => {
+    setPage(1);
+  }, [pageSize, sort.direction, sort.key, tasks.length]);
+
   function toggleSort(key: TaskSortKey) {
     setSort((current) => ({
       key,
@@ -10423,128 +10689,157 @@ function TaskRows({
     setDraggedTaskId("");
     setDragOverTaskId("");
   }
-  function toggleSubtasks(taskId: string) {
-    setExpandedSubtasks((current) => ({ ...current, [taskId]: !current[taskId] }));
+
+  function toggleTaskSubtasks(taskId: string) {
+    setExpandedTaskIds((current) => current.includes(taskId) ? current.filter((id) => id !== taskId) : [...current, taskId]);
   }
+
+  const editingTask = tasks.find((task) => task.id === editingTaskId);
+
   return (
-    <div className="data-scroll-list grid gap-2">
-      <div className={cn("hidden px-2.5 text-[11px] uppercase tracking-[0.12em] text-studio-400 md:grid", gridClass)}>
-        <TaskSortButton label="Order" sortKey="manual" activeSort={sort} onSort={toggleSort} compact />
-        <TaskSortButton label="Name" sortKey="title" activeSort={sort} onSort={toggleSort} />
-        {showAssignee ? <TaskSortButton label="Assignee" sortKey="assignee" activeSort={sort} onSort={toggleSort} /> : null}
-        {showType ? <TaskSortButton label="Type" sortKey="type" activeSort={sort} onSort={toggleSort} /> : null}
-        {showContext ? <TaskSortButton label="Area" sortKey="context" activeSort={sort} onSort={toggleSort} /> : null}
-        <TaskSortButton label="Priority" sortKey="priority" activeSort={sort} onSort={toggleSort} />
-        <TaskSortButton label="Status" sortKey="status" activeSort={sort} onSort={toggleSort} />
-        <TaskSortButton label="Created" sortKey="createdAt" activeSort={sort} onSort={toggleSort} />
-        <TaskSortButton label="Due" sortKey="dueDate" activeSort={sort} onSort={toggleSort} />
-        <span>{onUpdateTask || onDeleteTask ? "Actions" : ""}</span>
-      </div>
-      {sortedTasks.map((task) => {
-        const subtasks = task.subtasks ?? [];
-        const completedSubtasks = subtasks.filter((subtask) => subtask.completed).length;
-        const hasSubtaskControls = Boolean(onCreateSubtask || subtasks.length);
-        const subtasksExpanded = Boolean(expandedSubtasks[task.id]);
-        return (
-        <div
-          key={task.id}
-          className={cn(
-            "grid gap-2 rounded-lg border border-white/10 bg-white/[0.03] p-2.5 transition hover:border-amberline/35 hover:bg-white/[0.055]",
-            gridClass,
-            selectedTaskId === task.id && "border-amberline/45 bg-amberline/10",
-            dragOverTaskId === task.id && "border-amberline/60 bg-amberline/10"
-          )}
-          onDragOver={(event) => {
-            if (!onReorderTasks || !draggedTaskId) return;
-            event.preventDefault();
-            setDragOverTaskId(task.id);
-          }}
-          onDragLeave={() => setDragOverTaskId((current) => current === task.id ? "" : current)}
-          onDrop={(event) => {
-            event.preventDefault();
-            dropTask(task.id);
-          }}
-        >
-          <div className="flex items-start">
-            <button
-              type="button"
-              draggable={Boolean(onReorderTasks)}
-              disabled={!onReorderTasks}
-              onDragStart={(event) => {
-                setSort({ key: "manual", direction: "asc" });
-                setDraggedTaskId(task.id);
-                event.dataTransfer.effectAllowed = "move";
-                event.dataTransfer.setData("text/plain", task.id);
-              }}
-              onDragEnd={() => {
-                setDraggedTaskId("");
-                setDragOverTaskId("");
-              }}
-              className="inline-flex h-7 w-7 cursor-grab items-center justify-center rounded border border-white/10 text-studio-400 transition hover:border-amberline/40 hover:text-amberline active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-35"
-              aria-label={`Reorder ${task.title}`}
-            >
-              <GripVertical className="h-4 w-4" />
-            </button>
-          </div>
-          <div>
-            <p className="text-[13px] font-semibold text-studio-100">{task.title}</p>
-            <p className="mt-0.5 text-xs text-studio-300">{task.description}</p>
-          </div>
-          {showAssignee ? <p className="text-xs font-semibold text-studio-300">{nameForUser(task.assignedToId)}</p> : null}
-          {showType ? <p className="text-xs font-semibold text-studio-300">{taskTypeLabel(task)}</p> : null}
-          {showContext ? <p className="text-xs text-studio-300">{taskContextLabel(task)}</p> : null}
-          {onUpdateTask ? (
-            <TaskInlineSelect label="Priority" value={task.priority} options={["LOW", "MEDIUM", "HIGH", "URGENT"]} onChange={(value) => onUpdateTask(task.id, { priority: value as TaskPriority })} />
-          ) : <Badge value={task.priority} />}
-          {onUpdateTask ? (
-            <TaskInlineSelect label="Progress" value={task.status} options={["TODO", "IN_PROGRESS", "DONE", "ON_HOLD", "REVIEW"]} onChange={(value) => onUpdateTask(task.id, { status: value as TaskStatus })} />
-          ) : <Badge value={task.status} />}
-          <p className="text-xs text-studio-300">{formatShortDateTime(task.createdAt)}</p>
-          <p className="text-xs text-studio-300">{task.dueDate}</p>
-          <div className="flex flex-wrap items-center gap-1.5">
-            {hasSubtaskControls ? (
-              <button
-                type="button"
-                onClick={() => toggleSubtasks(task.id)}
-                className="inline-flex h-7 items-center justify-center gap-1 rounded border border-white/10 bg-white/[0.025] px-2 text-[11px] font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline"
-                aria-expanded={subtasksExpanded}
-                aria-controls={`subtasks-${task.id}`}
-              >
-                <ChevronDown className={cn("h-3 w-3 transition-transform", subtasksExpanded && "rotate-180")} />
-                Subtasks {completedSubtasks}/{subtasks.length}
-              </button>
-            ) : null}
-            {onUpdateTask ? <EditTaskDialog task={task} users={users} projects={projects} onUpdateTask={onUpdateTask} /> : null}
-            {onDeleteTask ? (
-              <button
-                type="button"
-                onClick={() => {
-                  if (window.confirm(`Delete task "${task.title}"?`)) onDeleteTask(task.id);
-                }}
-                className="inline-flex h-7 items-center justify-center gap-1 rounded border border-rose-400/25 bg-rose-500/5 px-2 text-[11px] font-semibold text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200"
-              >
-                <Trash2 className="h-3 w-3" />
-                Delete
-              </button>
-            ) : null}
-          </div>
-          {hasSubtaskControls && subtasksExpanded ? (
-            <TaskSubtasks task={task} onCreateSubtask={onCreateSubtask} onUpdateSubtask={onUpdateSubtask} onDeleteSubtask={onDeleteSubtask} />
-          ) : null}
+    <div className="table-workspace">
+      <div className="data-scroll-list table-workspace-scroll grid gap-1.5">
+        <div className={cn("hidden px-2.5 text-[11px] uppercase tracking-[0.12em] text-studio-400 md:grid", gridClass)}>
+          <TaskSortButton label="Order" sortKey="manual" activeSort={sort} onSort={toggleSort} compact />
+          <TaskSortButton label="Name" sortKey="title" activeSort={sort} onSort={toggleSort} />
+          {showAssignee ? <TaskSortButton label="Assignee" sortKey="assignee" activeSort={sort} onSort={toggleSort} /> : null}
+          {showType ? <TaskSortButton label="Type" sortKey="type" activeSort={sort} onSort={toggleSort} /> : null}
+          {showContext ? <TaskSortButton label="Area" sortKey="context" activeSort={sort} onSort={toggleSort} /> : null}
+          <span className="font-semibold">Subtasks</span>
+          <TaskSortButton label="Priority" sortKey="priority" activeSort={sort} onSort={toggleSort} />
+          <TaskSortButton label="Status" sortKey="status" activeSort={sort} onSort={toggleSort} />
+          <TaskSortButton label="Created" sortKey="createdAt" activeSort={sort} onSort={toggleSort} />
+          <TaskSortButton label="Due" sortKey="dueDate" activeSort={sort} onSort={toggleSort} />
         </div>
-        );
-      })}
+        {pagedTasks.map((task) => {
+          const subtasks = task.subtasks ?? [];
+          const completedSubtasks = subtasks.filter((subtask) => subtask.completed).length;
+          const expanded = expandedTaskIds.includes(task.id);
+          return (
+            <div key={task.id} className={cn("rounded-md border border-white/10 bg-white/[0.018] transition", expanded && "border-amberline/25 bg-amberline/5")}>
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => setEditingTaskId(task.id)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setEditingTaskId(task.id);
+                  }
+                }}
+                className={cn(
+                  "grid cursor-pointer gap-2 rounded-md px-2.5 py-2 transition hover:bg-white/[0.045] focus:outline-none focus:ring-2 focus:ring-amberline/30",
+                  gridClass,
+                  selectedTaskId === task.id && "bg-amberline/10",
+                  dragOverTaskId === task.id && "bg-amberline/10"
+                )}
+                onDragOver={(event) => {
+                  if (!onReorderTasks || !draggedTaskId) return;
+                  event.preventDefault();
+                  setDragOverTaskId(task.id);
+                }}
+                onDragLeave={() => setDragOverTaskId((current) => current === task.id ? "" : current)}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  dropTask(task.id);
+                }}
+              >
+                <div className="flex items-start">
+                  <button
+                    type="button"
+                    draggable={Boolean(onReorderTasks)}
+                    disabled={!onReorderTasks}
+                    onClick={(event) => event.stopPropagation()}
+                    onDragStart={(event) => {
+                      event.stopPropagation();
+                      setSort({ key: "manual", direction: "asc" });
+                      setDraggedTaskId(task.id);
+                      event.dataTransfer.effectAllowed = "move";
+                      event.dataTransfer.setData("text/plain", task.id);
+                    }}
+                    onDragEnd={() => {
+                      setDraggedTaskId("");
+                      setDragOverTaskId("");
+                    }}
+                    className="inline-flex h-6 w-6 cursor-grab items-center justify-center rounded border border-white/10 text-studio-400 transition hover:border-amberline/40 hover:text-amberline active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-35"
+                    aria-label={`Reorder ${task.title}`}
+                  >
+                    <GripVertical className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <div>
+                  <p className="text-[13px] font-semibold leading-5 text-studio-100">{task.title}</p>
+                  <p className="line-clamp-1 text-xs leading-4 text-studio-300">{task.description}</p>
+                </div>
+                {showAssignee ? <p className="text-xs font-semibold text-studio-300">{nameForUser(task.assignedToId)}</p> : null}
+                {showType ? <p className="text-xs font-semibold text-studio-300">{taskTypeLabel(task)}</p> : null}
+                {showContext ? <p className="text-xs text-studio-300">{taskContextLabel(task)}</p> : null}
+                <TaskSubtaskSummary completed={completedSubtasks} total={subtasks.length} expanded={expanded} onToggle={() => toggleTaskSubtasks(task.id)} />
+                <Badge value={task.priority} />
+                <Badge value={task.status} />
+                <p className="text-xs text-studio-300">{formatShortDateTime(task.createdAt)}</p>
+                <p className="text-xs text-studio-300">{task.dueDate}</p>
+              </div>
+              {expanded ? (
+                <div className="border-t border-white/10 px-2.5 py-2">
+                  <TaskSubtasks task={task} compact onCreateSubtask={onCreateSubtask} onUpdateSubtask={onUpdateSubtask} onDeleteSubtask={onDeleteSubtask} />
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+      <PaginationFooter page={normalizedPage} pageSize={pageSize} total={sortedTasks.length} onPageChange={setPage} />
+      {editingTask && onUpdateTask ? (
+        <EditTaskDialog
+          task={editingTask}
+          users={users}
+          projects={projects}
+          onClose={() => setEditingTaskId("")}
+          onUpdateTask={onUpdateTask}
+          onDeleteTask={onDeleteTask}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function TaskSubtaskSummary({ completed, total, expanded, onToggle }: { completed: number; total: number; expanded: boolean; onToggle: () => void }) {
+  const percent = total ? Math.round((completed / total) * 100) : 0;
+  if (!total) {
+    return (
+      <button type="button" onClick={(event) => { event.stopPropagation(); onToggle(); }} className={cn("inline-flex items-center justify-between gap-2 rounded-md border border-white/10 bg-white/[0.02] px-2 py-1 text-left text-[11px] font-semibold text-studio-400 transition hover:border-amberline/35 hover:text-amberline", expanded && "border-amberline/35 text-amberline")}>
+        <span>Add subtasks</span>
+        <ChevronDown className={cn("h-3.5 w-3.5 transition", expanded && "rotate-180")} />
+      </button>
+    );
+  }
+
+  return (
+    <button type="button" onClick={(event) => { event.stopPropagation(); onToggle(); }} className={cn("rounded-md border border-amberline/20 bg-amberline/8 px-2 py-1 text-left transition hover:border-amberline/45", expanded && "border-amberline/45 bg-amberline/12")}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold text-studio-100">{completed}/{total}</span>
+        <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-studio-400">
+          {percent}%
+          <ChevronDown className={cn("h-3.5 w-3.5 transition", expanded && "rotate-180")} />
+        </span>
+      </div>
+      <div className="mt-1 h-1 overflow-hidden rounded-full bg-white/10">
+        <div className="h-full rounded-full bg-amberline transition-all" style={{ width: `${percent}%` }} />
+      </div>
+    </button>
   );
 }
 
 function TaskSubtasks({
   task,
+  compact = false,
   onCreateSubtask,
   onUpdateSubtask,
   onDeleteSubtask
 }: {
   task: HammerTask;
+  compact?: boolean;
   onCreateSubtask?: (taskId: string, title: string) => void;
   onUpdateSubtask?: (subtaskId: string, patch: TaskSubtaskPatch) => void;
   onDeleteSubtask?: (subtaskId: string) => void;
@@ -10553,36 +10848,54 @@ function TaskSubtasks({
   const subtasks = task.subtasks ?? [];
   const completedCount = subtasks.filter((subtask) => subtask.completed).length;
 
-  function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  function addSubtask() {
     if (!title.trim() || !onCreateSubtask) return;
     onCreateSubtask(task.id, title.trim());
     setTitle("");
   }
 
+  const percent = subtasks.length ? Math.round((completedCount / subtasks.length) * 100) : 0;
+
   return (
-    <div className="md:col-span-full rounded-md border border-white/10 bg-black/10 p-2">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Subtasks</p>
-        <span className="text-[11px] text-studio-400">{completedCount}/{subtasks.length} complete</span>
+    <div className={cn("rounded-md border border-amberline/20 bg-amberline/8 p-2.5", compact && "bg-transparent")}>
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-amberline">Subtasks</p>
+          {!compact ? <p className="mt-1 text-xs text-studio-400">Break this task into smaller steps and check them off here.</p> : null}
+        </div>
+        <span className="rounded-full border border-white/10 bg-white/[0.045] px-2 py-0.5 text-[11px] font-semibold text-studio-200">{completedCount}/{subtasks.length} complete</span>
+      </div>
+      <div className="mb-2 h-1.5 overflow-hidden rounded-full bg-white/10">
+        <div className="h-full rounded-full bg-amberline transition-all" style={{ width: `${percent}%` }} />
       </div>
       {subtasks.length ? (
-        <div className="grid gap-1.5">
+        <div className="grid gap-1">
           {subtasks.map((subtask) => (
             <TaskSubtaskRow key={subtask.id} subtask={subtask} onUpdateSubtask={onUpdateSubtask} onDeleteSubtask={onDeleteSubtask} />
           ))}
         </div>
       ) : (
-        <p className="rounded border border-white/10 bg-white/[0.025] px-2.5 py-2 text-xs text-studio-400">No subtasks yet.</p>
+        <p className="rounded-md border border-dashed border-white/15 bg-white/[0.025] px-2.5 py-2 text-xs text-studio-400">No subtasks yet. Add the first concrete step below.</p>
       )}
       {onCreateSubtask ? (
-        <form onSubmit={submit} className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-          <input className="field py-1.5 text-xs" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Add a subtask" />
-          <button type="submit" disabled={!title.trim()} className="inline-flex items-center justify-center gap-1.5 rounded-md bg-amberline px-3 py-1.5 text-xs font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-40">
+        <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+          <input
+            className="field py-1.5 text-xs"
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                addSubtask();
+              }
+            }}
+            placeholder="Add a subtask, e.g. Send revised pages to team"
+          />
+          <button type="button" onClick={addSubtask} disabled={!title.trim()} className="inline-flex items-center justify-center gap-1.5 rounded-md bg-amberline px-3 py-1.5 text-xs font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-40">
             <Plus className="h-3.5 w-3.5" />
             Add
           </button>
-        </form>
+        </div>
       ) : null}
     </div>
   );
@@ -10604,15 +10917,15 @@ function TaskSubtaskRow({ subtask, onUpdateSubtask, onDeleteSubtask }: { subtask
   }
 
   return (
-    <div className="flex items-center gap-2 rounded border border-white/10 bg-white/[0.025] px-2.5 py-2">
+    <div className={cn("flex items-center gap-2 rounded-md border px-2.5 py-1.5 transition", subtask.completed ? "border-emerald-300/20 bg-emerald-400/8" : "border-white/10 bg-white/[0.035]")}>
       <button
         type="button"
         onClick={() => onUpdateSubtask?.(subtask.id, { completed: !subtask.completed })}
         disabled={!onUpdateSubtask}
-        className={cn("grid h-5 w-5 shrink-0 place-items-center rounded border transition", subtask.completed ? "border-emerald-300/45 bg-emerald-400/20 text-emerald-200" : "border-white/15 text-transparent hover:border-amberline/45", !onUpdateSubtask && "cursor-not-allowed opacity-50")}
+        className={cn("grid h-4.5 w-4.5 shrink-0 place-items-center rounded border transition", subtask.completed ? "border-emerald-300/45 bg-emerald-400/20 text-emerald-200" : "border-white/15 text-transparent hover:border-amberline/45", !onUpdateSubtask && "cursor-not-allowed opacity-50")}
         aria-label={subtask.completed ? "Mark subtask incomplete" : "Mark subtask complete"}
       >
-        <CheckCircle2 className="h-3.5 w-3.5" />
+        <CheckCircle2 className="h-3 w-3" />
       </button>
       {editing ? (
         <input className="field min-w-0 flex-1 py-1.5 text-xs" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") save(); if (event.key === "Escape") setEditing(false); }} autoFocus />
@@ -10695,8 +11008,21 @@ const taskStatusRank: Record<TaskStatus, number> = {
   ARCHIVED: 7
 };
 
-function EditTaskDialog({ task, users, projects, onUpdateTask }: { task: HammerTask; users: HammerUser[]; projects: HammerProject[]; onUpdateTask: (taskId: string, patch: TaskPatch) => void }) {
-  const [open, setOpen] = useState(false);
+function EditTaskDialog({
+  task,
+  users,
+  projects,
+  onClose,
+  onUpdateTask,
+  onDeleteTask
+}: {
+  task: HammerTask;
+  users: HammerUser[];
+  projects: HammerProject[];
+  onClose: () => void;
+  onUpdateTask: (taskId: string, patch: TaskPatch) => void;
+  onDeleteTask?: (taskId: string) => void;
+}) {
   const [scope, setScope] = useState<"GENERAL" | "PROJECT">(task.projectId ? "PROJECT" : "GENERAL");
   const [projectId, setProjectId] = useState(task.projectId || projects[0]?.id || "");
   const [title, setTitle] = useState(task.title);
@@ -10705,9 +11031,13 @@ function EditTaskDialog({ task, users, projects, onUpdateTask }: { task: HammerT
   const [dueDate, setDueDate] = useState(task.dueDate || defaultDueDate());
   const [priority, setPriority] = useState<TaskPriority>(task.priority);
   const [status, setStatus] = useState<TaskStatus>(task.status);
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    if (!open) return;
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
     setScope(task.projectId ? "PROJECT" : "GENERAL");
     setProjectId(task.projectId || projects[0]?.id || "");
     setTitle(task.title);
@@ -10716,7 +11046,7 @@ function EditTaskDialog({ task, users, projects, onUpdateTask }: { task: HammerT
     setDueDate(task.dueDate || defaultDueDate());
     setPriority(task.priority);
     setStatus(task.status);
-  }, [open, projects, task, users]);
+  }, [projects, task, users]);
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -10733,98 +11063,93 @@ function EditTaskDialog({ task, users, projects, onUpdateTask }: { task: HammerT
       targetType: scope,
       targetId: nextProjectId
     });
-    setOpen(false);
+    onClose();
   }
 
-  return (
-    <div>
-      <button type="button" onClick={() => setOpen(true)} className="inline-flex h-7 items-center justify-center gap-1 rounded border border-white/10 bg-white/[0.03] px-2 text-[11px] font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline">
-        <Pencil className="h-3 w-3" />
-        Edit
-      </button>
-      {open ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4">
-          <form onSubmit={submit} className="w-full max-w-xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-glow">
-            <div className="flex items-start justify-between gap-3">
-              <SectionHeader eyebrow="Task" title="Edit Task" />
-              <button type="button" onClick={() => setOpen(false)} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close task editor">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="grid gap-3">
-              <label className="grid gap-1">
-                <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Task Area</span>
-                <select className="field" value={scope} onChange={(event) => setScope(event.target.value as "GENERAL" | "PROJECT")}>
-                  <option value="GENERAL">General Task</option>
-                  <option value="PROJECT">Development Slate Task</option>
-                </select>
-              </label>
-              {scope === "PROJECT" ? (
-                <label className="grid gap-1">
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Development Slate Item</span>
-                  <select className="field" value={projectId} onChange={(event) => setProjectId(event.target.value)}>
-                    {projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
-                  </select>
-                </label>
-              ) : null}
-              <label className="grid gap-1">
-                <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Task Name</span>
-                <input className="field" value={title} onChange={(event) => setTitle(event.target.value)} />
-              </label>
-              <label className="grid gap-1">
-                <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Description</span>
-                <textarea className="field min-h-24" value={description} onChange={(event) => setDescription(event.target.value)} />
-              </label>
-              <div className="grid gap-3 md:grid-cols-2">
-                <label className="grid gap-1">
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Assign To</span>
-                  <select className="field" value={assignedToId} onChange={(event) => setAssignedToId(event.target.value)}>
-                    {users.map((user) => <option key={user.id} value={user.id}>{user.name} / {statusLabel(user.role)}</option>)}
-                  </select>
-                </label>
-                <label className="grid gap-1">
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Due Date</span>
-                  <input className="field" type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} />
-                </label>
-                <label className="grid gap-1">
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Priority</span>
-                  <select className="field" value={priority} onChange={(event) => setPriority(event.target.value as TaskPriority)}>
-                    {(["LOW", "MEDIUM", "HIGH", "URGENT"] as TaskPriority[]).map((item) => <option key={item} value={item}>{statusLabel(item)}</option>)}
-                  </select>
-                </label>
-                <label className="grid gap-1">
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Progress</span>
-                  <select className="field" value={status} onChange={(event) => setStatus(event.target.value as TaskStatus)}>
-                    {(["TODO", "IN_PROGRESS", "DONE", "ON_HOLD", "REVIEW"] as TaskStatus[]).map((item) => <option key={item} value={item}>{taskStatusLabel(item)}</option>)}
-                  </select>
-                </label>
-              </div>
-            </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <button type="button" onClick={() => setOpen(false)} className="rounded border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:text-amberline">Cancel</button>
-              <button type="submit" className="rounded bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300">Save Task</button>
-            </div>
-          </form>
+  function deleteTask() {
+    if (!onDeleteTask) return;
+    if (window.confirm(`Delete task "${task.title}"?`)) {
+      onDeleteTask(task.id);
+      onClose();
+    }
+  }
+
+  const dialog = (
+    <div className="modal-overlay" onMouseDown={onClose}>
+      <form onSubmit={submit} className="modal-panel flex max-h-[calc(100vh-4rem)] max-w-2xl flex-col overflow-hidden" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="flex items-start justify-between gap-3">
+          <SectionHeader eyebrow="Task" title="Edit Task" />
+          <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close task editor">
+            <X className="h-4 w-4" />
+          </button>
         </div>
-      ) : null}
+        <div className="data-scroll-list grid min-h-0 flex-1 gap-3 pr-1">
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Task Area</span>
+            <select className="field" value={scope} onChange={(event) => setScope(event.target.value as "GENERAL" | "PROJECT")}>
+              <option value="GENERAL">General Task</option>
+              <option value="PROJECT">Development Slate Task</option>
+            </select>
+          </label>
+          {scope === "PROJECT" ? (
+            <label className="grid gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Development Slate Item</span>
+              <select className="field" value={projectId} onChange={(event) => setProjectId(event.target.value)}>
+                {projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
+              </select>
+            </label>
+          ) : null}
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Task Name</span>
+            <input className="field" value={title} onChange={(event) => setTitle(event.target.value)} />
+          </label>
+          <label className="grid gap-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Description</span>
+            <textarea className="field min-h-24" value={description} onChange={(event) => setDescription(event.target.value)} />
+          </label>
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="grid gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Assign To</span>
+              <select className="field" value={assignedToId} onChange={(event) => setAssignedToId(event.target.value)}>
+                {users.map((user) => <option key={user.id} value={user.id}>{user.name} / {statusLabel(user.role)}</option>)}
+              </select>
+            </label>
+            <label className="grid gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Due Date</span>
+              <input className="field" type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} />
+            </label>
+            <label className="grid gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Priority</span>
+              <select className="field" value={priority} onChange={(event) => setPriority(event.target.value as TaskPriority)}>
+                {(["LOW", "MEDIUM", "HIGH", "URGENT"] as TaskPriority[]).map((item) => <option key={item} value={item}>{statusLabel(item)}</option>)}
+              </select>
+            </label>
+            <label className="grid gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Progress</span>
+              <select className="field" value={status} onChange={(event) => setStatus(event.target.value as TaskStatus)}>
+                {(["TODO", "IN_PROGRESS", "DONE", "ON_HOLD", "REVIEW"] as TaskStatus[]).map((item) => <option key={item} value={item}>{taskStatusLabel(item)}</option>)}
+              </select>
+            </label>
+          </div>
+        </div>
+        <div className="mt-4 flex flex-wrap justify-between gap-2">
+          {onDeleteTask ? (
+            <button type="button" onClick={deleteTask} className="inline-flex items-center gap-1.5 rounded border border-rose-400/25 bg-rose-500/5 px-3 py-2 text-sm font-semibold text-rose-300 hover:border-rose-300/50 hover:text-rose-200">
+              <Trash2 className="h-4 w-4" />
+              Delete Task
+            </button>
+          ) : <span />}
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={onClose} className="rounded border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:text-amberline">Cancel</button>
+            <button type="submit" className="rounded bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300">Save Task</button>
+          </div>
+        </div>
+      </form>
     </div>
   );
-}
 
-function TaskInlineSelect({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) {
-  const tone = toneForStatus(value);
-  return (
-    <label className="grid gap-1">
-      <span className="sr-only">{label}</span>
-      <select
-        className={cn("status-badge rounded border px-2 py-1 font-display text-[11px] uppercase outline-none transition focus:border-amberline/60", badgeStyles[tone].solid)}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      >
-        {options.map((option) => <option key={option} value={option}>{badgeLabel(option)}</option>)}
-      </select>
-    </label>
-  );
+  if (!mounted) return null;
+  return createPortal(dialog, document.body);
 }
 
 function CompactTaskRows({ tasks }: { tasks: HammerTask[] }) {
