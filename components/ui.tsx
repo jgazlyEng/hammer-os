@@ -4,7 +4,7 @@ import { cn, pct } from "@/lib/utils";
 import type { ApprovalState, RiskLevel, Status } from "@/lib/types";
 
 export function Panel({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <section className={cn("rounded-lg border border-white/10 bg-studio-850/72 p-3 shadow-glow", className)}>{children}</section>;
+  return <section className={cn("app-panel rounded-lg border border-white/10 bg-studio-850/72 p-3 shadow-glow", className)}>{children}</section>;
 }
 
 export function SectionHeader({ eyebrow, title, action }: { eyebrow?: string; title: string; action?: React.ReactNode }) {

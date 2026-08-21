@@ -17,7 +17,7 @@ export default function GlobalError({ error, reset }: { error: Error & { digest?
             <button
               type="button"
               onClick={reset}
-              className="mt-5 rounded-md bg-emerald-400 px-4 py-2 text-sm font-semibold text-studio-950"
+              className="mt-5 rounded-md bg-emerald-300 px-4 py-2 text-sm font-semibold text-studio-950"
             >
               Retry
             </button>

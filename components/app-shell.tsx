@@ -42,7 +42,7 @@ const executiveNavItem = { href: "/executive", label: "Executive", icon: BarChar
 const reportsNavItem = { href: "/reports", label: "Reports", icon: FileBarChart2 };
 const adminNavItem = { href: "/admin/users", label: "Admin", icon: Settings2 };
 const accountNavItem = { href: "/account", label: "Account", icon: UserRound };
-const GREENLIGHT_APP_VERSION = "2.11";
+const GREENLIGHT_APP_VERSION = "2.36";
 const HAMMER_THEME_STORAGE_KEY = "hammer-os-theme";
 type ThemeMode = "dark" | "light";
 type AuthMode = "loading" | "database" | "demo";
@@ -287,16 +287,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen">
-      <aside className="fixed inset-y-0 left-0 z-[80] w-[60px] border-r border-white/10 bg-[#303633] backdrop-blur md:w-56">
+    <div className="h-screen overflow-hidden">
+      <aside className="app-sidebar fixed inset-y-0 left-0 z-[80] w-[60px] border-r border-white/10 bg-[#303633] backdrop-blur md:w-56">
         <div className="flex h-full flex-col px-2 py-3 md:px-3">
           <div className="flex items-center gap-1.5">
-            <Link href="/dashboard" className="logo-mark-tile flex h-10 min-w-0 flex-1 items-center justify-center rounded-md border border-emerald-900/35 bg-[#303633] px-2 shadow-sm">
-              <span className="text-base font-black leading-none text-amberline [-webkit-text-stroke:0.75px_#064e3b] md:hidden">G</span>
-              <span className="hidden truncate font-sans text-[21px] font-black leading-none tracking-normal [-webkit-text-stroke:0.75px_#064e3b] md:inline">
-                <span className="text-amberline">Green</span>
-                <span className="text-black">Light</span>
-              </span>
+            <Link href="/dashboard" className="flex h-10 min-w-0 flex-1 items-center justify-center rounded-md px-1.5 text-studio-100 transition hover:text-amberline md:justify-start">
+              <span className="text-lg font-black leading-none md:hidden">G</span>
+              <span className="hidden truncate font-sans text-xl font-black leading-none tracking-normal md:inline">GreenLight</span>
             </Link>
             <ThemeToggle theme={theme} onChange={changeTheme} />
           </div>
@@ -390,14 +387,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      <main className="relative ml-[60px] px-3 py-3 md:ml-56 md:px-4 md:py-4 xl:px-5">
-        <div className="mx-auto max-w-[1320px]">
-          {showProjectContext ? (
-            <ProjectTopBar activeProject={activeProject} projects={availableProjects} onChange={changeProject} user={user} mode={authMode} />
-          ) : (
-            <WorkspaceTopBar user={user} mode={authMode} />
-          )}
-          {children}
+      <main className="relative ml-[60px] h-screen overflow-hidden px-3 py-3 md:ml-56 md:px-4 md:py-4 xl:px-5">
+        <div className="app-workspace mx-auto flex h-full max-w-[1320px] flex-col overflow-hidden">
+          <div className="app-topbar sticky top-0 z-40 shrink-0">
+            {showProjectContext ? (
+              <ProjectTopBar activeProject={activeProject} projects={availableProjects} onChange={changeProject} user={user} mode={authMode} />
+            ) : (
+              <WorkspaceTopBar user={user} mode={authMode} />
+            )}
+          </div>
+          <div className="app-route min-h-0 flex-1 overflow-hidden pr-0.5">
+            {children}
+          </div>
         </div>
       </main>
     </div>
