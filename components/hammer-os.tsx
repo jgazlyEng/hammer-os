@@ -10775,8 +10775,20 @@ function TaskRows({
                 {showType ? <p className="text-xs font-semibold text-studio-300">{taskTypeLabel(task)}</p> : null}
                 {showContext ? <p className="text-xs text-studio-300">{taskContextLabel(task)}</p> : null}
                 <TaskSubtaskSummary completed={completedSubtasks} total={subtasks.length} expanded={expanded} onToggle={() => toggleTaskSubtasks(task.id)} />
-                <Badge value={task.priority} />
-                <Badge value={task.status} />
+                <TaskInlineSelect
+                  label="Priority"
+                  value={task.priority}
+                  options={["LOW", "MEDIUM", "HIGH", "URGENT"]}
+                  onChange={(value) => onUpdateTask?.(task.id, { priority: value as TaskPriority })}
+                  disabled={!onUpdateTask}
+                />
+                <TaskInlineSelect
+                  label="Status"
+                  value={task.status}
+                  options={["TODO", "IN_PROGRESS", "REVIEW", "ON_HOLD", "BLOCKED", "DONE", "ARCHIVED"]}
+                  onChange={(value) => onUpdateTask?.(task.id, { status: value as TaskStatus })}
+                  disabled={!onUpdateTask}
+                />
                 <p className="text-xs text-studio-300">{formatShortDateTime(task.createdAt)}</p>
                 <p className="text-xs text-studio-300">{task.dueDate}</p>
               </div>
@@ -10828,6 +10840,40 @@ function TaskSubtaskSummary({ completed, total, expanded, onToggle }: { complete
         <div className="h-full rounded-full bg-amberline transition-all" style={{ width: `${percent}%` }} />
       </div>
     </button>
+  );
+}
+
+function TaskInlineSelect({
+  label,
+  value,
+  options,
+  onChange,
+  disabled = false
+}: {
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+  disabled?: boolean;
+}) {
+  const tone = toneForStatus(value);
+  return (
+    <label className="grid gap-1" onClick={(event) => event.stopPropagation()}>
+      <span className="sr-only">{label}</span>
+      <select
+        className={cn(
+          "status-badge min-w-0 rounded border px-2 py-1 font-display text-[11px] uppercase outline-none transition focus:border-amberline/60 focus:ring-2 focus:ring-amberline/15 disabled:cursor-not-allowed disabled:opacity-55",
+          badgeStyles[tone].solid
+        )}
+        value={value}
+        disabled={disabled}
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => event.stopPropagation()}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        {options.map((option) => <option key={option} value={option}>{badgeLabel(option)}</option>)}
+      </select>
+    </label>
   );
 }
 
