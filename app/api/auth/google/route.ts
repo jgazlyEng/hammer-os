@@ -2,12 +2,18 @@ import { NextResponse } from "next/server";
 import { randomBytes } from "node:crypto";
 import { shouldUseSecureCookies } from "@/lib/auth";
 
-export async function GET() {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const callbackUrl = process.env.GOOGLE_CALLBACK_URL;
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
-  if (!clientId || !callbackUrl) {
-    return NextResponse.redirect(new URL("/login?error=google_oauth_not_configured", process.env.NEXTAUTH_URL ?? "http://localhost:3000"));
+export async function GET(request: Request) {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const callbackUrl = process.env.GOOGLE_CALLBACK_URL;
+  const requestUrl = new URL(request.url);
+  const baseUrl = process.env.NEXTAUTH_URL ?? `${requestUrl.protocol}//${requestUrl.host}`;
+
+  if (!clientId || !clientSecret || !callbackUrl) {
+    return NextResponse.redirect(new URL("/login?error=google_oauth_not_configured", baseUrl));
   }
 
   const state = randomBytes(24).toString("base64url");
