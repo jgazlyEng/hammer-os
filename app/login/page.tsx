@@ -1,14 +1,24 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Clapperboard, LockKeyhole } from "lucide-react";
+
+const authErrorMessages: Record<string, string> = {
+  google_oauth_not_configured: "Google sign-in is not configured yet. Add the Google OAuth env vars on the server and restart the app.",
+  missing_code: "Google did not return an authorization code. Please try signing in again.",
+  invalid_google_state: "Google sign-in expired or failed validation. Please try again.",
+  google_signin_failed: "Google sign-in failed. Check the OAuth client settings and try again."
+};
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const authError = searchParams.get("error");
   const [email, setEmail] = useState("admin@hammer.local");
   const [password, setPassword] = useState("");
-  const [message, setMessage] = useState("Sign in with your GreenLight account. The first production admin can be bootstrapped with ADMIN_EMAIL and ADMIN_PASSWORD.");
+  const [message, setMessage] = useState(authError ? authErrorMessages[authError] ?? "Sign-in failed. Please try again." : "Sign in with Google or your GreenLight account.");
   const [submitting, setSubmitting] = useState(false);
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
@@ -65,6 +75,15 @@ export default function LoginPage() {
           </div>
 
           <form onSubmit={submit} className="space-y-4">
+            <Link href="/api/auth/google" className="flex w-full items-center justify-center gap-2 rounded-md border border-white/10 bg-white/[0.04] px-4 py-3 font-semibold text-studio-100 transition hover:border-amberline/35 hover:bg-white/[0.07] hover:text-amberline">
+              <span className="grid h-5 w-5 place-items-center rounded-full bg-white text-[13px] font-black text-studio-950">G</span>
+              Continue with Google
+            </Link>
+            <div className="flex items-center gap-3 text-[11px] uppercase tracking-[0.16em] text-studio-500">
+              <span className="h-px flex-1 bg-white/10" />
+              Password
+              <span className="h-px flex-1 bg-white/10" />
+            </div>
             <label className="block">
               <span className="mb-2 block font-display text-xs uppercase tracking-[0.16em] text-studio-300">Email</span>
               <input className="field" type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
