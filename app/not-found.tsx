@@ -12,7 +12,7 @@ export default function NotFound() {
         <h1 className="mt-4 text-2xl font-semibold text-studio-100">That production view does not exist.</h1>
         <p className="mt-3 text-sm leading-6 text-studio-300">The route may have changed, or the sequence you tried to open is not in the local mock dataset.</p>
         <Link className="mt-5 inline-flex rounded-md bg-amberline px-4 py-2 text-sm font-semibold text-studio-950 transition hover:bg-[#f1c974]" href="/">
-          Back to Executive Dashboard
+          Back to Dashboard
         </Link>
       </section>
     </main>

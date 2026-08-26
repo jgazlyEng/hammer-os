@@ -9,7 +9,7 @@ const authErrorMessages: Record<string, string> = {
   google_oauth_not_configured: "Google sign-in is not configured yet. Add the Google OAuth env vars on the server and restart the app.",
   missing_code: "Google did not return an authorization code. Please try signing in again.",
   invalid_google_state: "Google sign-in expired or failed validation. Please try again.",
-  google_signin_failed: "Google sign-in failed. Check the OAuth client settings and try again."
+  google_signin_failed: "Google sign-in reached GreenLight but could not finish. Check the production app logs for the [google-oauth-callback] error."
 };
 
 export default function LoginPage() {

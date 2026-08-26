@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { createSessionCookie, SESSION_COOKIE_NAME, SESSION_MAX_AGE_SECONDS, shouldUseSecureCookies, upsertGoogleUser } from "@/lib/auth";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -34,14 +36,20 @@ export async function GET(request: Request) {
       })
     });
 
-    if (!tokenResponse.ok) throw new Error("Google token exchange failed.");
+    if (!tokenResponse.ok) {
+      const errorBody = await tokenResponse.text();
+      throw new Error(`Google token exchange failed: ${tokenResponse.status} ${errorBody}`);
+    }
     const tokenData = await tokenResponse.json() as { access_token?: string };
     if (!tokenData.access_token) throw new Error("Google did not return an access token.");
 
     const profileResponse = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
       headers: { Authorization: `Bearer ${tokenData.access_token}` }
     });
-    if (!profileResponse.ok) throw new Error("Google profile lookup failed.");
+    if (!profileResponse.ok) {
+      const errorBody = await profileResponse.text();
+      throw new Error(`Google profile lookup failed: ${profileResponse.status} ${errorBody}`);
+    }
 
     const profile = await profileResponse.json() as { id: string; email: string; name?: string; picture?: string };
     const user = await upsertGoogleUser(profile);
@@ -55,7 +63,8 @@ export async function GET(request: Request) {
       maxAge: SESSION_MAX_AGE_SECONDS
     });
     return response;
-  } catch {
+  } catch (error) {
+    console.error("[google-oauth-callback]", error);
     return NextResponse.redirect(new URL("/login?error=google_signin_failed", baseUrl));
   }
 }
