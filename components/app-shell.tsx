@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, type MouseEvent, type PointerEvent } from "react";
-import { BarChart3, ClipboardList, ContactRound, FileBarChart2, FolderKanban, Layers3, LayoutDashboard, LibraryBig, LogOut, MessageSquareText, Moon, Settings2, Sun, UserRound } from "lucide-react";
+import { BarChart3, ClipboardList, ContactRound, FolderKanban, Layers3, LayoutDashboard, LibraryBig, LogOut, MessageSquareText, Moon, Settings2, Sun, UserRound } from "lucide-react";
 import {
   assignedProjectsForUser,
   HAMMER_DOCUMENT_PROJECT_OVERRIDES_STORAGE_KEY,
@@ -38,11 +38,10 @@ const navItems = [
 ];
 
 const talentNavItem = { href: "/outreach", label: "Outreach", icon: ContactRound };
-const executiveNavItem = { href: "/executive", label: "Executive", icon: BarChart3 };
-const reportsNavItem = { href: "/reports", label: "Reports", icon: FileBarChart2 };
+const studioStatusNavItem = { href: "/studio-status", label: "Studio Status", icon: BarChart3 };
 const adminNavItem = { href: "/admin/users", label: "Admin", icon: Settings2 };
 const accountNavItem = { href: "/account", label: "Account", icon: UserRound };
-const GREENLIGHT_APP_VERSION = "2.39";
+const GREENLIGHT_APP_VERSION = "Beta 0.4.4";
 const HAMMER_THEME_STORAGE_KEY = "hammer-os-theme";
 type ThemeMode = "dark" | "light";
 type AuthMode = "loading" | "database" | "demo";
@@ -107,7 +106,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState<ThemeMode>("dark");
   const currentUser = useMemo(() => user ? shellUserToHammerUser(user) : null, [user]);
   const safeLocalProjects = useMemo(() => localProjects.filter(isValidProject), [localProjects]);
-  const allProjects = useMemo(() => authMode === "demo" ? [...safeLocalProjects, ...hammerProjects.filter((project) => !safeLocalProjects.some((item) => item.id === project.id))] : [], [authMode, safeLocalProjects]);
+  const safeLocalProjectIds = useMemo(() => new Set(safeLocalProjects.map((project) => project.id)), [safeLocalProjects]);
+  const allProjects = useMemo(() => authMode === "demo" ? [...safeLocalProjects, ...hammerProjects.filter((project) => !safeLocalProjectIds.has(project.id))] : [], [authMode, safeLocalProjectIds, safeLocalProjects]);
   const assignedProjects = useMemo(() => currentUser ? assignedProjectsForUser(currentUser.id) : [], [currentUser]);
   const availableProjects = useMemo(() => {
     if (!currentUser) return [];
@@ -120,8 +120,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       ? { ...document, projectId: documentProjectOverrides[document.id] ?? undefined }
       : document
   )) : [], [authMode, documentProjectOverrides, localDocuments]);
-  const incomingScriptCount = allDocuments.filter((document) => isScriptLibraryDocument(document) && !document.projectId).length;
-  const availableDemoUsers = hammerUsers.filter((demoUser) => !localUserStates[demoUser.id]?.inactive && !localUserStates[demoUser.id]?.deleted);
+  const incomingScriptCount = useMemo(() => allDocuments.filter((document) => isScriptLibraryDocument(document) && !document.projectId).length, [allDocuments]);
+  const availableDemoUsers = useMemo(() => hammerUsers.filter((demoUser) => !localUserStates[demoUser.id]?.inactive && !localUserStates[demoUser.id]?.deleted), [localUserStates]);
   const showProjectContext = authMode === "demo" && pathname.startsWith("/projects/") && !pathname.startsWith("/projects/new");
 
   useEffect(() => {
@@ -301,8 +301,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <nav className="mt-4 space-y-0.5">
             {[
               ...navItems,
-              ...(currentUser?.role === "EXECUTIVE" || currentUser?.role === "ADMIN" ? [executiveNavItem] : []),
-              ...(currentUser && canViewReports(currentUser.role) ? [reportsNavItem] : []),
+              ...(currentUser && canViewReports(currentUser.role) ? [studioStatusNavItem] : []),
               ...(currentUser && canViewContacts(currentUser.role) ? [talentNavItem] : []),
             ].map((item) => {
               const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
@@ -331,7 +330,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="mt-auto space-y-3">
             <div className="hidden border-t border-white/10 pt-3 md:flex">
               <span className="rounded border border-white/10 bg-white/[0.035] px-2 py-1 font-display text-[10px] uppercase tracking-[0.12em] text-studio-400">
-                v{GREENLIGHT_APP_VERSION}
+                {GREENLIGHT_APP_VERSION}
               </span>
             </div>
             {currentUser?.role === "ADMIN" ? (

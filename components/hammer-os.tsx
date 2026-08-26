@@ -105,7 +105,7 @@ const HAMMER_LOCAL_VERSION_MARKDOWN_STORAGE_KEY = "hammer:version-markdown-notes
 const HAMMER_LOCAL_COMMENTS_STORAGE_KEY = "hammer:comments";
 const HAMMER_LOCAL_OUTREACH_ENGAGEMENTS_STORAGE_KEY = "hammer:outreach-engagements";
 
-type HammerView = "dashboard" | "projects" | "prospects" | "collections" | "notes" | "project-new" | "project-detail" | "project-documents" | "project-assets" | "scripts" | "script-detail" | "script-versions" | "script-diff" | "script-breakdown" | "assets" | "asset-detail" | "tasks" | "contacts" | "reviews" | "reports" | "executive" | "admin-users" | "account";
+type HammerView = "dashboard" | "projects" | "prospects" | "collections" | "notes" | "project-new" | "project-detail" | "project-documents" | "project-assets" | "scripts" | "script-detail" | "script-versions" | "script-diff" | "script-breakdown" | "assets" | "asset-detail" | "tasks" | "contacts" | "reviews" | "studio-status" | "reports" | "executive" | "admin-users" | "account";
 type ScriptLibrarySection = "inbox" | "projects" | "all";
 type AppRole = "admin" | "executive" | "producer" | "department_lead";
 
@@ -452,23 +452,24 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   )), [documentProjectOverrides, localDocuments, workspaceMode]);
   const versions = useMemo(() => (workspaceMode === "database" ? localVersions : [...hammerVersions, ...localVersions]).filter(isValidVersion).map((version) => ({ ...version, ...(versionStatuses[version.id] ? { status: versionStatuses[version.id] } : {}), ...(Object.prototype.hasOwnProperty.call(versionNotes, version.id) ? { notes: versionNotes[version.id] } : {}), ...(Object.prototype.hasOwnProperty.call(versionMarkdownNotes, version.id) ? { markdownNotes: versionMarkdownNotes[version.id] } : {}) })), [localVersions, versionMarkdownNotes, versionNotes, versionStatuses, workspaceMode]);
   const tasks = useMemo(() => (workspaceMode === "database" ? localTasks : [...localTasks, ...hammerTasks]).filter(isValidTask).map((task) => ({ ...task, ...taskUpdates[task.id] })), [localTasks, taskUpdates, workspaceMode]);
-  const users = (workspaceMode === "database" ? workspaceUsers : hammerUsers).filter(isValidUser);
-  const assets = (workspaceMode === "database" ? workspaceAssets : hammerAssets).filter(isValidAsset);
-  const contacts = workspaceMode === "database" ? workspaceContacts : hammerContacts;
-  const contactRelationships = workspaceMode === "database" ? workspaceContactRelationships : [...hammerContactRelationships, ...localContactRelationships];
-  const outreachEngagements = workspaceMode === "database" ? workspaceOutreachEngagements : localOutreachEngagements;
-  const approvals = workspaceMode === "database" ? workspaceApprovals : hammerApprovals;
-  const comments = workspaceMode === "database" ? workspaceComments : [...hammerComments, ...localComments];
-  const scriptCollections = workspaceMode === "database" ? workspaceScriptCollections : [...hammerScriptCollections, ...localScriptCollections];
-  const scriptCollectionItems = workspaceMode === "database" ? workspaceScriptCollectionItems : [...hammerScriptCollectionItems, ...localScriptCollectionItems];
-  const slateCollections = workspaceMode === "database" ? workspaceSlateCollections : [...hammerSlateCollections, ...localSlateCollections];
-  const slateCollectionItems = workspaceMode === "database" ? workspaceSlateCollectionItems : [...hammerSlateCollectionItems, ...localSlateCollectionItems];
-  const prospectAssets = workspaceMode === "database" ? workspaceProspectAssets : localProspectAssets;
-  const project = projects.find((item) => item.id === id) ?? projects[0] ?? emptyProject;
-  const document = documents.find((item) => item.id === id) ?? documents[0] ?? emptyDocument;
-  const asset = assets.find((item) => item.id === id) ?? assets[0] ?? emptyAsset;
-  const activeProject = projects.find((item) => item.id === activeProjectId) ?? projects[0] ?? emptyProject;
-  const currentUser = users.find((user) => user.email.toLowerCase() === sessionUser?.email?.toLowerCase()) ?? sessionUserToHammerUser(sessionUser, workspaceMode);
+  const users = useMemo(() => (workspaceMode === "database" ? workspaceUsers : hammerUsers).filter(isValidUser), [workspaceMode, workspaceUsers]);
+  const assets = useMemo(() => (workspaceMode === "database" ? workspaceAssets : hammerAssets).filter(isValidAsset), [workspaceAssets, workspaceMode]);
+  const contacts = useMemo(() => workspaceMode === "database" ? workspaceContacts : hammerContacts, [workspaceContacts, workspaceMode]);
+  const contactRelationships = useMemo(() => workspaceMode === "database" ? workspaceContactRelationships : [...hammerContactRelationships, ...localContactRelationships], [localContactRelationships, workspaceContactRelationships, workspaceMode]);
+  const outreachEngagements = useMemo(() => workspaceMode === "database" ? workspaceOutreachEngagements : localOutreachEngagements, [localOutreachEngagements, workspaceMode, workspaceOutreachEngagements]);
+  const approvals = useMemo(() => workspaceMode === "database" ? workspaceApprovals : hammerApprovals, [workspaceApprovals, workspaceMode]);
+  const comments = useMemo(() => workspaceMode === "database" ? workspaceComments : [...hammerComments, ...localComments], [localComments, workspaceComments, workspaceMode]);
+  const scriptCollections = useMemo(() => workspaceMode === "database" ? workspaceScriptCollections : [...hammerScriptCollections, ...localScriptCollections], [localScriptCollections, workspaceMode, workspaceScriptCollections]);
+  const scriptCollectionItems = useMemo(() => workspaceMode === "database" ? workspaceScriptCollectionItems : [...hammerScriptCollectionItems, ...localScriptCollectionItems], [localScriptCollectionItems, workspaceMode, workspaceScriptCollectionItems]);
+  const slateCollections = useMemo(() => workspaceMode === "database" ? workspaceSlateCollections : [...hammerSlateCollections, ...localSlateCollections], [localSlateCollections, workspaceMode, workspaceSlateCollections]);
+  const slateCollectionItems = useMemo(() => workspaceMode === "database" ? workspaceSlateCollectionItems : [...hammerSlateCollectionItems, ...localSlateCollectionItems], [localSlateCollectionItems, workspaceMode, workspaceSlateCollectionItems]);
+  const prospectAssets = useMemo(() => workspaceMode === "database" ? workspaceProspectAssets : localProspectAssets, [localProspectAssets, workspaceMode, workspaceProspectAssets]);
+  const sessionUserEmail = sessionUser?.email?.toLowerCase();
+  const project = useMemo(() => projects.find((item) => item.id === id) ?? projects[0] ?? emptyProject, [id, projects]);
+  const document = useMemo(() => documents.find((item) => item.id === id) ?? documents[0] ?? emptyDocument, [documents, id]);
+  const asset = useMemo(() => assets.find((item) => item.id === id) ?? assets[0] ?? emptyAsset, [assets, id]);
+  const activeProject = useMemo(() => projects.find((item) => item.id === activeProjectId) ?? projects[0] ?? emptyProject, [activeProjectId, projects]);
+  const currentUser = useMemo(() => users.find((user) => user.email.toLowerCase() === sessionUserEmail) ?? sessionUserToHammerUser(sessionUser, workspaceMode), [sessionUser, sessionUserEmail, users, workspaceMode]);
 
   function applyDatabaseWorkspace(data: HammerWorkspacePayload) {
     if (data.mode !== "database") return;
@@ -1837,16 +1838,12 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       if (!canViewContacts(currentUser.role)) return <AccessDenied title="Outreach access required" detail="Only admins, producers, and executives can view the studio outreach directory." />;
       return <Contacts initialContacts={contacts} contactRelationships={contactRelationships} outreachEngagements={outreachEngagements} currentUser={currentUser} users={users} projects={projects} documents={documents} tasks={tasks} databaseMode={workspaceMode === "database"} onDatabaseImport={(importedContacts) => runWorkspaceAction("importContacts", { contacts: importedContacts })} onCreateContact={createContact} onUpdateContact={updateContact} onDeleteContact={deleteContact} onCreateRelationship={createContactRelationship} onDeleteRelationship={deleteContactRelationship} onCreateEngagement={createOutreachEngagement} onUpdateEngagement={updateOutreachEngagement} onDeleteEngagement={deleteOutreachEngagement} onCreateTask={createTask} />;
     }
-    if (view === "reports") {
-      if (!canViewReports(currentUser.role)) return <AccessDenied title="Reports access required" detail="Only admins, producers, and executives can generate executive email reports." />;
-      return <Reports projects={projects} prospects={projectLeads} documents={documents} versions={versions} supportingDocuments={supportingDocuments} tasks={tasks} assets={assets} approvals={approvals} comments={comments} users={users} currentUser={currentUser} />;
+    if (view === "studio-status" || view === "reports" || view === "executive") {
+      if (!canViewReports(currentUser.role)) return <AccessDenied title="Studio Status access required" detail="Only admins, producers, and executives can view studio status and generate update digests." />;
+      return <StudioStatus projects={projects} prospects={projectLeads} documents={documents} versions={versions} supportingDocuments={supportingDocuments} tasks={tasks} assets={assets} approvals={approvals} comments={comments} users={users} currentUser={currentUser} />;
     }
     if (view === "account") return <AccountSettings user={sessionUser} onUpdateAccount={updateAccount} />;
     if (view === "reviews") return <LegacyRedirect title="Reviews are folded into the slate" detail="Review work now starts from the relevant Development Slate item or Prospect, so the queue is easier to follow in context." href="/projects" label="Open Development Slate" />;
-    if (view === "executive") {
-      if (currentUser.role !== "EXECUTIVE" && currentUser.role !== "ADMIN") return <AccessDenied title="Executive access required" detail="The executive dashboard is limited to users with the Executive role." />;
-      return <Executive projects={projects} documents={documents} versions={versions} tasks={tasks} assets={assets} approvals={approvals} />;
-    }
     if (currentUser.role !== "ADMIN") return <AccessDenied title="Admin access required" detail="Only admins can manage projects, users, roles, and project access." />;
     return <AdminUsers projects={projects} users={users} currentUser={currentUser} databaseMode={workspaceMode === "database"} onCreateProject={addProject} onDeleteProject={deleteProject} onCreateUser={createUser} onUpdateUserRole={updateUserRole} onDeleteUser={deleteUser} onStatusChange={updateProjectStatus} />;
   })();
@@ -2008,6 +2005,19 @@ function Dashboard({
 
   return (
     <div className="space-y-4">
+      {canViewReports(currentUser.role) ? (
+        <Panel className="border-amberline/20 bg-amberline/[0.045]">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="font-display text-[10px] uppercase tracking-[0.16em] text-amberline">Studio Status</p>
+              <h2 className="mt-1 text-base font-semibold text-studio-100">Check the slate and send a quick update</h2>
+              <p className="mt-1 text-[13px] leading-5 text-studio-300">Review decisions, risks, weekly tasks, and generate an email-ready digest from one place.</p>
+            </div>
+            <TableLink href="/studio-status">Open Studio Status</TableLink>
+          </div>
+        </Panel>
+      ) : null}
+
       <Panel>
         <SectionHeader eyebrow="Review Focus" title={focusDocument ? focusDocument.title : "No script needs attention"} action={focusDocument ? <TableLink href={`/scripts/${focusDocument.id}`}>Open Review</TableLink> : <TableLink href="/projects">Open Development Slate</TableLink>} />
         {focusDocument ? (
@@ -2218,9 +2228,10 @@ function Projects({
   const [slateImportMessage, setSlateImportMessage] = useState("");
   const [prospectSort, setProspectSort] = useState<{ key: ProspectSortKey; direction: "asc" | "desc" }>({ key: "title", direction: "asc" });
   const displayProjectLeads = useMemo(() => dedupeProjectLeads(projectLeads), [projectLeads]);
-  const activeSlateFilterCount = Object.values(filters).filter((value) => value !== "ALL").length;
-  const filteredLeads = displayProjectLeads.filter((lead) => {
-    const matchesSearch = `${lead.title} ${lead.logline ?? ""} ${lead.creator ?? ""} ${lead.genre ?? ""} ${lead.lane ?? ""} ${lead.notes ?? ""} ${lead.searchKeywords ?? ""} ${lead.contactRep ?? ""}`.toLowerCase().includes(slateSearch.toLowerCase());
+  const activeSlateFilterCount = useMemo(() => Object.values(filters).filter((value) => value !== "ALL").length, [filters]);
+  const normalizedSlateSearch = slateSearch.toLowerCase().trim();
+  const filteredLeads = useMemo(() => displayProjectLeads.filter((lead) => {
+    const matchesSearch = !normalizedSlateSearch || `${lead.title} ${lead.logline ?? ""} ${lead.creator ?? ""} ${lead.genre ?? ""} ${lead.lane ?? ""} ${lead.notes ?? ""} ${lead.searchKeywords ?? ""} ${lead.contactRep ?? ""}`.toLowerCase().includes(normalizedSlateSearch);
     return matchesSearch
       && matchesFilter(filters.lane, lead.lane)
       && matchesFilter(filters.genre, lead.genre)
@@ -2230,7 +2241,7 @@ function Projects({
       && matchesOwnerFilter(filters.owner, lead)
       && matchesFilter(filters.scriptStatus, lead.scriptStatus)
       && matchesFilter(filters.format, lead.format);
-  });
+  }), [displayProjectLeads, filters, normalizedSlateSearch]);
   const sortedLeads = useMemo(() => {
     return [...filteredLeads].sort((a, b) => {
       const aValue = prospectSortValue(a, prospectSort.key, users);
@@ -2248,7 +2259,7 @@ function Projects({
       ?? displayProjectLeads.find((lead) => lead.id === selectedLeadId && lead.title === selectedLeadTitle)
       ?? displayProjectLeads.find((lead) => lead.id === selectedLeadId)
     : undefined;
-  const selectedLeadAssets = selectedLead ? prospectAssets.filter((asset) => asset.prospectId === selectedLead.id) : [];
+  const selectedLeadAssets = useMemo(() => selectedLead ? prospectAssets.filter((asset) => asset.prospectId === selectedLead.id) : [], [prospectAssets, selectedLead]);
 
   useEffect(() => {
     if (mode !== "prospects") return;
@@ -5092,7 +5103,8 @@ function ShareButton({ title, type, status, summary, href }: { title: string; ty
     `GreenLight ${type}: ${title}`,
     status ? `Status: ${statusLabel(status)}` : undefined,
     summary ? `Summary: ${summary}` : undefined,
-    `Link: ${absoluteUrl}`
+    `Secure link: ${absoluteUrl}`,
+    "Access requires an approved GreenLight login."
   ].filter(Boolean).join("\n");
 
   async function copy(value: string, label: string) {
@@ -5108,9 +5120,10 @@ function ShareButton({ title, type, status, summary, href }: { title: string; ty
         Share
       </button>
       {open ? (
-        <div className="absolute right-0 top-full z-20 mt-2 w-72 rounded-lg border border-white/10 bg-studio-950 p-3 text-left shadow-2xl">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Internal Share</p>
+        <div className="absolute right-0 top-full z-20 mt-2 w-80 rounded-lg border border-white/10 bg-studio-950 p-3 text-left shadow-2xl">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-amberline">Secure Share</p>
           <p className="mt-1 line-clamp-2 text-xs text-studio-300">{title}</p>
+          <p className="mt-2 rounded-md border border-amberline/20 bg-amberline/8 px-2 py-1.5 text-[11px] leading-4 text-studio-300">Anyone opening this link must sign in with an approved Google or GreenLight account. Existing role and project permissions still apply.</p>
           <div className="mt-3 grid gap-1.5">
             <button type="button" onClick={() => copy(absoluteUrl, "link")} className="rounded border border-white/10 px-2 py-1.5 text-left text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline">Copy link</button>
             <button type="button" onClick={() => copy(shareText, "summary")} className="rounded border border-white/10 px-2 py-1.5 text-left text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline">Copy summary</button>
@@ -6095,6 +6108,8 @@ function ScriptDetail({
   const versionMarkdownNote = version?.markdownNotes?.trim() ?? "";
   const visibleNotesCount = scriptComments.length + versionComments.length + (versionUploadNote ? 1 : 0) + (versionMarkdownNote ? 1 : 0);
   const canDownload = canDownloadFiles(currentUser?.role);
+  const hasSelectedVersion = Boolean(version);
+  const selectedVersionMarkdown = version?.markdownNotes ?? "";
 
   useEffect(() => {
     setMetadataDraft({
@@ -6113,10 +6128,10 @@ function ScriptDetail({
   useEffect(() => {
     setQuickNoteDraft("");
     setQuickNoteMessage("");
-    setQuickNoteTarget(version ? "VERSION" : "SCRIPT");
-    setMarkdownDraft(version?.markdownNotes ?? "");
+    setQuickNoteTarget(hasSelectedVersion ? "VERSION" : "SCRIPT");
+    setMarkdownDraft(selectedVersionMarkdown);
     setMarkdownMessage("");
-  }, [doc.id, version?.id, version?.markdownNotes]);
+  }, [doc.id, hasSelectedVersion, selectedVersionMarkdown, version?.id]);
 
   useEffect(() => {
     if (!compareVersions.length) return;
@@ -6234,7 +6249,12 @@ function ScriptDetail({
         <SectionHeader
           eyebrow={doc.type}
           title={doc.title}
-          action={<div className="flex flex-wrap gap-1.5">{onDelete && doc.id.startsWith("doc-local-") ? <DangerButton label="Delete" onClick={() => onDelete(doc.id)} /> : null}</div>}
+          action={
+            <div className="flex flex-wrap gap-1.5">
+              <ShareButton title={doc.title} type={statusLabel(doc.type)} status={version?.status} summary={doc.writerName ? `Writer: ${doc.writerName}` : undefined} href={`/scripts/${doc.id}`} />
+              {onDelete && doc.id.startsWith("doc-local-") ? <DangerButton label="Delete" onClick={() => onDelete(doc.id)} /> : null}
+            </div>
+          }
         />
         <div className="grid gap-3 md:grid-cols-4">
           <SmallStat label="Status" value={statusLabel(version?.status ?? "DRAFT")} />
@@ -7017,14 +7037,15 @@ function ScriptNotesWorkspace({
     ...(versionMarkdownNote?.trim() ? [{ kind: "legacy" as const, id: `markdown-${version?.id ?? document.id}`, createdAt: version?.createdAt ?? document.updatedAt, title: "Version Markdown Note", body: versionMarkdownNote, targetLabel: version ? `Version ${version.versionNumber}` : "Overall Script" }] : [])
   ].sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
   const selectedComment = visibleComments.find((comment) => comment.id === selectedCommentId);
+  const defaultAttachTarget = version ? "VERSION" : "SCRIPT";
 
   useEffect(() => {
-    setAttachTo(version ? "VERSION" : "SCRIPT");
+    setAttachTo(defaultAttachTarget);
     setBody("");
     setMessage("");
     setTagDrafts([]);
     setSelectedCommentId("");
-  }, [document.id, version?.id]);
+  }, [defaultAttachTarget, document.id, version?.id]);
 
   function addNoteTag() {
     const key = normalizeTagKey(tagKeyDraft);
@@ -9405,6 +9426,46 @@ function Reviews({ projectId }: { projectId?: string }) {
   );
 }
 
+function StudioStatus({
+  projects,
+  prospects,
+  documents,
+  versions,
+  supportingDocuments,
+  tasks,
+  assets,
+  approvals,
+  comments,
+  users,
+  currentUser
+}: {
+  projects: HammerProject[];
+  prospects: HammerProjectLead[];
+  documents: HammerDocument[];
+  versions: HammerDocumentVersion[];
+  supportingDocuments: SupportingDocument[];
+  tasks: HammerTask[];
+  assets: HammerAsset[];
+  approvals: HammerApproval[];
+  comments: HammerComment[];
+  users: HammerUser[];
+  currentUser: HammerUser;
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+        <div>
+          <p className="font-display text-[10px] uppercase tracking-[0.16em] text-amberline">Studio Status</p>
+          <h2 className="mt-1 text-xl font-semibold text-studio-100">Status, decisions, and outgoing updates</h2>
+          <p className="mt-1 max-w-3xl text-[13px] leading-5 text-studio-400">Start with the live slate read, then generate a digest for the exact window or project you need to share.</p>
+        </div>
+      </div>
+      <Executive projects={projects} documents={documents} versions={versions} tasks={tasks} assets={assets} approvals={approvals} />
+      <Reports projects={projects} prospects={prospects} documents={documents} versions={versions} supportingDocuments={supportingDocuments} tasks={tasks} assets={assets} approvals={approvals} comments={comments} users={users} currentUser={currentUser} />
+    </div>
+  );
+}
+
 function Reports({
   projects,
   prospects,
@@ -9436,6 +9497,7 @@ function Reports({
   const [recipient, setRecipient] = useState("");
   const [copied, setCopied] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewMounted, setPreviewMounted] = useState(false);
   const windowStart = parseReportDateInput(fromDate);
   const windowEnd = parseReportDateInput(toDate);
   const selectedProject = projects.find((project) => project.id === scope);
@@ -9495,7 +9557,7 @@ function Reports({
     { label: "Pending decisions", value: pendingApprovals.length, detail: "Approvals requested or waiting on changes." },
     { label: "Notes", value: commentActivity.length, detail: "Comments and notes added during the report window." }
   ];
-  const subject = `GreenLight Executive Report - ${scopeLabel} - ${formatReportWindow(windowStart, windowEnd)}`;
+  const subject = `GreenLight Studio Status Digest - ${scopeLabel} - ${formatReportWindow(windowStart, windowEnd)}`;
   const emailBody = buildExecutiveReportEmail({
     subject,
     scopeLabel,
@@ -9544,13 +9606,17 @@ function Reports({
     setToDate(reportDateInput(end));
   }
 
+  useEffect(() => {
+    setPreviewMounted(true);
+  }, []);
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
-          <p className="font-display text-[10px] uppercase tracking-[0.16em] text-amberline">Reports</p>
-          <h2 className="mt-1 text-xl font-semibold text-studio-100">Executive Update Builder</h2>
-          <p className="mt-1 max-w-3xl text-[13px] leading-5 text-studio-400">Choose a scope and time window. GreenLight gathers tasks, decisions, notes, and material changes into a clean email draft.</p>
+          <p className="font-display text-[10px] uppercase tracking-[0.16em] text-amberline">Digest Builder</p>
+          <h2 className="mt-1 text-xl font-semibold text-studio-100">Build an email-ready studio update</h2>
+          <p className="mt-1 max-w-3xl text-[13px] leading-5 text-studio-400">Pick a scope and time window. GreenLight pulls changed material, created tasks, decisions, notes, and urgent follow-ups into one concise draft.</p>
         </div>
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <button type="button" onClick={() => applyPreset("TODAY")} className="rounded-md border border-white/10 px-2.5 py-1.5 text-xs font-semibold text-studio-300 hover:border-amberline/40 hover:text-amberline">Today</button>
@@ -9561,7 +9627,7 @@ function Reports({
 
       <div className="grid gap-4 xl:grid-cols-[minmax(360px,460px)_minmax(0,1fr)]">
         <Panel>
-          <SectionHeader eyebrow="Compose" title="Build Report" />
+          <SectionHeader eyebrow="Compose" title="Digest Setup" />
           <div className="space-y-3">
             <label className="grid gap-1">
               <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-400">Scope</span>
@@ -9590,17 +9656,17 @@ function Reports({
               <input className="field" value={subject} readOnly />
             </label>
             <div className="flex flex-wrap gap-2 pt-1">
-              <button type="button" onClick={copyReport} className="rounded-md bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300">{copied ? "Copied" : "Copy Email"}</button>
-              <a href={mailtoHref} className="rounded-md border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:border-amberline/40 hover:text-amberline">Open Email</a>
-              <button type="button" onClick={downloadReport} className="rounded-md border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:border-amberline/40 hover:text-amberline">Download</button>
-              <button type="button" onClick={() => setPreviewOpen((open) => !open)} className="rounded-md border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:border-amberline/40 hover:text-amberline">{previewOpen ? "Hide Preview" : "Preview"}</button>
+              <button type="button" onClick={copyReport} className="rounded-md bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300">{copied ? "Copied" : "Copy Digest"}</button>
+              <a href={mailtoHref} className="rounded-md border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:border-amberline/40 hover:text-amberline">Open Email Draft</a>
+              <button type="button" onClick={downloadReport} className="rounded-md border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:border-amberline/40 hover:text-amberline">Download Text</button>
+              <button type="button" onClick={() => setPreviewOpen(true)} className="rounded-md border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:border-amberline/40 hover:text-amberline">Preview</button>
             </div>
           </div>
         </Panel>
 
         <div>
           <Panel>
-            <SectionHeader eyebrow="Included" title="What Will Be Sent" />
+            <SectionHeader eyebrow="Digest Contents" title="What Will Be Sent" />
             <div className="grid gap-2 md:grid-cols-2">
               {reportSignals.map((signal) => (
                 <div key={signal.label} className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
@@ -9648,13 +9714,62 @@ function Reports({
         </div>
       </div>
 
-      {previewOpen ? (
-        <Panel>
-          <SectionHeader eyebrow="Preview" title="Email Draft" />
-          <textarea className="field min-h-[520px] font-mono text-[12px] leading-5" value={emailBody} readOnly />
-        </Panel>
+      {previewOpen && previewMounted ? (
+        <ReportPreviewModal
+          subject={subject}
+          emailBody={emailBody}
+          mailtoHref={mailtoHref}
+          copied={copied}
+          onClose={() => setPreviewOpen(false)}
+          onCopy={copyReport}
+          onDownload={downloadReport}
+        />
       ) : null}
     </div>
+  );
+}
+
+function ReportPreviewModal({
+  subject,
+  emailBody,
+  mailtoHref,
+  copied,
+  onClose,
+  onCopy,
+  onDownload
+}: {
+  subject: string;
+  emailBody: string;
+  mailtoHref: string;
+  copied: boolean;
+  onClose: () => void;
+  onCopy: () => void;
+  onDownload: () => void;
+}) {
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-studio-950/75 p-4 backdrop-blur-sm" onMouseDown={onClose}>
+      <div className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-white/12 bg-studio-950 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b border-white/10 p-4">
+          <div className="min-w-0">
+            <p className="font-display text-[10px] uppercase tracking-[0.16em] text-amberline">Preview</p>
+            <h3 className="mt-1 truncate text-lg font-semibold text-studio-100">Digest Draft</h3>
+            <p className="mt-1 truncate text-[13px] text-studio-400">{subject}</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-md border border-white/10 p-1.5 text-studio-400 transition hover:text-studio-100" aria-label="Close digest preview">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-auto p-4">
+          <textarea className="field min-h-[56vh] font-mono text-[12px] leading-5" value={emailBody} readOnly />
+        </div>
+        <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-white/10 p-4">
+          <button type="button" onClick={onCopy} className="rounded-md bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 hover:bg-emerald-300">{copied ? "Copied" : "Copy Digest"}</button>
+          <a href={mailtoHref} className="rounded-md border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:border-amberline/40 hover:text-amberline">Open Email Draft</a>
+          <button type="button" onClick={onDownload} className="rounded-md border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 hover:border-amberline/40 hover:text-amberline">Download Text</button>
+        </div>
+      </div>
+    </div>,
+    document.body
   );
 }
 
@@ -9725,7 +9840,7 @@ function Executive({
       <Panel className="border-amberline/20 bg-amberline/[0.055] shadow-none">
         <div className="grid gap-4 xl:grid-cols-[1fr_auto] xl:items-center">
           <div>
-            <p className="font-display text-[10px] uppercase tracking-[0.16em] text-amberline">Executive Slate Brief</p>
+            <p className="font-display text-[10px] uppercase tracking-[0.16em] text-amberline">Studio Status Brief</p>
             <h2 className="mt-1 text-xl font-semibold text-studio-100">Overall status: {executiveSlateSummary(decisionReady, needsAttention, atRisk)}</h2>
             <p className="mt-1 max-w-3xl text-[13px] leading-5 text-studio-300">A concise read on what needs a decision, what is blocked, and what the team needs to finish this week.</p>
           </div>
@@ -9740,7 +9855,7 @@ function Executive({
 
       <div className="grid gap-4 xl:grid-cols-[1fr_0.78fr]">
         <Panel>
-          <SectionHeader eyebrow="Decisions" title="Needs Executive Attention" />
+          <SectionHeader eyebrow="Decisions" title="Needs Attention" />
           <div className="space-y-2">
             {decisionItems.length ? decisionItems.map((item) => (
               <Link key={item.id} href={item.href} className="block rounded-md border border-white/10 bg-white/[0.03] p-3 transition hover:border-amberline/35 hover:bg-white/[0.055]">
@@ -9753,7 +9868,7 @@ function Executive({
                   <Badge value={item.status} />
                 </div>
               </Link>
-            )) : <EmptyState label="No executive decisions are waiting right now." />}
+            )) : <EmptyState label="No studio decisions are waiting right now." />}
           </div>
         </Panel>
 
@@ -10659,7 +10774,8 @@ function TaskRows({
     : showType
       ? "md:grid-cols-[34px_minmax(220px,1fr)_140px_118px_120px_110px_105px_100px]"
       : showContext ? "md:grid-cols-[34px_1fr_120px_118px_120px_110px_100px]" : "md:grid-cols-[34px_1fr_118px_120px_110px_100px]";
-  const nameForUser = (userId: string) => users.find((user) => user.id === userId)?.name ?? userName(userId);
+  const userNameById = useMemo(() => new Map(users.map((user) => [user.id, user.name])), [users]);
+  const nameForUser = (userId: string) => userNameById.get(userId) ?? userName(userId);
   const sortedTasks = useMemo(() => {
     return [...tasks].sort((a, b) => compareTasks(a, b, sort, users, projects));
   }, [projects, sort, tasks, users]);
@@ -11762,7 +11878,7 @@ function buildExecutiveReportEmail(input: {
   return [
     `Hi team,`,
     "",
-    `Here is the GreenLight executive report for ${input.scopeLabel}.`,
+    `Here is the GreenLight executive digest for ${input.scopeLabel}.`,
     `Window: ${formatReportWindow(input.windowStart, input.windowEnd)}`,
     `Prepared by: ${input.currentUser.name} (${input.currentUser.email})`,
     "",
@@ -12476,8 +12592,9 @@ function titleForView(view: HammerView, context: { project: HammerProject; docum
     tasks: "Tasks",
     contacts: "Outreach",
     reviews: "Reviews",
-    reports: "Reports",
-    executive: "Executive",
+    "studio-status": "Studio Status",
+    reports: "Studio Status",
+    executive: "Studio Status",
     "admin-users": "Admin",
     account: "Account"
   };

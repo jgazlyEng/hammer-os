@@ -186,6 +186,29 @@ export async function upsertGoogleUser(profile: { id: string; email: string; nam
   }
 
   const email = profile.email.trim().toLowerCase();
+  const existingUser = await prisma.user.findUnique({
+    where: { email },
+    include: { memberships: true }
+  });
+
+  if (!existingUser && !googleEmailIsAllowed(email)) {
+    throw new Error(`Google sign-in denied for ${email}. Add the user in Admin or allow their domain/email in the production environment.`);
+  }
+
+  if (existingUser) {
+    const user = await prisma.user.update({
+      where: { id: existingUser.id },
+      data: {
+        name: profile.name ?? existingUser.name,
+        avatarUrl: profile.picture,
+        googleId: profile.id
+      },
+      include: { memberships: true }
+    });
+
+    return toAuthenticatedUser(user);
+  }
+
   const user = await prisma.user.upsert({
     where: { email },
     create: {
@@ -205,6 +228,22 @@ export async function upsertGoogleUser(profile: { id: string; email: string; nam
   });
 
   return toAuthenticatedUser(user);
+}
+
+function googleEmailIsAllowed(email: string) {
+  const allowedEmails = parseCsvEnv("GOOGLE_ALLOWED_EMAILS").map((value) => value.toLowerCase());
+  if (allowedEmails.includes(email)) return true;
+
+  const domain = email.split("@")[1]?.toLowerCase();
+  const allowedDomains = parseCsvEnv("GOOGLE_ALLOWED_DOMAINS").map((value) => value.replace(/^@/, "").toLowerCase());
+  return Boolean(domain && allowedDomains.includes(domain));
+}
+
+function parseCsvEnv(key: string) {
+  return (process.env[key] ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
 }
 
 export function hashPassword(password: string) {

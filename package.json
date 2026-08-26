@@ -1,6 +1,6 @@
 {
   "name": "hammer-production-tracker",
-  "version": "2.0.39",
+  "version": "0.4.4-beta",
   "private": true,
   "scripts": {
     "dev": "NEXT_DIST_DIR=.next-dev next dev",

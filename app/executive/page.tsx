@@ -1,5 +1,5 @@
-import { HammerOS } from "@/components/hammer-os";
+import { redirect } from "next/navigation";
 
 export default function ExecutivePage() {
-  return <HammerOS view="executive" />;
+  redirect("/studio-status");
 }

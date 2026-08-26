@@ -1,5 +1,5 @@
-import { HammerOS } from "@/components/hammer-os";
+import { redirect } from "next/navigation";
 
 export default function ReportsPage() {
-  return <HammerOS view="reports" />;
+  redirect("/studio-status");
 }
