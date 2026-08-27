@@ -206,7 +206,16 @@ export async function POST(request: Request) {
         const newLeads = uniqueMatches.filter(({ existing }) => !existing).map(({ lead }) => lead);
         const updateLeads = uniqueMatches.filter(({ existing }) => existing && !existing.deletedAt);
         const restoreLeads = uniqueMatches.filter(({ existing }) => existing?.deletedAt);
-        if (!newLeads.length && !updateLeads.length && !restoreLeads.length) return NextResponse.json({ projectLeads: [], skipped: leads.length, updated: 0, restored: 0 });
+        if (!newLeads.length && !updateLeads.length && !restoreLeads.length) {
+          await recordImportHistory({
+            importType: "Prospects CSV",
+            actorUserId: auth.user.id,
+            actor: auth.user.email,
+            rowsReceived: leads.length,
+            rowsSkipped: leads.length
+          });
+          return NextResponse.json({ projectLeads: [], skipped: leads.length, updated: 0, restored: 0 });
+        }
         const changed = await prisma.$transaction([
           ...newLeads.map((lead) => prisma.prospect.create({ data: lead })),
           ...updateLeads.map(({ lead, existing }) => {
@@ -224,6 +233,16 @@ export async function POST(request: Request) {
             });
           })
         ]);
+        await recordImportHistory({
+          importType: "Prospects CSV",
+          actorUserId: auth.user.id,
+          actor: auth.user.email,
+          rowsReceived: leads.length,
+          rowsCreated: newLeads.length,
+          rowsUpdated: updateLeads.length,
+          rowsRestored: restoreLeads.length,
+          rowsSkipped: leads.length - uniqueMatches.length
+        });
         return NextResponse.json({ projectLeads: changed.map(toProjectLead), skipped: leads.length - uniqueMatches.length, updated: updateLeads.length, restored: restoreLeads.length });
       }
 
@@ -768,12 +787,22 @@ export async function POST(request: Request) {
 
       case "importContacts":
         if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
-        return NextResponse.json({ contacts: (await prisma.$transaction((Array.isArray(body.contacts) ? body.contacts : []).map((item) => {
+        const contactsToImport = Array.isArray(body.contacts) ? body.contacts : [];
+        const importedContacts = await prisma.$transaction(contactsToImport.map((item) => {
           const contact = item as Record<string, unknown>;
           return prisma.contact.create({
             data: contactCreateData(contact)
           });
-        }))).map(toContact) });
+        }));
+        await recordImportHistory({
+          importType: "Outreach CSV",
+          actorUserId: auth.user.id,
+          actor: auth.user.email,
+          rowsReceived: contactsToImport.length,
+          rowsCreated: importedContacts.length,
+          rowsSkipped: contactsToImport.length - importedContacts.length
+        });
+        return NextResponse.json({ contacts: importedContacts.map(toContact) });
 
       case "updateContact":
         if (!canManageLibrary(auth.user.appRole)) return NextResponse.json(forbidden(), { status: 403 });
@@ -1642,4 +1671,34 @@ const contactStatuses: ContactStatus[] = ["NEW", "ACTIVE", "FOLLOW_UP", "WAITING
 
 function parseTags(value?: string) {
   return value ? value.split(/[;,]/).map((tag) => tag.trim()).filter(Boolean) : [];
+}
+
+async function recordImportHistory(input: {
+  importType: string;
+  actorUserId?: string;
+  actor?: string;
+  rowsReceived?: number;
+  rowsCreated?: number;
+  rowsUpdated?: number;
+  rowsRestored?: number;
+  rowsSkipped?: number;
+  status?: string;
+  error?: string;
+  detailJson?: Prisma.InputJsonValue;
+}) {
+  await prisma.importHistory.create({
+    data: {
+      importType: input.importType,
+      actorUserId: input.actorUserId,
+      actor: input.actor,
+      rowsReceived: input.rowsReceived ?? 0,
+      rowsCreated: input.rowsCreated ?? 0,
+      rowsUpdated: input.rowsUpdated ?? 0,
+      rowsRestored: input.rowsRestored ?? 0,
+      rowsSkipped: input.rowsSkipped ?? 0,
+      status: input.status ?? "COMPLETE",
+      error: input.error,
+      detailJson: input.detailJson
+    }
+  }).catch(() => undefined);
 }

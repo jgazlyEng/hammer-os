@@ -39,9 +39,9 @@ const navItems = [
 
 const talentNavItem = { href: "/outreach", label: "Outreach", icon: ContactRound };
 const studioStatusNavItem = { href: "/studio-status", label: "Studio Status", icon: BarChart3 };
-const adminNavItem = { href: "/admin/users", label: "Admin", icon: Settings2 };
+const adminNavItem = { href: "/admin", label: "Admin", icon: Settings2 };
 const accountNavItem = { href: "/account", label: "Account", icon: UserRound };
-const GREENLIGHT_APP_VERSION = "Beta 0.5.5";
+const GREENLIGHT_APP_VERSION = "Beta 0.5.14";
 const HAMMER_THEME_STORAGE_KEY = "hammer-os-theme";
 type ThemeMode = "dark" | "light";
 type AuthMode = "loading" | "database" | "demo";

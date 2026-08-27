@@ -38,7 +38,8 @@ export async function GET(request: Request) {
   const source = await readStoredFile(file);
   const downloadedAt = new Date();
   const ipAddress = includeIp ? clientIp(request) : undefined;
-  const watermarkText = `${auth.user.email} | ${downloadedAt.toISOString()}${ipAddress ? ` | IP ${ipAddress}` : ""}`;
+  const watermarkSettings = await getWatermarkSettings();
+  const watermarkText = buildWatermarkText(watermarkSettings, auth.user.email, downloadedAt, ipAddress);
   const output = shouldWatermark
     ? await watermarkFile(source.bytes, file.fileName, file.fileType, watermarkText)
     : { bytes: source.bytes, fileName: file.fileName, contentType: source.contentType || file.fileType || "application/octet-stream" };
@@ -67,6 +68,23 @@ export async function GET(request: Request) {
       "Cache-Control": "no-store"
     }
   });
+}
+
+async function getWatermarkSettings() {
+  const setting = await prisma.appSetting.findUnique({ where: { key: "download.watermark" } }).catch(() => null);
+  const value = setting?.valueJson && typeof setting.valueJson === "object" ? setting.valueJson as Record<string, unknown> : {};
+  const mode = typeof value.mode === "string" && ["CUSTOM_TEXT", "USER_ONLY", "USER_AND_IP"].includes(value.mode) ? value.mode : "USER_AND_IP";
+  return {
+    mode,
+    customText: typeof value.customText === "string" ? value.customText : ""
+  };
+}
+
+function buildWatermarkText(settings: { mode: string; customText: string }, userEmail: string, downloadedAt: Date, ipAddress?: string) {
+  const timestamp = downloadedAt.toISOString();
+  if (settings.mode === "CUSTOM_TEXT") return `${settings.customText || "GreenLight Confidential"} | ${timestamp}`;
+  if (settings.mode === "USER_ONLY") return `${userEmail} | ${timestamp}`;
+  return `${userEmail} | ${timestamp}${ipAddress ? ` | IP ${ipAddress}` : ""}`;
 }
 
 async function findDownloadableFile(type: DownloadType, id: string): Promise<DownloadableFile | null> {

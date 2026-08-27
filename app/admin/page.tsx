@@ -1,10 +1,5 @@
-import { AppShell } from "@/components/app-shell";
-import { AdminWorkspace } from "@/app/admin/admin-workspace";
+import { HammerOS } from "@/components/hammer-os";
 
 export default function AdminPage() {
-  return (
-    <AppShell>
-      <AdminWorkspace />
-    </AppShell>
-  );
+  return <HammerOS view="admin-overview" />;
 }
