@@ -299,6 +299,15 @@ enum ExtractionStatus {
   failed
 }
 
+enum UploadJobStatus {
+  RECEIVED
+  STORED
+  PARSING
+  COMPLETE
+  WARNING
+  FAILED
+}
+
 enum SlateCollectionItemType {
   PROJECT
   PROSPECT
@@ -328,6 +337,7 @@ model Project {
 
   owner                   User?           @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   documents               Document[]
+  uploadJobs              UploadJob[]
   supportingDocuments     SupportingDocument[]
   entities                Entity[]
   assets                  Asset[]
@@ -436,6 +446,7 @@ model User {
   documentsCreated Document[]      @relation("DocumentCreator")
   documentTagsCreated DocumentTag[]
   documentVersionsUploaded DocumentVersion[] @relation("DocumentVersionUploader")
+  uploadJobsCreated UploadJob[]       @relation("UploadJobCreator")
   supportingDocumentsUploaded SupportingDocument[] @relation("SupportingDocumentUploader")
   prospectAssetsUploaded ProspectAsset[] @relation("ProspectAssetUploader")
   documentDiffsCreated DocumentDiff[] @relation("DocumentDiffCreator")
@@ -487,6 +498,7 @@ model Document {
   currentVersion   DocumentVersion?  @relation("CurrentDocumentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
   createdBy        User?             @relation("DocumentCreator", fields: [createdById], references: [id], onDelete: SetNull)
   versions         DocumentVersion[] @relation("DocumentVersions")
+  uploadJobs       UploadJob[]
   diffs            DocumentDiff[]
   supportingDocuments SupportingDocument[]
   collectionItems ScriptCollectionItem[]
@@ -603,6 +615,7 @@ model DocumentVersion {
   document           Document              @relation("DocumentVersions", fields: [documentId], references: [id], onDelete: Cascade)
   currentForDocument Document?             @relation("CurrentDocumentVersion")
   uploadedBy         User?                 @relation("DocumentVersionUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  uploadJobs         UploadJob[]
   scenes             Scene[]               @relation("DocumentVersionScenes")
   diffsFrom          DocumentDiff[]        @relation("DocumentDiffFrom")
   diffsTo            DocumentDiff[]        @relation("DocumentDiffTo")
@@ -611,6 +624,39 @@ model DocumentVersion {
   @@unique([documentId, versionNumber])
   @@index([documentId, createdAt])
   @@index([status])
+}
+
+model UploadJob {
+  id                String          @id @default(cuid())
+  requestId         String          @unique
+  status            UploadJobStatus @default(RECEIVED)
+  stage             String          @default("received")
+  fileName          String
+  fileType          String
+  fileSize          Int
+  storagePath       String?
+  projectId         String?
+  documentId        String?
+  documentVersionId String?
+  createdById       String?
+  warning           String?         @db.Text
+  error             String?         @db.Text
+  detailJson        Json?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  completedAt       DateTime?
+
+  project           Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  document          Document?       @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  documentVersion   DocumentVersion? @relation(fields: [documentVersionId], references: [id], onDelete: SetNull)
+  createdBy         User?           @relation("UploadJobCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([projectId])
+  @@index([documentId])
+  @@index([documentVersionId])
+  @@index([createdById])
+  @@index([createdAt])
 }
 
 model DocumentDiff {

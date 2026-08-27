@@ -14,6 +14,7 @@ const MAX_UPLOAD_BYTES = 250 * 1024 * 1024;
 
 export async function POST(request: Request) {
   const requestId = crypto.randomUUID();
+  let uploadJobId = "";
   const auth = requireUser(request);
   if ("error" in auth) return NextResponse.json({ error: auth.error }, { status: auth.status });
   if (!isDatabaseConfigured()) return NextResponse.json({ error: "Database mode is not configured." }, { status: 503 });
@@ -55,9 +56,32 @@ export async function POST(request: Request) {
     const fileName = file.name || "uploaded-document";
     const fileType = file.type || inferFileType(fileName);
     const initialNotes = optionalString(formData.get("notes"));
+    uploadStage = "recording upload job";
+    const uploadJob = await prisma.uploadJob.create({
+      data: {
+        requestId,
+        status: "RECEIVED",
+        stage: "received",
+        fileName,
+        fileType,
+        fileSize: file.size,
+        projectId,
+        documentId: existingDocument?.id,
+        createdById: auth.user.id,
+        detailJson: { documentId: existingDocument?.id ?? null, requestedProjectId: requestedProjectId ?? null } as Prisma.InputJsonValue
+      }
+    });
+    uploadJobId = uploadJob.id;
+
     const bytes = Buffer.from(await file.arrayBuffer());
     uploadStage = "storing uploaded file";
     const storedUpload = await storeUpload(projectId ?? "inbox", fileName, bytes);
+    await updateUploadJob(uploadJobId, {
+      status: "STORED",
+      stage: "stored",
+      storagePath: storedUpload.storagePath,
+      fileSize: storedUpload.sizeBytes
+    });
     const now = new Date();
 
     uploadStage = "saving document metadata";
@@ -91,6 +115,18 @@ export async function POST(request: Request) {
         }
       });
 
+      await tx.uploadJob.update({
+        where: { id: uploadJobId },
+        data: {
+          status: "PARSING",
+          stage: "parsing",
+          documentId: document.id,
+          documentVersionId: version.id,
+          storagePath: storedUpload.storagePath,
+          detailJson: { documentId: document.id, versionId: version.id, versionNumber: nextVersionNumber, fileName, projectId: projectId ?? null } as Prisma.InputJsonValue
+        }
+      });
+
       const updatedDocument = await tx.document.update({
         where: { id: document.id },
         data: {
@@ -121,6 +157,7 @@ export async function POST(request: Request) {
       requestId,
       versionId: result.version.id,
       documentId: result.document.id,
+      uploadJobId,
       fileName,
       fileType,
       bytes,
@@ -132,6 +169,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       document: toDocument(result.document),
       version: toVersion(result.version),
+      uploadJob: toUploadJob(await prisma.uploadJob.findUnique({ where: { id: uploadJobId } })),
       warning: "Upload saved. Text extraction is running in the background; refresh the document in a moment to see parsed text, breakdown, and diff support.",
       extractionQueued: true
     }, { status: 201 });
@@ -139,6 +177,14 @@ export async function POST(request: Request) {
     const detail = uploadErrorMessage(error);
     const status = uploadErrorStatus(uploadStage, detail);
     const hint = uploadErrorHint(uploadStage, detail);
+    if (uploadJobId) {
+      await updateUploadJob(uploadJobId, {
+        status: "FAILED",
+        stage: uploadStage,
+        error: `${detail}${hint ? ` ${hint}` : ""}`,
+        completedAt: new Date()
+      }).catch((jobError) => console.error("[document-upload:job-failed-update]", { requestId, uploadJobId, error: jobError }));
+    }
     console.error("[document-upload]", { requestId, uploadStage, status, detail, hint, error });
     return NextResponse.json({
       error: "Document upload failed.",
@@ -150,16 +196,70 @@ export async function POST(request: Request) {
   }
 }
 
+export async function GET(request: Request) {
+  const auth = requireUser(request);
+  if ("error" in auth) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  if (!isDatabaseConfigured()) return NextResponse.json({ error: "Database mode is not configured." }, { status: 503 });
+
+  const url = new URL(request.url);
+  const jobId = url.searchParams.get("jobId")?.trim();
+  const requestId = url.searchParams.get("requestId")?.trim();
+  const recent = url.searchParams.get("recent") === "1";
+  const projectId = url.searchParams.get("projectId")?.trim();
+  const documentId = url.searchParams.get("documentId")?.trim();
+
+  if (recent) {
+    if (!canUploadDocument(auth.user.appRole, auth.user.projectRoles, projectId || undefined)) {
+      return NextResponse.json(forbidden(), { status: 403 });
+    }
+    const uploadJobs = await prisma.uploadJob.findMany({
+      where: {
+        ...(projectId ? { projectId } : {}),
+        ...(documentId ? { documentId } : {}),
+        ...(!projectId && !documentId && !canManageUploads(auth.user.appRole) ? { createdById: auth.user.id } : {})
+      },
+      orderBy: { createdAt: "desc" },
+      take: 8,
+      include: {
+        documentVersion: { select: { id: true, documentId: true, extractedText: true, notes: true } }
+      }
+    });
+    return NextResponse.json({ uploadJobs: uploadJobs.map(toUploadJob) });
+  }
+
+  if (!jobId && !requestId) return NextResponse.json({ error: "Upload job id is required." }, { status: 400 });
+
+  const job = await prisma.uploadJob.findFirst({
+    where: jobId ? { id: jobId } : { requestId: requestId! },
+    include: {
+      documentVersion: { select: { id: true, documentId: true, extractedText: true, notes: true } }
+    }
+  });
+
+  if (!job) return NextResponse.json({ error: "Upload job was not found." }, { status: 404 });
+  if (!canUploadDocument(auth.user.appRole, auth.user.projectRoles, job.projectId ?? undefined) && job.createdById !== auth.user.id) {
+    return NextResponse.json(forbidden(), { status: 403 });
+  }
+
+  return NextResponse.json({ uploadJob: toUploadJob(job) });
+}
+
 function canUploadDocument(role: string, projectRoles: Record<string, string>, projectId?: string) {
   const normalizedRole = role.toLowerCase();
   if (normalizedRole === "admin" || normalizedRole === "producer" || normalizedRole === "executive" || normalizedRole === "exec") return true;
   return Boolean(projectId && projectRoles[projectId]);
 }
 
+function canManageUploads(role: string) {
+  const normalizedRole = role.toLowerCase();
+  return normalizedRole === "admin" || normalizedRole === "producer" || normalizedRole === "executive" || normalizedRole === "exec";
+}
+
 async function extractAndPersistUploadText(input: {
   requestId: string;
   versionId: string;
   documentId: string;
+  uploadJobId: string;
   fileName: string;
   fileType: string;
   bytes: Buffer;
@@ -169,12 +269,24 @@ async function extractAndPersistUploadText(input: {
 }) {
   try {
     const extraction = await extractUploadText(input.fileName, input.fileType, input.bytes);
+    const uploadStatus = extraction.warning ? "WARNING" : "COMPLETE";
     await prisma.$transaction(async (tx) => {
       await tx.documentVersion.update({
         where: { id: input.versionId },
         data: {
           extractedText: extraction.text,
           notes: combineUploadNotes(input.initialNotes, extraction.warning)
+        }
+      });
+      await tx.uploadJob.update({
+        where: { id: input.uploadJobId },
+        data: {
+          status: uploadStatus,
+          stage: "complete",
+          warning: extraction.warning,
+          error: null,
+          completedAt: new Date(),
+          detailJson: { documentId: input.documentId, versionId: input.versionId, fileName: input.fileName, extractedChars: extraction.text.length, extractionWarning: extraction.warning ?? null } as Prisma.InputJsonValue
         }
       });
       await tx.auditLog.create({
@@ -192,16 +304,34 @@ async function extractAndPersistUploadText(input: {
     const detail = error instanceof Error ? error.message : "Unknown extraction error.";
     const warning = `Uploaded successfully, but text extraction failed in the background. The original file is stored; parser/OCR can be retried later. Details: ${detail}`;
     console.error("[document-upload:background-extract]", { requestId: input.requestId, versionId: input.versionId, detail, error });
-    await prisma.documentVersion.update({
-      where: { id: input.versionId },
-      data: {
-        extractedText: "",
-        notes: combineUploadNotes(input.initialNotes, warning)
-      }
-    }).catch((updateError) => {
+    await prisma.$transaction([
+      prisma.documentVersion.update({
+        where: { id: input.versionId },
+        data: {
+          extractedText: "",
+          notes: combineUploadNotes(input.initialNotes, warning)
+        }
+      }),
+      prisma.uploadJob.update({
+        where: { id: input.uploadJobId },
+        data: {
+          status: "WARNING",
+          stage: "complete",
+          warning,
+          error: detail,
+          completedAt: new Date(),
+          detailJson: { documentId: input.documentId, versionId: input.versionId, fileName: input.fileName, extractionError: detail } as Prisma.InputJsonValue
+        }
+      })
+    ]).catch((updateError) => {
       console.error("[document-upload:background-extract:update-failed]", { requestId: input.requestId, versionId: input.versionId, error: updateError });
     });
   }
+}
+
+async function updateUploadJob(id: string, data: Parameters<typeof prisma.uploadJob.update>[0]["data"]) {
+  if (!id) return null;
+  return prisma.uploadJob.update({ where: { id }, data });
 }
 
 async function extractUploadText(fileName: string, fileType: string, bytes: Buffer) {
@@ -276,6 +406,30 @@ function toDocument(document: { id: string; projectId: string | null; title: str
 
 function toVersion(version: { id: string; documentId: string; versionNumber: number; status: string; fileName: string; fileType: string; fileSize: number; storagePath: string; dataUrl?: string | null; uploadedById: string | null; createdAt: Date; notes: string | null; markdownNotes?: string | null; extractedText: string | null }) {
   return { id: version.id, documentId: version.documentId, versionNumber: version.versionNumber, status: version.status, fileName: version.fileName, fileType: version.fileType, fileSize: version.fileSize, storagePath: version.storagePath, dataUrl: version.dataUrl ?? undefined, uploadedById: version.uploadedById ?? "", createdAt: dateString(version.createdAt), notes: version.notes ?? "", markdownNotes: version.markdownNotes ?? undefined, extractedText: version.extractedText ?? "" };
+}
+
+function toUploadJob(job: ({ id: string; requestId: string; status: string; stage: string; fileName: string; fileType: string; fileSize: number; storagePath: string | null; projectId: string | null; documentId: string | null; documentVersionId: string | null; warning: string | null; error: string | null; createdAt: Date; updatedAt: Date; completedAt: Date | null; documentVersion?: { id: string; documentId: string; extractedText: string | null; notes: string | null } | null } | null)) {
+  if (!job) return undefined;
+  return {
+    id: job.id,
+    requestId: job.requestId,
+    status: job.status,
+    stage: job.stage,
+    fileName: job.fileName,
+    fileType: job.fileType,
+    fileSize: job.fileSize,
+    storagePath: job.storagePath ?? undefined,
+    projectId: job.projectId ?? undefined,
+    documentId: job.documentId ?? undefined,
+    documentVersionId: job.documentVersionId ?? undefined,
+    warning: job.warning ?? undefined,
+    error: job.error ?? undefined,
+    characterCount: job.documentVersion?.extractedText?.length ?? 0,
+    versionNotes: job.documentVersion?.notes ?? undefined,
+    createdAt: job.createdAt.toISOString(),
+    updatedAt: job.updatedAt.toISOString(),
+    completedAt: job.completedAt?.toISOString()
+  };
 }
 
 function documentTypeField(value: FormDataEntryValue | null): DocumentType {

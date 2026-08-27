@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { Archive, ArrowLeft, ArrowUpDown, CalendarClock, CheckCircle2, ChevronDown, ContactRound, Download, FileDiff, FileText, Gauge, GripVertical, ImagePlus, Loader2, MessageSquare, PackageCheck, Pencil, Plus, Search, Share2, ShieldCheck, Trash2, UploadCloud, UsersRound, X } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
@@ -112,6 +112,7 @@ type AppRole = "admin" | "executive" | "producer" | "department_lead";
 interface DocumentUploadResponse {
   document?: HammerDocument;
   version?: HammerDocumentVersion;
+  uploadJob?: UploadJobSnapshot;
   warning?: string;
   extractionQueued?: boolean;
 }
@@ -868,9 +869,9 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
         await loadDatabaseWorkspace({ force: true });
       } catch (error) {
         const refreshWarning = `Upload saved, but the workspace list could not refresh automatically. Reload the page if the new document is not visible. Details: ${error instanceof Error ? error.message : "Unknown refresh error."}`;
-        return { document: data?.document, version: data?.version, warning: data?.warning ? `${data.warning} ${refreshWarning}` : refreshWarning, extractionQueued: data?.extractionQueued };
+        return { document: data?.document, version: data?.version, uploadJob: data?.uploadJob, warning: data?.warning ? `${data.warning} ${refreshWarning}` : refreshWarning, extractionQueued: data?.extractionQueued };
       }
-      return { document: data?.document, version: data?.version, warning: data?.warning, extractionQueued: data?.extractionQueued };
+      return { document: data?.document, version: data?.version, uploadJob: data?.uploadJob, warning: data?.warning, extractionQueued: data?.extractionQueued };
     }
     let extractedText = "";
     let extractionWarning: string | undefined;
@@ -3551,8 +3552,30 @@ type DocumentUploadInput = {
 type DocumentUploadResult = {
   document?: HammerDocument;
   version?: HammerDocumentVersion;
+  uploadJob?: UploadJobSnapshot;
   warning?: string;
   extractionQueued?: boolean;
+};
+
+type UploadJobSnapshot = {
+  id: string;
+  requestId: string;
+  status: "RECEIVED" | "STORED" | "PARSING" | "COMPLETE" | "WARNING" | "FAILED";
+  stage: string;
+  fileName: string;
+  fileType: string;
+  fileSize: number;
+  storagePath?: string;
+  projectId?: string;
+  documentId?: string;
+  documentVersionId?: string;
+  warning?: string;
+  error?: string;
+  characterCount?: number;
+  versionNotes?: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
 };
 
 type UploadProgressStepId = "selected" | "uploading" | "stored" | "parsing" | "complete";
@@ -4333,6 +4356,7 @@ function DocumentUploadPanel({
   const [status, setStatus] = useState("");
   const [statusTone, setStatusTone] = useState<"idle" | "working" | "success" | "warning" | "error">("idle");
   const [progressSteps, setProgressSteps] = useState<UploadProgressStep[]>(uploadProgressSteps());
+  const [recentUploadJobs, setRecentUploadJobs] = useState<UploadJobSnapshot[]>([]);
   const [busy, setBusy] = useState(false);
   const selectedDocument = documents.find((document) => document.id === documentId);
 
@@ -4350,6 +4374,21 @@ function DocumentUploadPanel({
   function updateProgress(stepId: UploadProgressStepId, state: UploadProgressState, detail?: string) {
     setProgressSteps((current) => current.map((step) => step.id === stepId ? { ...step, state, detail: detail ?? step.detail } : step));
   }
+
+  const refreshRecentUploads = useCallback(async (nextDocumentId = documentId) => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams({ recent: "1" });
+    if (projectId) params.set("projectId", projectId);
+    if (nextDocumentId) params.set("documentId", nextDocumentId);
+    const response = await fetch(`/api/hammer/document-upload?${params.toString()}`, { cache: "no-store" }).catch(() => null);
+    if (!response?.ok) return;
+    const data = await response.json().catch(() => null) as { uploadJobs?: UploadJobSnapshot[] } | null;
+    setRecentUploadJobs(data?.uploadJobs ?? []);
+  }, [documentId, projectId]);
+
+  useEffect(() => {
+    void refreshRecentUploads();
+  }, [refreshRecentUploads]);
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -4384,6 +4423,35 @@ function DocumentUploadPanel({
       updateProgress("uploading", "done", "Upload request completed.");
       updateProgress("stored", "done", "Original file saved and document record created.");
 
+      if (result?.extractionQueued && result.uploadJob?.id) {
+        updateProgress("parsing", "active", "Parsing readable text in the background...");
+        setStatus("File saved. GreenLight is parsing text now; scanned PDFs may finish with an OCR warning.");
+        const uploadJob = await waitForUploadJob(result.uploadJob.id);
+        if (uploadJob.status === "COMPLETE") {
+          updateProgress("parsing", "done", `Parsed ${(uploadJob.characterCount ?? 0).toLocaleString()} characters.`);
+          updateProgress("complete", "done", "Document is ready for breakdown and diff tools.");
+          setStatus("Upload complete. Text parsed and workspace refreshed.");
+          setStatusTone("success");
+        } else if (uploadJob.status === "WARNING") {
+          const message = uploadJob.warning || uploadJob.versionNotes || "Document is saved, but parsing finished with a warning.";
+          updateProgress("parsing", "warning", message);
+          updateProgress("complete", "warning", "Document is saved, but parsing needs attention.");
+          setStatus(`Uploaded with warning: ${message}`);
+          setStatusTone("warning");
+        } else {
+          const message = uploadJob.error || "Upload failed while GreenLight was processing the file.";
+          updateProgress("parsing", "error", message);
+          updateProgress("complete", "error", "Upload did not complete.");
+          setStatus(message);
+          setStatusTone("error");
+          return;
+        }
+        void refreshRecentUploads();
+        setFile(null);
+        window.setTimeout(onDone, 900);
+        return;
+      }
+
       if (result?.extractionQueued && result.version?.documentId && result.version.id) {
         updateProgress("parsing", "active", "Parsing readable text in the background...");
         setStatus("File saved. GreenLight is parsing text now; scanned PDFs may finish with an OCR warning.");
@@ -4400,6 +4468,7 @@ function DocumentUploadPanel({
           setStatusTone("warning");
         }
         setFile(null);
+        void refreshRecentUploads();
         window.setTimeout(onDone, 900);
         return;
       }
@@ -4416,6 +4485,7 @@ function DocumentUploadPanel({
       setStatus("Uploaded. Refreshing the script list...");
       setStatusTone("success");
       setFile(null);
+      void refreshRecentUploads();
       window.setTimeout(onDone, 700);
     } catch (error) {
       updateProgress("uploading", "error", uploadFailureMessage(error));
@@ -4490,6 +4560,7 @@ function DocumentUploadPanel({
         <PrimaryButton icon={busy ? Loader2 : UploadCloud} label={busy ? "Uploading..." : documentId ? "Upload Version" : "Upload Document"} disabled={busy} />
       </div>
       <UploadProgressPanel steps={progressSteps} />
+      <RecentUploadJobsPanel jobs={recentUploadJobs} />
       {status ? (
         <div className={cn(
           "md:col-span-2 flex items-start gap-2 rounded-md border px-3 py-2 text-xs leading-5",
@@ -4545,6 +4616,38 @@ function UploadProgressPanel({ steps }: { steps: UploadProgressStep[] }) {
   );
 }
 
+function RecentUploadJobsPanel({ jobs }: { jobs: UploadJobSnapshot[] }) {
+  if (!jobs.length) return null;
+  return (
+    <div className="md:col-span-2 rounded-lg border border-white/10 bg-white/[0.025] p-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-studio-300">Recent Uploads</p>
+        <span className="text-[11px] text-studio-500">Saved in database</span>
+      </div>
+      <div className="grid gap-1.5">
+        {jobs.slice(0, 4).map((job) => (
+          <div key={job.id} className="grid gap-2 rounded-md border border-white/10 bg-studio-950/35 px-2.5 py-2 text-[12px] md:grid-cols-[minmax(0,1fr)_92px_120px] md:items-center">
+            <div className="min-w-0">
+              <p className="truncate font-semibold text-studio-100">{job.fileName}</p>
+              <p className="mt-0.5 truncate text-[11px] text-studio-500">{job.stage}{job.characterCount ? ` / ${job.characterCount.toLocaleString()} chars` : ""}</p>
+            </div>
+            <span className={cn("rounded border px-2 py-1 text-center font-display text-[10px] uppercase", uploadJobTone(job.status))}>{statusLabel(job.status)}</span>
+            <p className="truncate text-right text-[11px] text-studio-500">{formatShortDateTime(job.createdAt)}</p>
+            {job.error || job.warning ? <p className="md:col-span-3 line-clamp-2 text-[11px] leading-4 text-studio-400">{job.error || job.warning}</p> : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function uploadJobTone(status: UploadJobSnapshot["status"]) {
+  if (status === "COMPLETE") return "border-emerald-300/25 bg-emerald-400/10 text-emerald-200";
+  if (status === "WARNING") return "border-yellow-300/35 bg-yellow-300/10 text-yellow-100";
+  if (status === "FAILED") return "border-rose-300/35 bg-rose-500/10 text-rose-100";
+  return "border-sky-300/25 bg-sky-400/10 text-sky-200";
+}
+
 function uploadProgressSteps(activeStep?: UploadProgressStepId | "error", detail?: string): UploadProgressStep[] {
   const steps: UploadProgressStep[] = [
     { id: "selected", label: "Selected", detail: "Choose a PDF, FDX, TXT, or MD file.", state: "pending" },
@@ -4581,6 +4684,37 @@ async function waitForDocumentExtraction(documentId: string, versionId: string):
     state: "warning",
     message: "The original file was saved, but parsing is still running or did not finish before the progress window timed out. Refresh this document in a moment, or check app logs if it remains unparsed.",
     characterCount: 0
+  };
+}
+
+async function waitForUploadJob(jobId: string): Promise<UploadJobSnapshot> {
+  let latest: UploadJobSnapshot | null = null;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    await delay(attempt < 5 ? 1000 : 2000);
+    const response = await fetch(`/api/hammer/document-upload?jobId=${encodeURIComponent(jobId)}`, { cache: "no-store" });
+    if (!response.ok) {
+      const data = await readUploadErrorResponse(response);
+      throw new Error(formatUploadError(data, response.status));
+    }
+    const data = await response.json().catch(() => null) as { uploadJob?: UploadJobSnapshot } | null;
+    if (data?.uploadJob) {
+      latest = data.uploadJob;
+      if (["COMPLETE", "WARNING", "FAILED"].includes(data.uploadJob.status)) {
+        return data.uploadJob;
+      }
+    }
+  }
+  return latest ?? {
+    id: jobId,
+    requestId: "",
+    status: "WARNING",
+    stage: "parsing",
+    fileName: "",
+    fileType: "",
+    fileSize: 0,
+    warning: "Parsing is still running. The original file is saved; refresh this document in a moment to see the latest result.",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
   };
 }
 
