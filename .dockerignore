@@ -1,0 +1,32 @@
+.git
+.gitignore
+.DS_Store
+
+# Local environment and editor files
+.env
+.env.*
+!.env.example
+*.swp
+*.swo
+
+# Dependency and build output
+node_modules
+.next
+.next-*
+out
+dist
+coverage
+*.tsbuildinfo
+
+# Local upload/runtime data
+uploads
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Non-runtime docs/artifacts
+docs/GreenLight_User_Function_Walkthrough.pdf
+studio-intelligence-platform-miro-board-kit.zip
+miro-board-kit
+miro-board-kit 2
