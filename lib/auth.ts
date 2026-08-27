@@ -2,8 +2,8 @@ import { createHmac, randomBytes, timingSafeEqual, pbkdf2Sync } from "node:crypt
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 
-export type AppRole = "admin" | "executive" | "producer" | "department_lead";
-export type ProjectRole = "owner" | "executive" | "producer" | "department_lead" | "viewer";
+export type AppRole = "admin" | "executive" | "producer" | "artist" | "standard" | "department_lead";
+export type ProjectRole = "owner" | "executive" | "producer" | "artist" | "standard" | "department_lead" | "viewer";
 
 export interface AuthenticatedUser {
   id: string;
@@ -106,22 +106,26 @@ export function requireAdmin(request: Request) {
 }
 
 export function userCanAccessProject(user: AuthenticatedUser, projectId: string) {
-  return user.appRole === "admin" || user.appRole === "producer" || user.appRole === "executive" || Boolean(user.projectRoles[projectId]);
+  return userCanViewEverything(user.appRole) || Boolean(user.projectRoles[projectId]);
 }
 
 export function userCanManageProject(user: AuthenticatedUser, projectId: string) {
   const projectRole = user.projectRoles[projectId];
-  return user.appRole === "admin" || user.appRole === "producer" || user.appRole === "executive" || projectRole === "owner" || projectRole === "producer";
+  return userCanViewEverything(user.appRole) || projectRole === "owner" || projectRole === "producer";
 }
 
 export function userCanApprove(user: AuthenticatedUser, projectId: string) {
   const projectRole = user.projectRoles[projectId];
-  return user.appRole === "admin" || projectRole === "owner" || projectRole === "producer" || projectRole === "department_lead";
+  return userCanViewEverything(user.appRole) || projectRole === "owner" || projectRole === "producer";
 }
 
 export function userCanUploadScripts(user: AuthenticatedUser, projectId: string) {
   const projectRole = user.projectRoles[projectId];
-  return user.appRole === "admin" || projectRole === "owner" || projectRole === "producer";
+  return user.appRole === "admin" || user.appRole === "producer" || projectRole === "owner" || projectRole === "producer";
+}
+
+export function userCanViewEverything(role: string) {
+  return role === "admin" || role === "producer" || role === "executive";
 }
 
 export function forbidden() {
@@ -166,6 +170,7 @@ export async function createBootstrapAdmin(email: string, password: string) {
     create: {
       email,
       name: "System Admin",
+      role: "ADMIN",
       appRole: "admin",
       passwordHash: hashPassword(password)
     },
@@ -216,8 +221,8 @@ export async function upsertGoogleUser(profile: { id: string; email: string; nam
       name: profile.name ?? email,
       avatarUrl: profile.picture,
       googleId: profile.id,
-      role: "PRODUCER",
-      appRole: "producer"
+      role: "STANDARD",
+      appRole: "standard"
     },
     update: {
       name: profile.name ?? email,

@@ -22,10 +22,6 @@ export async function GET(request: Request) {
   const auth = requireUser(request);
   if ("error" in auth) return NextResponse.json({ error: auth.error }, { status: auth.status });
 
-  if (!canDownload(auth.user.appRole)) {
-    return NextResponse.json({ error: "Download access requires admin, producer, or executive access." }, { status: 403 });
-  }
-
   const url = new URL(request.url);
   const type = url.searchParams.get("type") as DownloadType | null;
   const id = url.searchParams.get("id");
@@ -35,6 +31,9 @@ export async function GET(request: Request) {
 
   const file = await findDownloadableFile(type, id);
   if (!file) return NextResponse.json({ error: "File not found." }, { status: 404 });
+  if (!canDownloadFile(auth.user, file)) {
+    return NextResponse.json({ error: "You do not have access to download this file." }, { status: 403 });
+  }
 
   const source = await readStoredFile(file);
   const downloadedAt = new Date();
@@ -202,8 +201,11 @@ function watermarkImageSvg(bytes: Buffer, contentType: string, fileName: string,
 </svg>`;
 }
 
-function canDownload(role: string) {
-  return role === "admin" || role === "producer" || role === "executive";
+function canDownloadFile(user: { appRole: string; projectRoles: Record<string, string> }, file: DownloadableFile) {
+  const role = user.appRole.toLowerCase();
+  if (role === "admin" || role === "producer" || role === "executive" || role === "exec") return true;
+  if (role === "artist" && file.projectId) return Boolean(user.projectRoles[file.projectId]);
+  return false;
 }
 
 function clientIp(request: Request) {

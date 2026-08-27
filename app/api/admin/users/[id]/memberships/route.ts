@@ -60,5 +60,5 @@ export async function POST(request: Request, { params }: { params: { id: string 
 }
 
 function projectRoleField(value: unknown): ProjectRole {
-  return value === "owner" || value === "executive" || value === "producer" || value === "department_lead" || value === "viewer" ? value : "viewer";
+  return value === "owner" || value === "executive" || value === "producer" || value === "artist" || value === "standard" || value === "department_lead" || value === "viewer" ? value : "viewer";
 }
