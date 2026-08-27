@@ -1349,4 +1349,39 @@ model AuditLog {
   @@index([projectId])
   @@index([actorUserId])
   @@index([entityType, entityId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+model ImportHistory {
+  id            String   @id @default(cuid())
+  importType    String
+  fileName      String?
+  actorUserId   String?
+  actor         String?
+  rowsReceived  Int      @default(0)
+  rowsCreated   Int      @default(0)
+  rowsUpdated   Int      @default(0)
+  rowsRestored  Int      @default(0)
+  rowsSkipped   Int      @default(0)
+  status        String   @default("COMPLETE")
+  error         String?  @db.Text
+  detailJson    Json?
+  createdAt     DateTime @default(now())
+
+  @@index([importType])
+  @@index([actorUserId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model AppSetting {
+  key         String   @id
+  valueJson   Json
+  updatedById String?
+  updatedBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([updatedAt])
 }

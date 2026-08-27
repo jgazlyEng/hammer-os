@@ -105,7 +105,7 @@ const HAMMER_LOCAL_VERSION_MARKDOWN_STORAGE_KEY = "hammer:version-markdown-notes
 const HAMMER_LOCAL_COMMENTS_STORAGE_KEY = "hammer:comments";
 const HAMMER_LOCAL_OUTREACH_ENGAGEMENTS_STORAGE_KEY = "hammer:outreach-engagements";
 
-type HammerView = "dashboard" | "projects" | "prospects" | "collections" | "notes" | "project-new" | "project-detail" | "project-documents" | "project-assets" | "scripts" | "script-detail" | "script-versions" | "script-diff" | "script-breakdown" | "assets" | "asset-detail" | "tasks" | "contacts" | "reviews" | "studio-status" | "reports" | "executive" | "admin-users" | "account";
+type HammerView = "dashboard" | "projects" | "prospects" | "collections" | "notes" | "project-new" | "project-detail" | "project-documents" | "project-assets" | "scripts" | "script-detail" | "script-versions" | "script-diff" | "script-breakdown" | "assets" | "asset-detail" | "tasks" | "contacts" | "reviews" | "studio-status" | "reports" | "executive" | "admin-overview" | "admin-users" | "admin-settings" | "admin-troubleshooting" | "admin-data-quality" | "account";
 type ScriptLibrarySection = "inbox" | "projects" | "all";
 type AppRole = "admin" | "executive" | "producer" | "artist" | "standard" | "department_lead";
 
@@ -1790,7 +1790,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       return <AccessDenied title="Script access required" detail="You can only open scripts attached to Development Slate items you can access. Producers, executives, and admins can review broader prospect materials from the slate." />;
     }
     if (view === "dashboard") return <Dashboard currentUser={currentUser} projects={projects} documents={documents} versions={versions} tasks={tasks} contacts={contacts} approvals={approvals} scriptCollections={scriptCollections} scriptCollectionItems={scriptCollectionItems} slateCollections={slateCollections} slateCollectionItems={slateCollectionItems} />;
-    if (view === "projects") return <Projects mode="development" projects={projects} projectLeads={projectLeads} prospectAssets={prospectAssets} comments={comments} users={users} tasks={tasks} currentUser={currentUser} canCreateProject={canManageScriptLibrary(currentUser.role)} onCreateProject={addProject} onUpdateLead={updateProjectLead} onCreateLead={createProjectLead} onImportLeads={importProjectLeads} onPromoteLead={promoteProjectLead} onCreateTask={createTask} onUploadProspectAsset={uploadProspectAsset} onDeleteProspectAsset={deleteProspectAsset} onCreateComment={createComment} onUpdateComment={updateComment} onDeleteComment={deleteComment} />;
+    if (view === "projects") return <Projects mode="development" projects={projects} projectLeads={projectLeads} prospectAssets={prospectAssets} comments={comments} users={users} tasks={tasks} currentUser={currentUser} canCreateProject={canManageScriptLibrary(currentUser.role)} onCreateProject={addProject} onUpdateProject={canManageScriptLibrary(currentUser.role) ? updateProject : undefined} onUpdateLead={updateProjectLead} onCreateLead={createProjectLead} onImportLeads={importProjectLeads} onPromoteLead={promoteProjectLead} onCreateTask={createTask} onUploadProspectAsset={uploadProspectAsset} onDeleteProspectAsset={deleteProspectAsset} onCreateComment={createComment} onUpdateComment={updateComment} onDeleteComment={deleteComment} />;
     if (view === "prospects") return <Projects mode="prospects" projects={projects} projectLeads={projectLeads} prospectAssets={prospectAssets} comments={comments} users={users} tasks={tasks} currentUser={currentUser} canCreateProject={canManageScriptLibrary(currentUser.role)} onCreateProject={addProject} onUpdateLead={updateProjectLead} onCreateLead={createProjectLead} onImportLeads={importProjectLeads} onPromoteLead={promoteProjectLead} onCreateTask={createTask} onUploadProspectAsset={uploadProspectAsset} onDeleteProspectAsset={deleteProspectAsset} onCreateComment={createComment} onUpdateComment={updateComment} onDeleteComment={deleteComment} />;
     if (view === "notes") return <NotesCenter comments={comments} users={users} projects={projects} prospects={projectLeads} documents={documents} versions={versions} tasks={tasks} assets={assets} approvals={approvals} currentUser={currentUser} onUpdateComment={updateComment} onDeleteComment={deleteComment} />;
     if (view === "collections") return (
@@ -1846,23 +1846,12 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     }
     if (view === "account") return <AccountSettings user={sessionUser} onUpdateAccount={updateAccount} />;
     if (view === "reviews") return <LegacyRedirect title="Reviews are folded into the slate" detail="Review work now starts from the relevant Development Slate item or Prospect, so the queue is easier to follow in context." href="/projects" label="Open Development Slate" />;
-    if (currentUser.role !== "ADMIN") return <AccessDenied title="Admin access required" detail="Only admins can manage projects, users, roles, and project access." />;
-    return <AdminUsers projects={projects} users={users} currentUser={currentUser} databaseMode={workspaceMode === "database"} onCreateProject={addProject} onDeleteProject={deleteProject} onCreateUser={createUser} onUpdateUserRole={updateUserRole} onDeleteUser={deleteUser} onStatusChange={updateProjectStatus} />;
-  })();
-
-  async function updateProjectStatus(projectId: string, status: HammerProjectStatus) {
-    if (workspaceMode === "database") {
-      await runWorkspaceAction("updateProjectStatus", { projectId, status });
-      return;
+    if (["admin-overview", "admin-users", "admin-settings", "admin-troubleshooting", "admin-data-quality"].includes(view) && currentUser.role !== "ADMIN") return <AccessDenied title="Admin access required" detail="Only admins can manage projects, users, roles, and project access." />;
+    if (["admin-overview", "admin-users", "admin-settings", "admin-troubleshooting", "admin-data-quality"].includes(view)) {
+      return <AdminUsers section={adminSectionForView(view)} projects={projects} users={users} currentUser={currentUser} databaseMode={workspaceMode === "database"} onCreateUser={createUser} onUpdateUserRole={updateUserRole} onDeleteUser={deleteUser} />;
     }
-    setProjects((currentProjects) => currentProjects.map((project) => project.id === projectId ? { ...project, status, updatedAt: new Date().toISOString().slice(0, 10) } : project));
-    setLocalProjects((currentProjects) => {
-      const nextProjects = currentProjects.map((project) => project.id === projectId ? { ...project, status, updatedAt: new Date().toISOString().slice(0, 10) } : project);
-      window.localStorage.setItem(HAMMER_LOCAL_PROJECTS_STORAGE_KEY, JSON.stringify(nextProjects));
-      window.dispatchEvent(new CustomEvent(HAMMER_LOCAL_PROJECTS_EVENT));
-      return nextProjects;
-    });
-  }
+    return <AccessDenied title="Page unavailable" detail="This GreenLight page is not available." />;
+  })();
 
   return (
     <AppShell>
@@ -2181,6 +2170,7 @@ function Projects({
   tasks = hammerTasks,
   canCreateProject = false,
   onCreateProject,
+  onUpdateProject,
   onUpdateLead,
   onCreateLead,
   onImportLeads,
@@ -2202,6 +2192,7 @@ function Projects({
   tasks?: HammerTask[];
   canCreateProject?: boolean;
   onCreateProject?: (draft: Partial<ProjectDraft>) => Promise<void>;
+  onUpdateProject?: (projectId: string, patch: Partial<HammerProject>) => Promise<void>;
   onUpdateLead?: (leadId: string, patch: Partial<HammerProjectLead>) => Promise<void>;
   onCreateLead?: (lead: Partial<HammerProjectLead>) => Promise<void>;
   onImportLeads?: (leads: HammerProjectLead[]) => Promise<void>;
@@ -2265,7 +2256,7 @@ function Projects({
 
   useEffect(() => {
     if (mode !== "prospects") return;
-    const prospectId = searchParams.get("prospect");
+    const prospectId = searchParams?.get("prospect");
     if (!prospectId) {
       if (dismissedProspectId) setDismissedProspectId("");
       return;
@@ -2339,7 +2330,7 @@ function Projects({
   }
 
   function closeProspect() {
-    const prospectId = selectedLeadId || searchParams.get("prospect") || "";
+    const prospectId = selectedLeadId || searchParams?.get("prospect") || "";
     setDismissedProspectId(prospectId);
     setSelectedLeadId("");
     setSelectedLeadTitle("");
@@ -2356,7 +2347,7 @@ function Projects({
 
       {section === "active" ? (
         <Panel>
-          <ProjectTable projects={projects} />
+          <ProjectTable projects={projects} canEditStatus={Boolean(onUpdateProject)} onStatusChange={onUpdateProject} />
         </Panel>
       ) : (
         <>
@@ -5091,7 +5082,7 @@ function Collections({
   const scriptItemCount = scriptItems.filter((item) => visibleScriptCollections.some((collection) => collection.id === item.collectionId)).length;
 
   useEffect(() => {
-    const collectionId = searchParams.get("collection");
+    const collectionId = searchParams?.get("collection");
     if (!collectionId) return;
     const scriptCollection = scriptCollections.find((collection) => collection.id === collectionId);
     const slateCollection = slateCollections.find((collection) => collection.id === collectionId);
@@ -5355,7 +5346,7 @@ function SlateCollections({
     .sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: "base" }));
 
   useEffect(() => {
-    const linkedCollectionId = searchParams.get("collection");
+    const linkedCollectionId = searchParams?.get("collection");
     if (linkedCollectionId && collections.some((collection) => collection.id === linkedCollectionId)) {
       if (selectedCollectionId !== linkedCollectionId) setSelectedCollectionId(linkedCollectionId);
       return;
@@ -5879,7 +5870,7 @@ function ScriptCollections({
     .slice(0, 50);
 
   useEffect(() => {
-    const linkedCollectionId = searchParams.get("collection");
+    const linkedCollectionId = searchParams?.get("collection");
     if (linkedCollectionId && collections.some((collection) => collection.id === linkedCollectionId)) {
       if (selectedCollectionId !== linkedCollectionId) setSelectedCollectionId(linkedCollectionId);
       return;
@@ -8492,7 +8483,7 @@ function Contacts({
   }, []);
 
   useEffect(() => {
-    const contactId = searchParams.get("contact");
+    const contactId = searchParams?.get("contact");
     if (contactId && contacts.some((contact) => contact.id === contactId)) {
       setSelectedContactId(contactId);
     }
@@ -10311,52 +10302,258 @@ function ExecutiveSlateTable({ briefs }: { briefs: ExecutiveProjectBrief[] }) {
   );
 }
 
+type AdminProjectRole = "owner" | "executive" | "producer" | "artist" | "standard" | "department_lead" | "viewer";
+
+type AdminAccessUser = {
+  id: string;
+  email: string;
+  name: string;
+  appRole: AppRole;
+  memberships: Array<{
+    id: string;
+    projectId: string;
+    userId: string;
+    role: AdminProjectRole;
+    project?: { id: string; title: string; stage?: string | null };
+  }>;
+};
+
+type AdminHealth = {
+  mode?: "database" | "demo";
+  database?: { connected: boolean; error?: string };
+  storage?: { configured: boolean; bucketConfigured: boolean; missing: string[] };
+  deployment?: {
+    ready: boolean;
+    blocking: number;
+    warnings: number;
+    checks: Array<{
+      label: string;
+      key: string;
+      configured: boolean;
+      required: boolean;
+      description: string;
+    }>;
+  };
+  counts?: { users: number; projects: number; documents: number; tasks: number };
+  uploadJobs?: {
+    failed: number;
+    warning: number;
+    parsing: number;
+    recent: Array<{
+      id: string;
+      status: UploadJobSnapshot["status"];
+      stage: string;
+      fileName: string;
+      fileType: string;
+      fileSize: number;
+      storagePath?: string | null;
+      warning?: string | null;
+      error?: string | null;
+      createdAt: string;
+    }>;
+  };
+};
+
+type AdminDataQualityIssue = {
+  id: string;
+  title: string;
+  detail: string;
+  href?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+type AdminDataQualityCheck = {
+  key: string;
+  label: string;
+  description: string;
+  severity: "info" | "warning" | "error";
+  total: number;
+  items: AdminDataQualityIssue[];
+};
+
+type AdminDataQuality = {
+  mode?: "database" | "demo";
+  error?: string;
+  totalIssues: number;
+  checks: AdminDataQualityCheck[];
+};
+
+type AdminStorageInventoryItem = {
+  id: string;
+  kind: "Script Version" | "Supporting Doc" | "Prospect File" | "Project Asset" | "Legacy Script File";
+  title: string;
+  fileName: string;
+  fileType: string;
+  fileSize: number;
+  storagePath: string;
+  storageMode: "GCS" | "Database" | "Local" | "Missing";
+  href?: string;
+  updatedAt?: string;
+  createdAt?: string;
+};
+
+type AdminStorageInventory = {
+  mode?: "database" | "demo";
+  error?: string;
+  summary: {
+    total: number;
+    totalSize: number;
+    gcs: number;
+    database: number;
+    local: number;
+    missing: number;
+  };
+  items: AdminStorageInventoryItem[];
+};
+
+type AdminUploadTroubleshooting = {
+  mode?: "database" | "demo";
+  error?: string;
+  summary: {
+    total: number;
+    failed: number;
+    warning: number;
+    parsing: number;
+    complete: number;
+    stored: number;
+    received: number;
+  };
+  jobs: Array<{
+    id: string;
+    requestId: string;
+    status: UploadJobSnapshot["status"];
+    stage: string;
+    fileName: string;
+    fileType: string;
+    fileSize: number;
+    storagePath?: string | null;
+    warning?: string | null;
+    error?: string | null;
+    createdAt: string;
+    updatedAt: string;
+    completedAt?: string | null;
+    createdBy?: { id: string; name: string; email: string } | null;
+    project?: { id: string; title: string } | null;
+    document?: { id: string; title: string } | null;
+    documentVersion?: { id: string; versionNumber: number; hasExtractedText: boolean } | null;
+    href?: string;
+  }>;
+};
+
+type AdminAuditLog = {
+  mode?: "database" | "demo";
+  error?: string;
+  summary: { total: number; downloads: number; access: number; uploads: number };
+  events: Array<{
+    id: string;
+    actor?: string | null;
+    actorUserId?: string | null;
+    action: string;
+    entityType: string;
+    entityId?: string | null;
+    projectId?: string | null;
+    detailJson?: unknown;
+    createdAt: string;
+    project?: { id: string; title: string } | null;
+  }>;
+};
+
+type AdminImportHistory = {
+  mode?: "database" | "demo";
+  error?: string;
+  summary: { total: number; complete: number; failed: number; rowsCreated: number; rowsUpdated: number };
+  imports: Array<{
+    id: string;
+    importType: string;
+    fileName?: string | null;
+    actorUserId?: string | null;
+    actor?: string | null;
+    rowsReceived: number;
+    rowsCreated: number;
+    rowsUpdated: number;
+    rowsRestored: number;
+    rowsSkipped: number;
+    status: string;
+    error?: string | null;
+    createdAt: string;
+  }>;
+};
+
+type AdminDuplicateReview = {
+  mode?: "database" | "demo";
+  error?: string;
+  summary: { groups: number; records: number };
+  groups: Array<{
+    key: string;
+    type: string;
+    items: Array<{ id: string; title: string; detail?: string | null; href: string; updatedAt: string }>;
+  }>;
+};
+
+type AdminSettings = {
+  mode?: "database" | "demo";
+  settings: {
+    watermark: {
+      defaultEnabled: boolean;
+      mode: "CUSTOM_TEXT" | "USER_ONLY" | "USER_AND_IP";
+      customText: string;
+    };
+  };
+  updatedAt?: string | null;
+  updatedBy?: string | null;
+};
+
+const adminProjectRoleOptions: Array<{ value: AdminProjectRole; label: string }> = [
+  { value: "owner", label: "Owner" },
+  { value: "producer", label: "Producer" },
+  { value: "executive", label: "Executive" },
+  { value: "artist", label: "Artist" },
+  { value: "standard", label: "Standard" },
+  { value: "viewer", label: "Viewer" }
+];
+
+type AdminSection = "overview" | "users" | "settings" | "troubleshooting" | "data-quality";
+
 function AdminUsers({
+  section,
   projects,
   users,
   currentUser,
   databaseMode,
-  onCreateProject,
-  onDeleteProject,
   onCreateUser,
   onUpdateUserRole,
-  onDeleteUser,
-  onStatusChange
+  onDeleteUser
 }: {
+  section: AdminSection;
   projects: HammerProject[];
   users: HammerUser[];
   currentUser: ReturnType<typeof hammerUserByEmail>;
   databaseMode: boolean;
-  onCreateProject: (draft: Partial<ProjectDraft>) => void;
-  onDeleteProject: (projectId: string) => void;
   onCreateUser: (input: { name: string; email: string; password: string; appRole: AppRole }) => Promise<void>;
   onUpdateUserRole: (userId: string, appRole: AppRole) => Promise<void>;
   onDeleteUser: (userId: string) => Promise<void>;
-  onStatusChange: (projectId: string, status: HammerProjectStatus) => Promise<void>;
 }) {
-  const canCreateProject = currentUser.role === "ADMIN" || currentUser.role === "PRODUCER" || currentUser.role === "EXECUTIVE";
   const [createUserOpen, setCreateUserOpen] = useState(false);
-  const [roleUser, setRoleUser] = useState<HammerUser | null>(null);
+  const [selectedUserDetailId, setSelectedUserDetailId] = useState("");
   const [createdUserReceipt, setCreatedUserReceipt] = useState<{ name: string; email: string; password: string } | null>(null);
-  const [projectStatusMessage, setProjectStatusMessage] = useState("");
   const [localUserStates, setLocalUserStates] = useState<Record<string, { inactive?: boolean; deleted?: boolean }>>({});
-  const [adminProjectPage, setAdminProjectPage] = useState(1);
   const [adminUserPage, setAdminUserPage] = useState(1);
-  const adminProjectPageSize = useResponsiveTablePageSize({ max: 14, reservedHeight: 520 });
+  const [adminAccessUsers, setAdminAccessUsers] = useState<AdminAccessUser[]>([]);
+  const [selectedAccessUserId, setSelectedAccessUserId] = useState("");
+  const [accessProjectId, setAccessProjectId] = useState("");
+  const [accessRole, setAccessRole] = useState<AdminProjectRole>("artist");
+  const [adminHealth, setAdminHealth] = useState<AdminHealth | null>(null);
+  const [adminDataQuality, setAdminDataQuality] = useState<AdminDataQuality | null>(null);
+  const [adminStorageInventory, setAdminStorageInventory] = useState<AdminStorageInventory | null>(null);
+  const [adminUploadTroubleshooting, setAdminUploadTroubleshooting] = useState<AdminUploadTroubleshooting | null>(null);
+  const [adminAuditLog, setAdminAuditLog] = useState<AdminAuditLog | null>(null);
+  const [adminImportHistory, setAdminImportHistory] = useState<AdminImportHistory | null>(null);
+  const [adminDuplicateReview, setAdminDuplicateReview] = useState<AdminDuplicateReview | null>(null);
+  const [adminSettings, setAdminSettings] = useState<AdminSettings | null>(null);
+  const [adminToolMessage, setAdminToolMessage] = useState("");
+  const [adminToolBusy, setAdminToolBusy] = useState(false);
   const adminUserPageSize = useResponsiveTablePageSize({ max: 14, reservedHeight: 520 });
-  const [projectDraft, setProjectDraft] = useState<ProjectDraft>({
-    title: "",
-    logline: "",
-    type: "Feature",
-    genre: "",
-    status: "IDEA",
-    stage: "DEVELOPMENT",
-    ownerId: currentUser.id
-  });
-
-  useEffect(() => {
-    setProjectDraft((draft) => ({ ...draft, ownerId: currentUser.id }));
-  }, [currentUser.id]);
 
   useEffect(() => {
     try {
@@ -10368,30 +10565,128 @@ function AdminUsers({
   }, []);
 
   const visibleUsers = users.filter((user) => !localUserStates[user.id]?.deleted);
-  const adminProjectTotalPages = Math.max(1, Math.ceil(projects.length / adminProjectPageSize));
-  const normalizedAdminProjectPage = Math.min(adminProjectPage, adminProjectTotalPages);
-  const pagedAdminProjects = projects.slice((normalizedAdminProjectPage - 1) * adminProjectPageSize, normalizedAdminProjectPage * adminProjectPageSize);
+  const selectedUserDetail = selectedUserDetailId
+    ? adminAccessUsers.find((user) => user.id === selectedUserDetailId) ?? visibleUsers.find((user) => user.id === selectedUserDetailId)
+    : undefined;
   const adminUserTotalPages = Math.max(1, Math.ceil(visibleUsers.length / adminUserPageSize));
   const normalizedAdminUserPage = Math.min(adminUserPage, adminUserTotalPages);
   const pagedAdminUsers = visibleUsers.slice((normalizedAdminUserPage - 1) * adminUserPageSize, normalizedAdminUserPage * adminUserPageSize);
 
-  useEffect(() => {
-    setAdminProjectPage(1);
-  }, [adminProjectPageSize, projects.length]);
+  const refreshAdminTools = useCallback(async () => {
+    if (!databaseMode) return;
+    const [usersResponse, healthResponse, dataQualityResponse, storageResponse, uploadResponse, auditResponse, importResponse, duplicateResponse, settingsResponse] = await Promise.all([
+      fetch("/api/admin/users", { cache: "no-store" }).catch(() => null),
+      fetch("/api/admin/system-health", { cache: "no-store" }).catch(() => null),
+      fetch("/api/admin/data-quality", { cache: "no-store" }).catch(() => null),
+      fetch("/api/admin/storage-inventory", { cache: "no-store" }).catch(() => null),
+      fetch("/api/admin/upload-troubleshooting", { cache: "no-store" }).catch(() => null),
+      fetch("/api/admin/audit-log", { cache: "no-store" }).catch(() => null),
+      fetch("/api/admin/import-history", { cache: "no-store" }).catch(() => null),
+      fetch("/api/admin/duplicates", { cache: "no-store" }).catch(() => null),
+      fetch("/api/admin/settings", { cache: "no-store" }).catch(() => null)
+    ]);
+    if (usersResponse?.ok) {
+      const data = await usersResponse.json().catch(() => null) as { users?: AdminAccessUser[] } | null;
+      setAdminAccessUsers(data?.users ?? []);
+    }
+    if (healthResponse?.ok) {
+      const data = await healthResponse.json().catch(() => null) as AdminHealth | null;
+      setAdminHealth(data);
+    }
+    if (dataQualityResponse?.ok) {
+      const data = await dataQualityResponse.json().catch(() => null) as AdminDataQuality | null;
+      setAdminDataQuality(data);
+    }
+    if (storageResponse?.ok) {
+      const data = await storageResponse.json().catch(() => null) as AdminStorageInventory | null;
+      setAdminStorageInventory(data);
+    }
+    if (uploadResponse?.ok) {
+      const data = await uploadResponse.json().catch(() => null) as AdminUploadTroubleshooting | null;
+      setAdminUploadTroubleshooting(data);
+    }
+    if (auditResponse?.ok) {
+      const data = await auditResponse.json().catch(() => null) as AdminAuditLog | null;
+      setAdminAuditLog(data);
+    }
+    if (importResponse?.ok) {
+      const data = await importResponse.json().catch(() => null) as AdminImportHistory | null;
+      setAdminImportHistory(data);
+    }
+    if (duplicateResponse?.ok) {
+      const data = await duplicateResponse.json().catch(() => null) as AdminDuplicateReview | null;
+      setAdminDuplicateReview(data);
+    }
+    if (settingsResponse?.ok) {
+      const data = await settingsResponse.json().catch(() => null) as AdminSettings | null;
+      setAdminSettings(data);
+    }
+  }, [databaseMode]);
 
   useEffect(() => {
     setAdminUserPage(1);
   }, [adminUserPageSize, visibleUsers.length]);
 
+  useEffect(() => {
+    void refreshAdminTools();
+  }, [refreshAdminTools]);
+
+  useEffect(() => {
+    if (!selectedAccessUserId && (adminAccessUsers[0] || visibleUsers[0])) setSelectedAccessUserId(adminAccessUsers[0]?.id ?? visibleUsers[0]?.id ?? "");
+  }, [adminAccessUsers, selectedAccessUserId, visibleUsers]);
+
+  useEffect(() => {
+    if (!accessProjectId && projects[0]) setAccessProjectId(projects[0].id);
+  }, [accessProjectId, projects]);
+
   async function createAdminUser(input: { name: string; email: string; password: string; appRole: AppRole }) {
     await onCreateUser(input);
     setCreatedUserReceipt({ name: input.name, email: input.email, password: input.password });
     setCreateUserOpen(false);
+    void refreshAdminTools();
   }
 
   async function assignUserRole(userId: string, appRole: AppRole) {
     await onUpdateUserRole(userId, appRole);
-    setRoleUser(null);
+    void refreshAdminTools();
+  }
+
+  async function assignProjectAccess(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedAccessUserId || !accessProjectId) return;
+    setAdminToolBusy(true);
+    setAdminToolMessage("");
+    try {
+      const response = await fetch(`/api/admin/users/${selectedAccessUserId}/memberships`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: accessProjectId, role: accessRole })
+      });
+      const data = await response.json().catch(() => null) as { error?: string; membership?: { project?: { title?: string } } } | null;
+      if (!response.ok) throw new Error(data?.error ?? "Could not update project access.");
+      await refreshAdminTools();
+      setAdminToolMessage(`Access saved${data?.membership?.project?.title ? ` for ${data.membership.project.title}` : ""}.`);
+    } catch (error) {
+      setAdminToolMessage(error instanceof Error ? error.message : "Could not update project access.");
+    } finally {
+      setAdminToolBusy(false);
+    }
+  }
+
+  async function removeProjectAccess(membershipId: string) {
+    setAdminToolBusy(true);
+    setAdminToolMessage("");
+    try {
+      const response = await fetch(`/api/admin/memberships/${membershipId}`, { method: "DELETE" });
+      const data = await response.json().catch(() => null) as { error?: string } | null;
+      if (!response.ok) throw new Error(data?.error ?? "Could not remove project access.");
+      await refreshAdminTools();
+      setAdminToolMessage("Project access removed.");
+    } catch (error) {
+      setAdminToolMessage(error instanceof Error ? error.message : "Could not remove project access.");
+    } finally {
+      setAdminToolBusy(false);
+    }
   }
 
   function updateLocalUserState(userId: string, nextState: { inactive?: boolean; deleted?: boolean }) {
@@ -10414,110 +10709,43 @@ function AdminUsers({
     if (!window.confirm(`Delete ${user.name}? This removes their account and project memberships.`)) return;
     if (databaseMode) {
       await onDeleteUser(user.id);
+      void refreshAdminTools();
       return;
     }
     updateLocalUserState(user.id, { deleted: true, inactive: true });
   }
 
-  async function changeProjectStatus(project: HammerProject, status: HammerProjectStatus) {
-    setProjectStatusMessage("");
-    try {
-      await onStatusChange(project.id, status);
-      setProjectStatusMessage(`${project.title} status saved.`);
-    } catch (error) {
-      setProjectStatusMessage(error instanceof Error ? error.message : "Could not save project status.");
-    }
-  }
-
-  function submitProject(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!canCreateProject) return;
-    onCreateProject(projectDraft);
-    setProjectDraft({
-      title: "",
-      logline: "",
-      type: "Feature",
-      genre: "",
-      status: "IDEA",
-      stage: "DEVELOPMENT",
-      ownerId: currentUser.id
-    });
-  }
-
   return (
     <div className="space-y-4">
-      <Panel>
-        <SectionHeader eyebrow="Development Slate" title="Create Slate Item" />
-        <form onSubmit={submitProject} className="grid gap-3 lg:grid-cols-[1fr_220px]">
-          <div className="space-y-3">
-            <input className="field" disabled={!canCreateProject} value={projectDraft.title} onChange={(event) => setProjectDraft({ ...projectDraft, title: event.target.value })} placeholder="Project title" />
-            <textarea className="field min-h-20" disabled={!canCreateProject} value={projectDraft.logline} onChange={(event) => setProjectDraft({ ...projectDraft, logline: event.target.value })} placeholder="Logline" />
-            <div className="grid gap-3 md:grid-cols-2">
-              <input className="field" disabled={!canCreateProject} value={projectDraft.type} onChange={(event) => setProjectDraft({ ...projectDraft, type: event.target.value })} placeholder="Feature, Series, Short..." />
-              <input className="field" disabled={!canCreateProject} value={projectDraft.genre} onChange={(event) => setProjectDraft({ ...projectDraft, genre: event.target.value })} placeholder="Genre" />
-            </div>
-          </div>
-          <div className="space-y-3">
-            <select className="field" disabled={!canCreateProject} value={projectDraft.status} onChange={(event) => setProjectDraft({ ...projectDraft, status: event.target.value as HammerProjectStatus })}>
-              {hammerProjectStatuses.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}
-            </select>
-            <select className="field" disabled={!canCreateProject} value={projectDraft.stage} onChange={(event) => setProjectDraft({ ...projectDraft, stage: event.target.value as HammerProject["stage"] })}>
-              {(["DEVELOPMENT", "SCRIPT", "TREATMENT", "VISDEV", "LOOKBOOK", "PACKAGING", "GREENLIGHT"] as HammerProject["stage"][]).map((stage) => <option key={stage} value={stage}>{statusLabel(stage)}</option>)}
-            </select>
-            <select className="field" disabled={!canCreateProject} value={projectDraft.ownerId} onChange={(event) => setProjectDraft({ ...projectDraft, ownerId: event.target.value })}>
-              {visibleUsers.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
-            </select>
-            <PrimaryButton icon={Plus} label="Create Slate Item" />
-            {!canCreateProject ? <p className="text-xs text-studio-400">Project creation is available to Admins.</p> : null}
-          </div>
-        </form>
-      </Panel>
-
-      <Panel>
-        <SectionHeader eyebrow="Development Slate" title="Slate Status" />
-        {projectStatusMessage ? <p className="mb-3 text-xs text-studio-300">{projectStatusMessage}</p> : null}
-        <div className="data-scroll table-workspace-scroll">
-          <table className="data-table min-w-[720px]">
-            <thead className="text-xs uppercase tracking-[0.16em] text-studio-400"><tr><th className="py-2">Project</th><th>Current Status</th><th>Status Control</th><th>Updated</th><th>Admin</th></tr></thead>
-            <tbody className="divide-y divide-white/10">
-              {pagedAdminProjects.map((project) => (
-                <tr key={project.id}>
-                  <td className="py-2.5 font-semibold text-studio-100">{project.title}</td>
-                  <td><Badge value={project.status} /></td>
-                  <td>
-                    <select
-                      className="rounded-md border border-white/10 bg-studio-950 px-2.5 py-1.5 text-[13px] text-studio-100 outline-none focus:border-amberline/60"
-                      value={project.status}
-                      onChange={(event) => void changeProjectStatus(project, event.target.value as HammerProjectStatus)}
-                    >
-                      {hammerProjectStatuses.map((status) => (
-                        <option key={status} value={status}>{statusLabel(status)}</option>
-                      ))}
-                    </select>
-                  </td>
-                  <td className="text-studio-300">{project.updatedAt}</td>
-                  <td>
-                    <button
-                      type="button"
-                      disabled={!canCreateProject}
-                      onClick={() => {
-                        if (window.confirm(`Delete project "${project.title}"? This hides it from the active workspace.`)) onDeleteProject(project.id);
-                      }}
-                      className="inline-flex items-center gap-1 rounded border border-rose-400/25 bg-rose-500/5 px-1.5 py-1 text-[11px] font-semibold text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                      Delete
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <PaginationFooter page={normalizedAdminProjectPage} pageSize={adminProjectPageSize} total={projects.length} onPageChange={setAdminProjectPage} />
-      </Panel>
-
-      <Panel>
+      <AdminSectionNav active={section} />
+      {section === "overview" ? (
+        <AdminOverviewPanel
+          health={adminHealth}
+          dataQuality={adminDataQuality}
+          storageInventory={adminStorageInventory}
+          uploadTroubleshooting={adminUploadTroubleshooting}
+          duplicateReview={adminDuplicateReview}
+          importHistory={adminImportHistory}
+        />
+      ) : null}
+      {section === "troubleshooting" ? (
+        <>
+          <AdminSystemHealthPanel health={adminHealth} databaseMode={databaseMode} onRefresh={() => void refreshAdminTools()} />
+          <AdminStorageInventoryPanel data={adminStorageInventory} databaseMode={databaseMode} onRefresh={() => void refreshAdminTools()} />
+          <AdminUploadTroubleshootingPanel data={adminUploadTroubleshooting} databaseMode={databaseMode} onRefresh={() => void refreshAdminTools()} />
+        </>
+      ) : null}
+      {section === "data-quality" ? (
+        <>
+          <AdminDataQualityPanel data={adminDataQuality} databaseMode={databaseMode} onRefresh={() => void refreshAdminTools()} />
+          <AdminDuplicateReviewPanel data={adminDuplicateReview} databaseMode={databaseMode} onRefresh={() => void refreshAdminTools()} />
+          <AdminImportHistoryPanel data={adminImportHistory} databaseMode={databaseMode} onRefresh={() => void refreshAdminTools()} />
+          <AdminAuditLogPanel data={adminAuditLog} databaseMode={databaseMode} onRefresh={() => void refreshAdminTools()} />
+        </>
+      ) : null}
+      {section === "settings" ? <AdminSettingsPanel data={adminSettings} databaseMode={databaseMode} onSaved={setAdminSettings} /> : null}
+      {section === "users" ? (
+        <Panel>
         <SectionHeader eyebrow="RBAC" title="Users and Roles" action={<PrimaryButton icon={UsersRound} label="Create User" onClick={() => setCreateUserOpen(true)} />} />
         {createdUserReceipt ? (
           <div className="mb-3 rounded-md border border-emerald-400/25 bg-emerald-400/8 p-3">
@@ -10535,20 +10763,37 @@ function AdminUsers({
                 const isCurrentUser = user.id === currentUser.id;
                 return (
                   <tr key={user.id} className={cn(inactive && "opacity-60")}>
-                    <td className="py-2.5 font-semibold text-studio-100">{user.name}{isCurrentUser ? <span className="ml-2 text-[11px] font-normal text-studio-400">You</span> : null}</td>
+                    <td className="py-2.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedAccessUserId(user.id);
+                          setSelectedUserDetailId(user.id);
+                          setAdminToolMessage("");
+                        }}
+                        className="text-left font-semibold text-studio-100 transition hover:text-amberline"
+                      >
+                        {user.name}
+                        {isCurrentUser ? <span className="ml-2 text-[11px] font-normal text-studio-400">You</span> : null}
+                      </button>
+                    </td>
                     <td className="text-studio-300">{user.email}</td>
                     <td><Badge value={user.role} /></td>
                     <td><Badge value={inactive ? "INACTIVE" : "ACTIVE"} subtle /></td>
-                    <td className="text-studio-300">Membership role + resource visibility</td>
+                    <td className="text-studio-300">{adminUserAccessSummary(adminAccessUsers.find((item) => item.id === user.id), user)}</td>
                     <td>
                       <div className="flex flex-wrap gap-1.5">
                         <button
                           type="button"
-                          onClick={() => setRoleUser(user)}
+                          onClick={() => {
+                            setSelectedAccessUserId(user.id);
+                            setSelectedUserDetailId(user.id);
+                            setAdminToolMessage("");
+                          }}
                           className="inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.025] px-1.5 py-1 text-[11px] font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline"
                         >
                           <ShieldCheck className="h-3 w-3" />
-                          Assign Role
+                          Manage
                         </button>
                         <button
                           type="button"
@@ -10577,22 +10822,871 @@ function AdminUsers({
         </div>
         <PaginationFooter page={normalizedAdminUserPage} pageSize={adminUserPageSize} total={visibleUsers.length} onPageChange={setAdminUserPage} />
       </Panel>
-      {createUserOpen ? (
+      ) : null}
+      {section === "users" && createUserOpen ? (
         <CreateUserModal
           disabled={!databaseMode}
           onClose={() => setCreateUserOpen(false)}
           onCreate={createAdminUser}
         />
       ) : null}
-      {roleUser ? (
-        <AssignRoleModal
-          user={roleUser}
-          onClose={() => setRoleUser(null)}
-          onAssign={assignUserRole}
+      {section === "users" && selectedUserDetail ? (
+        <AdminUserAccessModal
+          user={selectedUserDetail}
+          projects={projects}
+          databaseMode={databaseMode}
+          inactive={Boolean(localUserStates[selectedUserDetail.id]?.inactive)}
+          isCurrentUser={selectedUserDetail.id === currentUser.id}
+          selectedProjectId={accessProjectId}
+          selectedRole={accessRole}
+          busy={adminToolBusy}
+          message={adminToolMessage}
+          onClose={() => setSelectedUserDetailId("")}
+          onSelectProject={setAccessProjectId}
+          onSelectRole={setAccessRole}
+          onAssign={assignProjectAccess}
+          onRemove={removeProjectAccess}
+          onRoleChange={assignUserRole}
+          onToggleActive={() => toggleUserActive(selectedUserDetail as HammerUser)}
+          onDelete={() => deleteUser(selectedUserDetail as HammerUser)}
         />
       ) : null}
     </div>
   );
+}
+
+const adminSections: Array<{ key: AdminSection; href: string; label: string; detail: string }> = [
+  { key: "overview", href: "/admin", label: "Overview", detail: "Health at a glance" },
+  { key: "users", href: "/admin/users", label: "Users", detail: "Roles and access" },
+  { key: "settings", href: "/admin/settings", label: "Settings", detail: "Watermark defaults" },
+  { key: "troubleshooting", href: "/admin/troubleshooting", label: "Troubleshooting", detail: "Uploads and storage" },
+  { key: "data-quality", href: "/admin/data-quality", label: "Data Quality", detail: "Imports, duplicates, logs" }
+];
+
+function AdminSectionNav({ active }: { active: AdminSection }) {
+  return (
+    <div className="grid gap-2 rounded-lg border border-white/10 bg-white/[0.018] p-2 sm:grid-cols-2 xl:grid-cols-5">
+      {adminSections.map((section) => (
+        <Link
+          key={section.key}
+          href={section.href}
+          className={cn(
+            "rounded-md border px-3 py-2 transition",
+            active === section.key ? "border-amberline/35 bg-amberline/12 text-amberline" : "border-white/10 bg-white/[0.025] text-studio-300 hover:border-amberline/25 hover:text-studio-100"
+          )}
+        >
+          <span className="block text-sm font-semibold">{section.label}</span>
+          <span className="mt-0.5 block text-[11px] text-studio-400">{section.detail}</span>
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+function AdminOverviewPanel({
+  health,
+  dataQuality,
+  storageInventory,
+  uploadTroubleshooting,
+  duplicateReview,
+  importHistory
+}: {
+  health: AdminHealth | null;
+  dataQuality: AdminDataQuality | null;
+  storageInventory: AdminStorageInventory | null;
+  uploadTroubleshooting: AdminUploadTroubleshooting | null;
+  duplicateReview: AdminDuplicateReview | null;
+  importHistory: AdminImportHistory | null;
+}) {
+  const uploadIssues = (uploadTroubleshooting?.summary.failed ?? 0) + (uploadTroubleshooting?.summary.warning ?? 0) + (uploadTroubleshooting?.summary.parsing ?? 0);
+  return (
+    <Panel>
+      <SectionHeader eyebrow="Admin" title="Control Room" />
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <AdminOverviewCard href="/admin/troubleshooting" label="Production Readiness" value={health?.deployment?.ready ? "Ready" : `${health?.deployment?.blocking ?? 0} missing`} tone={health?.deployment?.ready ? "good" : "bad"} detail="Database, login, GCS, Google OAuth" />
+        <AdminOverviewCard href="/admin/data-quality" label="Data Quality" value={`${dataQuality?.totalIssues ?? 0} issues`} tone={(dataQuality?.totalIssues ?? 0) ? "warn" : "good"} detail="Broken links, missing versions, unassigned work" />
+        <AdminOverviewCard href="/admin/troubleshooting" label="Upload Attention" value={`${uploadIssues} jobs`} tone={uploadIssues ? "bad" : "good"} detail="Failed, warning, or parsing uploads" />
+        <AdminOverviewCard href="/admin/data-quality" label="Potential Duplicates" value={`${duplicateReview?.summary.groups ?? 0} groups`} tone={(duplicateReview?.summary.groups ?? 0) ? "warn" : "good"} detail="Prospects, slate items, outreach" />
+        <AdminOverviewCard href="/admin/troubleshooting" label="Stored Files" value={`${storageInventory?.summary.total ?? 0}`} tone="neutral" detail={`${formatBytes(storageInventory?.summary.totalSize ?? 0)} tracked`} />
+        <AdminOverviewCard href="/admin/data-quality" label="Imports" value={`${importHistory?.summary.total ?? 0}`} tone="neutral" detail={`${importHistory?.summary.rowsCreated ?? 0} created / ${importHistory?.summary.rowsUpdated ?? 0} updated`} />
+        <AdminOverviewCard href="/admin/users" label="Users" value="Manage" tone="neutral" detail="Roles, access matrix, project membership" />
+        <AdminOverviewCard href="/admin/settings" label="Watermarking" value="Configure" tone="neutral" detail="Custom text, user only, user and IP" />
+      </div>
+    </Panel>
+  );
+}
+
+function AdminOverviewCard({ href, label, value, detail, tone }: { href: string; label: string; value: string; detail: string; tone: "good" | "warn" | "bad" | "neutral" }) {
+  return (
+    <Link
+      href={href}
+      className={cn(
+        "rounded-lg border px-3 py-3 transition hover:-translate-y-0.5",
+        tone === "good" && "border-emerald-300/25 bg-emerald-400/8",
+        tone === "warn" && "border-yellow-300/25 bg-yellow-300/10",
+        tone === "bad" && "border-rose-300/25 bg-rose-500/10",
+        tone === "neutral" && "border-white/10 bg-white/[0.025] hover:border-amberline/25"
+      )}
+    >
+      <p className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">{label}</p>
+      <p className="mt-1 text-lg font-semibold text-studio-100">{value}</p>
+      <p className="mt-1 text-xs leading-5 text-studio-400">{detail}</p>
+    </Link>
+  );
+}
+
+function AdminOpsGrid({
+  auditLog,
+  importHistory,
+  duplicateReview,
+  settings,
+  databaseMode,
+  onRefresh,
+  onSettingsSaved
+}: {
+  auditLog: AdminAuditLog | null;
+  importHistory: AdminImportHistory | null;
+  duplicateReview: AdminDuplicateReview | null;
+  settings: AdminSettings | null;
+  databaseMode: boolean;
+  onRefresh: () => void;
+  onSettingsSaved: (settings: AdminSettings) => void;
+}) {
+  return (
+    <div className="grid gap-4 xl:grid-cols-2">
+      <AdminAuditLogPanel data={auditLog} databaseMode={databaseMode} onRefresh={onRefresh} />
+      <AdminImportHistoryPanel data={importHistory} databaseMode={databaseMode} onRefresh={onRefresh} />
+      <AdminDuplicateReviewPanel data={duplicateReview} databaseMode={databaseMode} onRefresh={onRefresh} />
+      <AdminSettingsPanel data={settings} databaseMode={databaseMode} onSaved={onSettingsSaved} />
+    </div>
+  );
+}
+
+function AdminAuditLogPanel({ data, databaseMode, onRefresh }: { data: AdminAuditLog | null; databaseMode: boolean; onRefresh: () => void }) {
+  const summary = data?.summary ?? { total: 0, downloads: 0, access: 0, uploads: 0 };
+  return (
+    <Panel className="min-h-[420px]">
+      <SectionHeader eyebrow="Security" title="Audit Log" action={<button type="button" onClick={onRefresh} className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline">Refresh</button>} />
+      {!databaseMode ? <AdminModeNotice label="Audit log is available in database mode." /> : data?.error ? <AdminErrorNotice message={data.error} /> : (
+        <>
+          <div className="grid gap-2 sm:grid-cols-4">
+            <AdminStorageTile label="Events" value={`${summary.total}`} tone="neutral" />
+            <AdminStorageTile label="Downloads" value={`${summary.downloads}`} tone="neutral" />
+            <AdminStorageTile label="Access" value={`${summary.access}`} tone={summary.access ? "warn" : "neutral"} />
+            <AdminStorageTile label="Uploads" value={`${summary.uploads}`} tone="neutral" />
+          </div>
+          <div className="mt-3 grid max-h-[280px] gap-1.5 overflow-y-auto pr-1">
+            {(data?.events ?? []).map((event) => (
+              <div key={event.id} className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-2">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-semibold text-studio-100">{statusLabel(event.action)}</p>
+                    <p className="mt-0.5 truncate text-[11px] text-studio-400">{event.actor ?? "System"} / {event.entityType}{event.project?.title ? ` / ${event.project.title}` : ""}</p>
+                  </div>
+                  <p className="shrink-0 text-[11px] text-studio-500">{formatShortDateTime(event.createdAt)}</p>
+                </div>
+              </div>
+            ))}
+            {!(data?.events ?? []).length ? <EmptyState label="No audit events found yet." /> : null}
+          </div>
+        </>
+      )}
+    </Panel>
+  );
+}
+
+function AdminImportHistoryPanel({ data, databaseMode, onRefresh }: { data: AdminImportHistory | null; databaseMode: boolean; onRefresh: () => void }) {
+  const summary = data?.summary ?? { total: 0, complete: 0, failed: 0, rowsCreated: 0, rowsUpdated: 0 };
+  return (
+    <Panel className="min-h-[420px]">
+      <SectionHeader eyebrow="Imports" title="Import History" action={<button type="button" onClick={onRefresh} className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline">Refresh</button>} />
+      {!databaseMode ? <AdminModeNotice label="Import history is available in database mode." /> : data?.error ? <AdminErrorNotice message={data.error} /> : (
+        <>
+          <div className="grid gap-2 sm:grid-cols-4">
+            <AdminStorageTile label="Imports" value={`${summary.total}`} tone="neutral" />
+            <AdminStorageTile label="Created" value={`${summary.rowsCreated}`} tone="good" />
+            <AdminStorageTile label="Updated" value={`${summary.rowsUpdated}`} tone="neutral" />
+            <AdminStorageTile label="Failed" value={`${summary.failed}`} tone={summary.failed ? "bad" : "good"} />
+          </div>
+          <div className="mt-3 max-h-[280px] overflow-auto rounded-lg border border-white/10">
+            <table className="data-table min-w-[720px]">
+              <thead><tr><th className="py-2">Import</th><th>Rows</th><th>Actor</th><th>Status</th><th>Date</th></tr></thead>
+              <tbody className="divide-y divide-white/10">
+                {(data?.imports ?? []).map((item) => (
+                  <tr key={item.id}>
+                    <td className="py-2.5"><p className="font-semibold text-studio-100">{item.importType}</p><p className="text-xs text-studio-400">{item.fileName ?? "CSV import"}</p></td>
+                    <td className="text-xs text-studio-300">{item.rowsCreated} created / {item.rowsUpdated} updated / {item.rowsSkipped} skipped</td>
+                    <td className="text-xs text-studio-300">{item.actor ?? "Unknown"}</td>
+                    <td><Badge value={item.status} subtle /></td>
+                    <td className="text-xs text-studio-500">{formatShortDateTime(item.createdAt)}</td>
+                  </tr>
+                ))}
+                {!(data?.imports ?? []).length ? <tr><td colSpan={5} className="py-6 text-center text-sm text-studio-400">No import history yet.</td></tr> : null}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </Panel>
+  );
+}
+
+function AdminDuplicateReviewPanel({ data, databaseMode, onRefresh }: { data: AdminDuplicateReview | null; databaseMode: boolean; onRefresh: () => void }) {
+  return (
+    <Panel className="min-h-[420px]">
+      <SectionHeader eyebrow="Cleanup" title="Duplicate Review" action={<button type="button" onClick={onRefresh} className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline">Refresh</button>} />
+      {!databaseMode ? <AdminModeNotice label="Duplicate review is available in database mode." /> : data?.error ? <AdminErrorNotice message={data.error} /> : (
+        <>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <AdminStorageTile label="Duplicate Groups" value={`${data?.summary.groups ?? 0}`} tone={(data?.summary.groups ?? 0) ? "warn" : "good"} />
+            <AdminStorageTile label="Records to Review" value={`${data?.summary.records ?? 0}`} tone={(data?.summary.records ?? 0) ? "warn" : "good"} />
+          </div>
+          <div className="mt-3 grid max-h-[300px] gap-2 overflow-y-auto pr-1">
+            {(data?.groups ?? []).map((group) => (
+              <div key={`${group.type}-${group.key}`} className="rounded-lg border border-white/10 bg-white/[0.025] p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-semibold text-studio-100">{group.type}</p>
+                  <Badge value={`${group.items.length} matches`} subtle />
+                </div>
+                <div className="mt-2 grid gap-1.5">
+                  {group.items.map((item) => (
+                    <Link key={item.id} href={item.href} className="rounded-md border border-white/10 bg-studio-950/35 px-2 py-1.5 text-xs transition hover:border-amberline/35">
+                      <span className="block truncate font-semibold text-studio-100">{item.title}</span>
+                      <span className="block truncate text-studio-400">{item.detail || "No detail"} / {formatShortDateTime(item.updatedAt)}</span>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {!(data?.groups ?? []).length ? <EmptyState label="No likely duplicates found." /> : null}
+          </div>
+        </>
+      )}
+    </Panel>
+  );
+}
+
+function AdminSettingsPanel({ data, databaseMode, onSaved }: { data: AdminSettings | null; databaseMode: boolean; onSaved: (settings: AdminSettings) => void }) {
+  const current = data?.settings.watermark ?? { defaultEnabled: true, mode: "USER_AND_IP" as const, customText: "" };
+  const [defaultEnabled, setDefaultEnabled] = useState(current.defaultEnabled);
+  const [mode, setMode] = useState<AdminSettings["settings"]["watermark"]["mode"]>(current.mode);
+  const [customText, setCustomText] = useState(current.customText);
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setDefaultEnabled(current.defaultEnabled);
+    setMode(current.mode);
+    setCustomText(current.customText);
+  }, [current.customText, current.defaultEnabled, current.mode]);
+
+  async function saveSettings(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!databaseMode) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/admin/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ watermark: { defaultEnabled, mode, customText } })
+      });
+      const saved = await response.json().catch(() => null) as AdminSettings & { error?: string };
+      if (!response.ok) throw new Error(saved?.error ?? "Could not save settings.");
+      onSaved(saved);
+      setMessage("Settings saved.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not save settings.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Panel className="min-h-[420px]">
+      <SectionHeader eyebrow="Defaults" title="System Settings" />
+      {!databaseMode ? <AdminModeNotice label="System settings are available in database mode." /> : (
+        <form onSubmit={saveSettings} className="space-y-3">
+          <label className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.025] px-3 py-2">
+            <span>
+              <span className="block text-sm font-semibold text-studio-100">Default to watermarked downloads</span>
+              <span className="block text-xs text-studio-400">Users can still choose original when needed.</span>
+            </span>
+            <input type="checkbox" checked={defaultEnabled} onChange={(event) => setDefaultEnabled(event.target.checked)} />
+          </label>
+          <label className="grid gap-1.5">
+            <span className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">Watermark Format</span>
+            <select className="field" value={mode} onChange={(event) => setMode(event.target.value as AdminSettings["settings"]["watermark"]["mode"])}>
+              <option value="CUSTOM_TEXT">Custom Text</option>
+              <option value="USER_ONLY">User Name Only</option>
+              <option value="USER_AND_IP">User Name and IP</option>
+            </select>
+          </label>
+          {mode === "CUSTOM_TEXT" ? (
+            <label className="grid gap-1.5">
+              <span className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">Custom Text</span>
+              <textarea className="field min-h-24" value={customText} onChange={(event) => setCustomText(event.target.value)} placeholder="GreenLight Confidential" />
+            </label>
+          ) : null}
+          <div className="rounded-lg border border-white/10 bg-white/[0.025] p-3">
+            <p className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">Preview</p>
+            <p className="mt-1 text-sm font-semibold text-studio-100">{watermarkPreview(mode, customText)}</p>
+            {data?.updatedAt ? <p className="mt-1 text-xs text-studio-500">Last updated {formatShortDateTime(data.updatedAt)}{data.updatedBy ? ` by ${data.updatedBy}` : ""}</p> : null}
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-studio-400">{message}</p>
+            <button type="submit" disabled={busy} className="rounded-md bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-wait disabled:opacity-60">{busy ? "Saving..." : "Save Settings"}</button>
+          </div>
+        </form>
+      )}
+    </Panel>
+  );
+}
+
+function AdminModeNotice({ label }: { label: string }) {
+  return <p className="rounded-md border border-yellow-300/25 bg-yellow-300/10 px-3 py-2 text-xs text-yellow-100">{label}</p>;
+}
+
+function AdminErrorNotice({ message }: { message: string }) {
+  return <p className="rounded-md border border-rose-300/25 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">{message}</p>;
+}
+
+function watermarkPreview(mode: AdminSettings["settings"]["watermark"]["mode"], customText: string) {
+  const timestamp = new Date().toISOString();
+  if (mode === "CUSTOM_TEXT") return `${customText || "GreenLight Confidential"} | ${timestamp}`;
+  if (mode === "USER_ONLY") return `user@studio.com | ${timestamp}`;
+  return `user@studio.com | ${timestamp} | IP 000.000.000.000`;
+}
+
+function AdminDataQualityPanel({ data, databaseMode, onRefresh }: { data: AdminDataQuality | null; databaseMode: boolean; onRefresh: () => void }) {
+  const totalIssues = data?.totalIssues ?? 0;
+  const checks = data?.checks ?? [];
+  return (
+    <Panel>
+      <SectionHeader
+        eyebrow="Maintenance"
+        title="Data Quality"
+        action={<button type="button" onClick={onRefresh} className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline">Refresh</button>}
+      />
+      {!databaseMode ? (
+        <p className="rounded-md border border-yellow-300/25 bg-yellow-300/10 px-3 py-2 text-xs text-yellow-100">Data quality checks run against the production database. Demo mode is using local sample data.</p>
+      ) : data?.error ? (
+        <p className="rounded-md border border-rose-300/25 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">{data.error}</p>
+      ) : (
+        <>
+          <div className="grid gap-3 md:grid-cols-[180px_minmax(0,1fr)]">
+            <div className={cn(
+              "rounded-lg border px-3 py-3",
+              totalIssues ? "border-yellow-300/25 bg-yellow-300/10" : "border-emerald-300/25 bg-emerald-400/8"
+            )}>
+              <p className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">Open Issues</p>
+              <p className="mt-1 text-2xl font-semibold text-studio-100">{totalIssues}</p>
+              <p className="mt-1 text-xs text-studio-400">{totalIssues ? "Review before deploys or demos." : "No blocking data issues found."}</p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+              {checks.map((check) => (
+                <div key={check.key} className="rounded-lg border border-white/10 bg-white/[0.025] px-3 py-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-xs font-semibold text-studio-100">{check.label}</p>
+                    <span className={cn(
+                      "rounded border px-1.5 py-0.5 font-display text-[10px] uppercase",
+                      adminDataQualityTone(check.severity, check.total)
+                    )}>
+                      {check.total}
+                    </span>
+                  </div>
+                  <p className="mt-1 line-clamp-2 text-[11px] text-studio-400">{check.description}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+          {checks.some((check) => check.items.length) ? (
+            <div className="mt-3 grid max-h-[280px] gap-2 overflow-y-auto pr-1 lg:grid-cols-2">
+              {checks.filter((check) => check.items.length).map((check) => (
+                <div key={check.key} className="rounded-lg border border-white/10 bg-white/[0.025] p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-semibold text-studio-100">{check.label}</p>
+                    <Badge value={`${check.total} found`} subtle />
+                  </div>
+                  <div className="mt-2 grid gap-1.5">
+                    {check.items.map((item) => (
+                      <div key={`${check.key}-${item.id}`} className="rounded-md border border-white/10 bg-black/[0.08] px-2.5 py-2 text-xs">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            {item.href ? (
+                              <Link href={item.href} className="truncate font-semibold text-studio-100 transition hover:text-amberline">
+                                {item.title}
+                              </Link>
+                            ) : (
+                              <p className="truncate font-semibold text-studio-100">{item.title}</p>
+                            )}
+                            <p className="mt-0.5 line-clamp-2 text-studio-400">{item.detail}</p>
+                          </div>
+                          <p className="shrink-0 text-[11px] text-studio-500">{formatShortDateTime(item.updatedAt ?? item.createdAt ?? "")}</p>
+                        </div>
+                      </div>
+                    ))}
+                    {check.total > check.items.length ? <p className="text-[11px] text-studio-500">Showing {check.items.length} of {check.total}. Use the linked areas to clean up the rest.</p> : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </>
+      )}
+    </Panel>
+  );
+}
+
+function adminDataQualityTone(severity: AdminDataQualityCheck["severity"], total: number) {
+  if (!total) return "border-emerald-300/25 bg-emerald-400/8 text-emerald-200";
+  if (severity === "error") return "border-rose-300/25 bg-rose-500/10 text-rose-200";
+  if (severity === "warning") return "border-yellow-300/25 bg-yellow-300/10 text-yellow-100";
+  return "border-white/10 bg-white/[0.035] text-studio-300";
+}
+
+function AdminStorageInventoryPanel({ data, databaseMode, onRefresh }: { data: AdminStorageInventory | null; databaseMode: boolean; onRefresh: () => void }) {
+  const summary = data?.summary ?? { total: 0, totalSize: 0, gcs: 0, database: 0, local: 0, missing: 0 };
+  const items = data?.items ?? [];
+  return (
+    <Panel>
+      <SectionHeader
+        eyebrow="Files"
+        title="Storage Manager"
+        action={<button type="button" onClick={onRefresh} className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline">Refresh</button>}
+      />
+      {!databaseMode ? (
+        <p className="rounded-md border border-yellow-300/25 bg-yellow-300/10 px-3 py-2 text-xs text-yellow-100">Storage inventory runs against database-backed records. Demo mode stores sample files locally in the browser.</p>
+      ) : data?.error ? (
+        <p className="rounded-md border border-rose-300/25 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">{data.error}</p>
+      ) : (
+        <>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
+            <AdminStorageTile label="Files" value={`${summary.total}`} tone="neutral" />
+            <AdminStorageTile label="Total Size" value={formatBytes(summary.totalSize)} tone="neutral" />
+            <AdminStorageTile label="GCS" value={`${summary.gcs}`} tone="good" />
+            <AdminStorageTile label="Database" value={`${summary.database}`} tone={summary.database ? "warn" : "neutral"} />
+            <AdminStorageTile label="Local" value={`${summary.local}`} tone={summary.local ? "warn" : "neutral"} />
+            <AdminStorageTile label="Missing" value={`${summary.missing}`} tone={summary.missing ? "bad" : "good"} />
+          </div>
+          <div className="mt-3 max-h-[360px] overflow-auto rounded-lg border border-white/10">
+            <table className="data-table min-w-[980px]">
+              <thead className="text-xs uppercase tracking-[0.16em] text-studio-400">
+                <tr>
+                  <th className="py-2">File</th>
+                  <th>Type</th>
+                  <th>Size</th>
+                  <th>Storage</th>
+                  <th>Location</th>
+                  <th>Updated</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/10">
+                {items.map((item) => (
+                  <tr key={`${item.kind}-${item.id}`}>
+                    <td className="py-2.5">
+                      <div className="min-w-0">
+                        {item.href ? (
+                          <Link href={item.href} className="block truncate font-semibold text-studio-100 transition hover:text-amberline">
+                            {item.title}
+                          </Link>
+                        ) : (
+                          <p className="truncate font-semibold text-studio-100">{item.title}</p>
+                        )}
+                        <p className="mt-0.5 truncate text-xs text-studio-400">{item.fileName}</p>
+                      </div>
+                    </td>
+                    <td><Badge value={item.kind} subtle /></td>
+                    <td className="text-studio-300">{formatBytes(item.fileSize)}</td>
+                    <td><span className={cn("rounded border px-2 py-1 font-display text-[10px] uppercase", adminStorageModeTone(item.storageMode))}>{item.storageMode}</span></td>
+                    <td className="max-w-[300px] truncate text-xs text-studio-400">{item.storagePath || "No storage path"}</td>
+                    <td className="text-xs text-studio-500">{formatShortDateTime(item.updatedAt ?? item.createdAt ?? "")}</td>
+                  </tr>
+                ))}
+                {!items.length ? (
+                  <tr>
+                    <td colSpan={6} className="py-6 text-center text-sm text-studio-400">No stored files found yet.</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </Panel>
+  );
+}
+
+function AdminStorageTile({ label, value, tone }: { label: string; value: string; tone: "good" | "warn" | "bad" | "neutral" }) {
+  return (
+    <div className={cn(
+      "rounded-lg border px-3 py-2",
+      tone === "good" && "border-emerald-300/25 bg-emerald-400/8",
+      tone === "warn" && "border-yellow-300/25 bg-yellow-300/10",
+      tone === "bad" && "border-rose-300/25 bg-rose-500/10",
+      tone === "neutral" && "border-white/10 bg-white/[0.025]"
+    )}>
+      <p className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">{label}</p>
+      <p className="mt-1 text-sm font-semibold text-studio-100">{value}</p>
+    </div>
+  );
+}
+
+function adminStorageModeTone(mode: AdminStorageInventoryItem["storageMode"]) {
+  if (mode === "GCS") return "border-emerald-300/25 bg-emerald-400/8 text-emerald-200";
+  if (mode === "Missing") return "border-rose-300/25 bg-rose-500/10 text-rose-200";
+  if (mode === "Database") return "border-yellow-300/25 bg-yellow-300/10 text-yellow-100";
+  return "border-white/10 bg-white/[0.035] text-studio-300";
+}
+
+function AdminUploadTroubleshootingPanel({ data, databaseMode, onRefresh }: { data: AdminUploadTroubleshooting | null; databaseMode: boolean; onRefresh: () => void }) {
+  const summary = data?.summary ?? { total: 0, failed: 0, warning: 0, parsing: 0, complete: 0, stored: 0, received: 0 };
+  const jobs = data?.jobs ?? [];
+  const attentionJobs = jobs.filter((job) => ["FAILED", "WARNING", "PARSING"].includes(job.status));
+  return (
+    <Panel>
+      <SectionHeader
+        eyebrow="Uploads"
+        title="Troubleshooting Console"
+        action={<button type="button" onClick={onRefresh} className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline">Refresh</button>}
+      />
+      {!databaseMode ? (
+        <p className="rounded-md border border-yellow-300/25 bg-yellow-300/10 px-3 py-2 text-xs text-yellow-100">Upload troubleshooting is available when GreenLight is connected to the production database.</p>
+      ) : data?.error ? (
+        <p className="rounded-md border border-rose-300/25 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">{data.error}</p>
+      ) : (
+        <>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
+            <AdminStorageTile label="Total Jobs" value={`${summary.total}`} tone="neutral" />
+            <AdminStorageTile label="Failed" value={`${summary.failed}`} tone={summary.failed ? "bad" : "good"} />
+            <AdminStorageTile label="Warnings" value={`${summary.warning}`} tone={summary.warning ? "warn" : "good"} />
+            <AdminStorageTile label="Parsing" value={`${summary.parsing}`} tone={summary.parsing ? "warn" : "neutral"} />
+            <AdminStorageTile label="Stored" value={`${summary.stored}`} tone="neutral" />
+            <AdminStorageTile label="Complete" value={`${summary.complete}`} tone="good" />
+          </div>
+          {attentionJobs.length ? (
+            <div className="mt-3 rounded-md border border-yellow-300/20 bg-yellow-300/8 px-3 py-2 text-xs text-yellow-100">
+              {attentionJobs.length} recent upload{attentionJobs.length === 1 ? "" : "s"} need review. Check the stage and error columns first.
+            </div>
+          ) : null}
+          <div className="mt-3 max-h-[380px] overflow-auto rounded-lg border border-white/10">
+            <table className="data-table min-w-[1120px]">
+              <thead className="text-xs uppercase tracking-[0.16em] text-studio-400">
+                <tr>
+                  <th className="py-2">File</th>
+                  <th>Status</th>
+                  <th>Stage</th>
+                  <th>Uploaded By</th>
+                  <th>Project / Document</th>
+                  <th>Text</th>
+                  <th>Storage</th>
+                  <th>Issue</th>
+                  <th>Updated</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/10">
+                {jobs.map((job) => (
+                  <tr key={job.id}>
+                    <td className="py-2.5">
+                      <div className="min-w-0">
+                        {job.href ? (
+                          <Link href={job.href} className="block truncate font-semibold text-studio-100 transition hover:text-amberline">
+                            {job.fileName}
+                          </Link>
+                        ) : (
+                          <p className="truncate font-semibold text-studio-100">{job.fileName}</p>
+                        )}
+                        <p className="mt-0.5 truncate text-xs text-studio-400">{job.fileType || "file"} / {formatBytes(job.fileSize)}</p>
+                      </div>
+                    </td>
+                    <td><span className={cn("rounded border px-2 py-1 font-display text-[10px] uppercase", uploadJobTone(job.status))}>{statusLabel(job.status)}</span></td>
+                    <td className="text-xs text-studio-300">{job.stage}</td>
+                    <td className="text-xs text-studio-300">{job.createdBy?.name ?? job.createdBy?.email ?? "Unknown"}</td>
+                    <td className="max-w-[220px] truncate text-xs text-studio-300">{job.project?.title ?? "No project"}{job.document?.title ? ` / ${job.document.title}` : ""}</td>
+                    <td><Badge value={job.documentVersion?.hasExtractedText ? "Readable" : job.documentVersion ? "No text" : "Pending"} subtle /></td>
+                    <td className="max-w-[220px] truncate text-xs text-studio-400">{job.storagePath || "No storage path"}</td>
+                    <td className="max-w-[260px] truncate text-xs text-studio-300">{job.error || job.warning || "None"}</td>
+                    <td className="text-xs text-studio-500">{formatShortDateTime(job.updatedAt)}</td>
+                  </tr>
+                ))}
+                {!jobs.length ? (
+                  <tr>
+                    <td colSpan={9} className="py-6 text-center text-sm text-studio-400">No upload jobs found yet.</td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </Panel>
+  );
+}
+
+function AdminSystemHealthPanel({ health, databaseMode, onRefresh }: { health: AdminHealth | null; databaseMode: boolean; onRefresh: () => void }) {
+  const databaseConnected = Boolean(health?.database?.connected);
+  const storageConfigured = Boolean(health?.storage?.configured);
+  const deploymentReady = Boolean(health?.deployment?.ready);
+  const uploadIssues = (health?.uploadJobs?.failed ?? 0) + (health?.uploadJobs?.warning ?? 0) + (health?.uploadJobs?.parsing ?? 0);
+  return (
+    <Panel>
+      <SectionHeader eyebrow="System" title="Health and Uploads" action={<button type="button" onClick={onRefresh} className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline">Refresh</button>} />
+      <div className="grid gap-3 md:grid-cols-4">
+        <AdminHealthTile label="Database" value={databaseMode && databaseConnected ? "Connected" : databaseMode ? "Check" : "Demo"} tone={databaseMode && databaseConnected ? "good" : "warn"} />
+        <AdminHealthTile label="Storage" value={storageConfigured ? "Configured" : "Missing Config"} tone={storageConfigured ? "good" : "warn"} />
+        <AdminHealthTile label="Deployment" value={deploymentReady ? "Ready" : `${health?.deployment?.blocking ?? 0} Missing`} tone={deploymentReady ? "good" : "bad"} />
+        <AdminHealthTile label="Upload Issues" value={`${uploadIssues}`} tone={uploadIssues ? "bad" : "good"} />
+      </div>
+      {health?.deployment?.checks?.length ? (
+        <div className="mt-3 rounded-lg border border-white/10 bg-white/[0.025] p-3">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-studio-100">Production Readiness</p>
+              <p className="mt-0.5 text-xs text-studio-400">Checks required configuration without showing private values.</p>
+            </div>
+            <Badge value={deploymentReady ? "READY" : "NEEDS ATTENTION"} />
+          </div>
+          <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+            {health.deployment.checks.map((check) => (
+              <div key={check.key} className={cn(
+                "rounded-md border px-2.5 py-2",
+                check.configured ? "border-emerald-300/20 bg-emerald-400/8" : check.required ? "border-rose-300/25 bg-rose-500/10" : "border-yellow-300/25 bg-yellow-300/10"
+              )}>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-semibold text-studio-100">{check.label}</p>
+                  <span className={cn("rounded border px-1.5 py-0.5 font-display text-[10px] uppercase", check.configured ? "border-emerald-300/25 text-emerald-200" : "border-rose-300/25 text-rose-200")}>{check.configured ? "Set" : "Missing"}</span>
+                </div>
+                <p className="mt-1 text-[11px] text-studio-500">{check.key}</p>
+                <p className="mt-1 line-clamp-2 text-[11px] text-studio-400">{check.description}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {health?.storage && !health.storage.configured ? (
+        <p className="mt-3 rounded border border-yellow-300/25 bg-yellow-300/10 px-3 py-2 text-xs text-yellow-100">Missing storage config: {health.storage.missing.join(", ")}</p>
+      ) : null}
+      {health?.database?.error ? <p className="mt-3 rounded border border-rose-300/25 bg-rose-500/10 px-3 py-2 text-xs text-rose-100">{health.database.error}</p> : null}
+      {health?.uploadJobs?.recent?.length ? (
+        <div className="mt-3 grid gap-1.5">
+          {health.uploadJobs.recent.slice(0, 4).map((job) => (
+            <div key={job.id} className="grid gap-2 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-2 text-xs md:grid-cols-[minmax(0,1fr)_90px_110px] md:items-center">
+              <div className="min-w-0">
+                <p className="truncate font-semibold text-studio-100">{job.fileName}</p>
+                <p className="mt-0.5 truncate text-studio-400">{job.error || job.warning || job.stage}</p>
+              </div>
+              <span className={cn("rounded border px-2 py-1 text-center font-display text-[10px] uppercase", uploadJobTone(job.status))}>{statusLabel(job.status)}</span>
+              <p className="text-right text-studio-500">{formatShortDateTime(job.createdAt)}</p>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </Panel>
+  );
+}
+
+function AdminHealthTile({ label, value, tone }: { label: string; value: string; tone: "good" | "warn" | "bad" | "neutral" }) {
+  return (
+    <div className={cn(
+      "rounded-lg border px-3 py-2",
+      tone === "good" && "border-emerald-300/25 bg-emerald-400/8",
+      tone === "warn" && "border-yellow-300/25 bg-yellow-300/10",
+      tone === "bad" && "border-rose-300/25 bg-rose-500/10",
+      tone === "neutral" && "border-white/10 bg-white/[0.025]"
+    )}>
+      <p className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">{label}</p>
+      <p className="mt-1 text-sm font-semibold text-studio-100">{value}</p>
+    </div>
+  );
+}
+
+function AdminUserAccessModal({
+  user,
+  projects,
+  databaseMode,
+  inactive,
+  isCurrentUser,
+  selectedProjectId,
+  selectedRole,
+  busy,
+  message,
+  onClose,
+  onSelectProject,
+  onSelectRole,
+  onAssign,
+  onRemove,
+  onRoleChange,
+  onToggleActive,
+  onDelete
+}: {
+  user: AdminAccessUser | HammerUser;
+  projects: HammerProject[];
+  databaseMode: boolean;
+  inactive: boolean;
+  isCurrentUser: boolean;
+  selectedProjectId: string;
+  selectedRole: AdminProjectRole;
+  busy: boolean;
+  message: string;
+  onClose: () => void;
+  onSelectProject: (projectId: string) => void;
+  onSelectRole: (role: AdminProjectRole) => void;
+  onAssign: (event: React.FormEvent<HTMLFormElement>) => void;
+  onRemove: (membershipId: string) => void;
+  onRoleChange: (userId: string, appRole: AppRole) => Promise<void>;
+  onToggleActive: () => void;
+  onDelete: () => void;
+}) {
+  const [roleDraft, setRoleDraft] = useState<AppRole>(adminUserAppRole(user));
+  const [roleBusy, setRoleBusy] = useState(false);
+  const memberships = "memberships" in user ? user.memberships : [];
+  const membershipProjectIds = new Set(memberships.map((membership) => membership.projectId));
+  const previewProjects = previewVisibleProjects(user, projects, membershipProjectIds);
+  const fullAccess = adminUserHasFullAccess(user);
+
+  useEffect(() => {
+    setRoleDraft(adminUserAppRole(user));
+  }, [user]);
+
+  async function saveRole() {
+    setRoleBusy(true);
+    try {
+      await onRoleChange(user.id, roleDraft);
+    } finally {
+      setRoleBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-studio-950/75 p-4 backdrop-blur-sm" onMouseDown={onClose}>
+      <div className="modal-card flex max-h-[calc(100vh-3rem)] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="flex items-start justify-between gap-3 border-b border-white/10 pb-3">
+          <div>
+            <p className="font-display text-[11px] uppercase tracking-[0.16em] text-amberline">User Access</p>
+            <h2 className="mt-1 text-xl font-semibold text-studio-100">{user.name}</h2>
+            <p className="mt-1 text-sm text-studio-400">{user.email}</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-md border border-white/10 p-1.5 text-studio-400 hover:text-studio-100" aria-label="Close user access">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto py-4 lg:grid-cols-[0.8fr_1.2fr]">
+          <div className="space-y-4">
+            <div className="rounded-lg border border-white/10 bg-white/[0.025] p-3">
+              <p className="text-sm font-semibold text-studio-100">Profile</p>
+              <div className="mt-3 grid gap-2">
+                <label className="grid gap-1.5">
+                  <span className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">Global Role</span>
+                  <select className="field" value={roleDraft} disabled={!databaseMode || roleBusy} onChange={(event) => setRoleDraft(event.target.value as AppRole)}>
+                    {appRoleOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                </label>
+                <button type="button" disabled={!databaseMode || roleBusy || roleDraft === adminUserAppRole(user)} onClick={() => void saveRole()} className="rounded-md bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">
+                  Save Role
+                </button>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Badge value={inactive ? "INACTIVE" : "ACTIVE"} subtle />
+                <Badge value={adminUserRoleLabel({ ...user, appRole: roleDraft } as AdminAccessUser)} />
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button type="button" disabled={isCurrentUser} onClick={onToggleActive} className="rounded border border-white/10 bg-white/[0.025] px-2 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-not-allowed disabled:opacity-40">
+                  {inactive ? "Reactivate User" : "Deactivate User"}
+                </button>
+                <button type="button" disabled={isCurrentUser} onClick={onDelete} className="rounded border border-rose-300/25 bg-rose-500/5 px-2 py-1.5 text-xs font-semibold text-rose-300 transition hover:border-rose-300/50 disabled:cursor-not-allowed disabled:opacity-40">
+                  Delete User
+                </button>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-white/10 bg-white/[0.025] p-3">
+              <p className="text-sm font-semibold text-studio-100">Visibility Preview</p>
+              <p className="mt-1 text-xs leading-5 text-studio-400">{fullAccess ? "This user can see and download the full studio workspace." : "This user only sees projects explicitly assigned or shared with them."}</p>
+              <div className="mt-3 grid gap-1.5">
+                {previewProjects.slice(0, 8).map((project) => <p key={project.id} className="truncate rounded border border-white/10 bg-studio-950/35 px-2 py-1.5 text-xs text-studio-300">{project.title}</p>)}
+                {!previewProjects.length ? <p className="text-xs text-studio-500">No project access assigned yet.</p> : null}
+                {previewProjects.length > 8 ? <p className="text-xs text-studio-500">+{previewProjects.length - 8} more</p> : null}
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-white/10 bg-white/[0.025] p-3">
+            <p className="text-sm font-semibold text-studio-100">Project Access</p>
+            <form onSubmit={onAssign} className="mt-3 grid gap-2 md:grid-cols-[1fr_150px_auto]">
+              <select className="field" value={selectedProjectId} disabled={!databaseMode || busy} onChange={(event) => onSelectProject(event.target.value)}>
+                {projects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
+              </select>
+              <select className="field" value={selectedRole} disabled={!databaseMode || busy} onChange={(event) => onSelectRole(event.target.value as AdminProjectRole)}>
+                {adminProjectRoleOptions.map((role) => <option key={role.value} value={role.value}>{role.label}</option>)}
+              </select>
+              <button type="submit" disabled={busy || !databaseMode} className="rounded-md bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">Add Access</button>
+            </form>
+            {message ? <p className="mt-2 text-xs text-studio-300">{message}</p> : null}
+            <div className="mt-3 grid max-h-[360px] gap-1.5 overflow-y-auto pr-1">
+              {memberships.length ? memberships.map((membership) => (
+                <div key={membership.id} className="flex items-center justify-between gap-3 rounded-md border border-white/10 bg-studio-950/35 px-2.5 py-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-studio-100">{membership.project?.title ?? projectTitle(membership.projectId)}</p>
+                    <p className="mt-0.5 text-xs text-studio-400">{adminProjectRoleLabel(membership.role)}</p>
+                  </div>
+                  <button type="button" disabled={busy || !databaseMode} onClick={() => onRemove(membership.id)} className="rounded border border-rose-300/25 bg-rose-500/5 px-2 py-1 text-[11px] font-semibold text-rose-300 transition hover:border-rose-300/50 disabled:opacity-50">Remove</button>
+                </div>
+              )) : <p className="rounded-md border border-white/10 bg-studio-950/35 px-2.5 py-2 text-xs text-studio-500">No project access assigned yet.</p>}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function adminUserHasFullAccess(user: AdminAccessUser | HammerUser) {
+  const role = adminUserAppRole(user);
+  return role === "admin" || role === "producer" || role === "executive";
+}
+
+function previewVisibleProjects(user: AdminAccessUser | HammerUser | undefined, projects: HammerProject[], accessProjectIds: Set<string>) {
+  if (!user) return [];
+  if (adminUserHasFullAccess(user)) return projects;
+  if ("memberships" in user) return projects.filter((project) => user.memberships.some((membership) => membership.projectId === project.id));
+  return projects.filter((project) => accessProjectIds.has(project.id) || assignedProjectsForUser(user.id).some((assignedProject) => assignedProject.id === project.id));
+}
+
+function adminUserRoleLabel(user?: AdminAccessUser | HammerUser) {
+  if (!user) return "Standard";
+  const role = adminUserAppRole(user);
+  const normalizedRole = role === "department_lead" ? "artist" : role;
+  return normalizedRole.split("_").map((part) => part[0]?.toUpperCase() + part.slice(1)).join(" ");
+}
+
+function adminUserAppRole(user: AdminAccessUser | HammerUser): AppRole {
+  return "appRole" in user ? normalizedAppRole(user.appRole) : appRoleForHammerRole(user.role);
+}
+
+function normalizedAppRole(role: AppRole): AppRole {
+  return role === "department_lead" ? "artist" : role;
+}
+
+function adminUserAccessSummary(accessUser: AdminAccessUser | undefined, user: HammerUser) {
+  if (adminUserHasFullAccess(accessUser ?? user)) return "Full studio access";
+  const membershipCount = accessUser?.memberships.length ?? assignedProjectsForUser(user.id).length;
+  if (!membershipCount) return "No assigned projects";
+  if (membershipCount === 1) return "1 assigned project";
+  return `${membershipCount} assigned projects`;
+}
+
+function adminProjectRoleLabel(role: AdminProjectRole) {
+  const normalizedRole = role === "department_lead" ? "artist" : role;
+  return normalizedRole.split("_").map((part) => part[0]?.toUpperCase() + part.slice(1)).join(" ");
+}
+
+function adminSectionForView(view: HammerView): AdminSection {
+  if (view === "admin-users") return "users";
+  if (view === "admin-settings") return "settings";
+  if (view === "admin-troubleshooting") return "troubleshooting";
+  if (view === "admin-data-quality") return "data-quality";
+  return "overview";
 }
 
 function CreateUserModal({
@@ -10772,9 +11866,11 @@ function PaginationFooter({ page, pageSize, total, onPageChange }: { page: numbe
   );
 }
 
-function ProjectTable({ projects }: { projects: HammerProject[] }) {
+function ProjectTable({ projects, canEditStatus = false, onStatusChange }: { projects: HammerProject[]; canEditStatus?: boolean; onStatusChange?: (projectId: string, patch: Partial<HammerProject>) => Promise<void> }) {
   const [sort, setSort] = useState<{ key: ProjectSortKey; direction: "asc" | "desc" }>({ key: "title", direction: "asc" });
   const [page, setPage] = useState(1);
+  const [savingStatusId, setSavingStatusId] = useState("");
+  const [statusMessage, setStatusMessage] = useState("");
   const pageSize = useResponsiveTablePageSize({ max: 20, reservedHeight: 330 });
   const sortedProjects = useMemo(() => {
     return [...projects].sort((a, b) => {
@@ -10800,13 +11896,28 @@ function ProjectTable({ projects }: { projects: HammerProject[] }) {
   const normalizedPage = Math.min(page, totalPages);
   const pagedProjects = sortedProjects.slice((normalizedPage - 1) * pageSize, normalizedPage * pageSize);
 
+  async function changeStatus(project: HammerProject, status: HammerProjectStatus) {
+    if (!onStatusChange || status === project.status) return;
+    setSavingStatusId(project.id);
+    setStatusMessage("");
+    try {
+      await onStatusChange(project.id, { status });
+      setStatusMessage(`${project.title} status saved.`);
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : "Could not save slate status.");
+    } finally {
+      setSavingStatusId("");
+    }
+  }
+
   if (!projects.length) return <EmptyState label="No projects match this view." />;
   return (
     <div className="table-workspace">
+      {statusMessage ? <p className="mb-2 text-xs text-studio-300">{statusMessage}</p> : null}
       <div className="data-scroll table-workspace-scroll">
         <table className="data-table min-w-[980px]">
           <thead><tr><SortableHeader label="Project" sortKey="title" activeSort={sort} onSort={toggleSort} /><SortableHeader label="Logline" sortKey="logline" activeSort={sort} onSort={toggleSort} /><SortableHeader label="Status" sortKey="status" activeSort={sort} onSort={toggleSort} /><SortableHeader label="Owner" sortKey="owner" activeSort={sort} onSort={toggleSort} /><SortableHeader label="Updated" sortKey="updatedAt" activeSort={sort} onSort={toggleSort} /></tr></thead>
-          <tbody>{pagedProjects.map((project) => <tr key={project.id} className="transition hover:bg-white/[0.035]"><td><Link className="block font-semibold text-studio-100" href={`/projects/${project.id}`}>{project.title}<p className="mt-0.5 text-xs font-normal text-studio-400">{project.genre}</p></Link></td><td><Link className="line-clamp-2 max-w-[420px] text-[13px] leading-5 text-studio-300" href={`/projects/${project.id}`}>{project.logline || "-"}</Link></td><td><Link className="block" href={`/projects/${project.id}`}><Badge value={project.status} /></Link></td><td><Link className="block text-studio-300" href={`/projects/${project.id}`}>{userName(project.ownerId)}</Link></td><td><Link className="block text-studio-300" href={`/projects/${project.id}`}>{project.updatedAt}</Link></td></tr>)}</tbody>
+          <tbody>{pagedProjects.map((project) => <tr key={project.id} className="transition hover:bg-white/[0.035]"><td><Link className="block font-semibold text-studio-100" href={`/projects/${project.id}`}>{project.title}<p className="mt-0.5 text-xs font-normal text-studio-400">{project.genre}</p></Link></td><td><Link className="line-clamp-2 max-w-[420px] text-[13px] leading-5 text-studio-300" href={`/projects/${project.id}`}>{project.logline || "-"}</Link></td><td>{canEditStatus ? <select aria-label={`Slate status for ${project.title}`} className="rounded-md border border-white/10 bg-studio-950 px-2.5 py-1.5 text-[12px] font-semibold text-studio-100 outline-none transition focus:border-amberline/60 disabled:cursor-wait disabled:opacity-60" value={project.status} disabled={savingStatusId === project.id} onClick={(event) => event.stopPropagation()} onChange={(event) => void changeStatus(project, event.target.value as HammerProjectStatus)}>{hammerProjectStatuses.map((status) => <option key={status} value={status}>{statusLabel(status)}</option>)}</select> : <Link className="block" href={`/projects/${project.id}`}><Badge value={project.status} /></Link>}</td><td><Link className="block text-studio-300" href={`/projects/${project.id}`}>{userName(project.ownerId)}</Link></td><td><Link className="block text-studio-300" href={`/projects/${project.id}`}>{project.updatedAt}</Link></td></tr>)}</tbody>
         </table>
       </div>
       <PaginationFooter page={normalizedPage} pageSize={pageSize} total={sortedProjects.length} onPageChange={setPage} />
@@ -11679,12 +12790,26 @@ function DownloadFileLink({
   const [includeIp, setIncludeIp] = useState(true);
   const [message, setMessage] = useState("");
   const [mounted, setMounted] = useState(false);
+  const [watermarkSettings, setWatermarkSettings] = useState<AdminSettings["settings"]["watermark"]>({ defaultEnabled: true, mode: "USER_AND_IP", customText: "" });
   const href = dataUrl || textDownloadUrl(fallbackText);
   const hasDownloadSource = Boolean(href || (resourceType && resourceId));
 
   useEffect(() => {
     setMounted(true);
   }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    fetch("/api/admin/settings", { cache: "no-store" })
+      .then((response) => response.ok ? response.json() : null)
+      .then((data: AdminSettings | null) => {
+        if (data?.settings?.watermark) {
+          setWatermarkSettings(data.settings.watermark);
+          setIncludeIp(data.settings.watermark.mode === "USER_AND_IP");
+        }
+      })
+      .catch(() => undefined);
+  }, [open]);
 
   if (!hasDownloadSource) return null;
 
@@ -11697,7 +12822,7 @@ function DownloadFileLink({
         return;
       }
       if (watermark && href) {
-        const result = await buildClientWatermarkedDownload({ fileName, dataUrl, fallbackText, includeIp, currentUser });
+        const result = await buildClientWatermarkedDownload({ fileName, dataUrl, fallbackText, includeIp, currentUser, watermarkSettings });
         triggerBrowserDownload(result.href, result.fileName);
         window.setTimeout(() => URL.revokeObjectURL(result.href), 1500);
         setOpen(false);
@@ -11727,12 +12852,13 @@ function DownloadFileLink({
           </button>
         </div>
         <p className="mt-3 text-[13px] leading-5 text-studio-300">
-          Watermarked downloads stamp the file with the signed-in user, UTC date/time, and optionally the requester IP. Use original only when the reviewer will not accept a watermark.
+          Watermarked downloads use the current Admin watermark policy. Use original only when the reviewer will not accept a watermark.
         </p>
-        <label className="mt-3 flex items-center gap-2 text-[13px] text-studio-300">
+        <label className={cn("mt-3 flex items-center gap-2 text-[13px] text-studio-300", watermarkSettings.mode !== "USER_AND_IP" && "opacity-50")}>
           <input type="checkbox" checked={includeIp} onChange={(event) => setIncludeIp(event.target.checked)} className="h-4 w-4 accent-amberline" />
           Include IP address when available
         </label>
+        <p className="mt-2 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-2 text-[11px] text-studio-400">Default: {watermarkSettings.defaultEnabled ? "Watermarked" : "Original"} / {watermarkSettings.mode === "CUSTOM_TEXT" ? "Custom text" : watermarkSettings.mode === "USER_ONLY" ? "User name only" : "User name and IP"}</p>
         {message ? <p className="mt-3 rounded border border-rose-400/25 bg-rose-500/10 px-2.5 py-2 text-xs text-rose-200">{message}</p> : null}
         <div className="mt-4 grid gap-2 sm:grid-cols-2">
           <button type="button" onClick={() => downloadFile(true)} className="inline-flex items-center justify-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 transition hover:bg-emerald-300">
@@ -11771,10 +12897,10 @@ function DownloadFileLink({
   );
 }
 
-async function buildClientWatermarkedDownload({ fileName, dataUrl, fallbackText, includeIp, currentUser }: { fileName: string; dataUrl?: string; fallbackText?: string; includeIp: boolean; currentUser?: HammerUser }) {
+async function buildClientWatermarkedDownload({ fileName, dataUrl, fallbackText, includeIp, currentUser, watermarkSettings }: { fileName: string; dataUrl?: string; fallbackText?: string; includeIp: boolean; currentUser?: HammerUser; watermarkSettings: AdminSettings["settings"]["watermark"] }) {
   const timestamp = new Date().toISOString();
   const userLabel = currentUser ? `${currentUser.name} <${currentUser.email}>` : "GreenLight user";
-  const watermark = `${userLabel} | ${timestamp}${includeIp ? " | IP captured on server when available" : ""}`;
+  const watermark = clientWatermarkText(watermarkSettings, userLabel, timestamp, includeIp);
   if (dataUrl?.startsWith("data:image/")) {
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000">
   <image href="${escapeHtmlAttribute(dataUrl)}" width="1600" height="1000" preserveAspectRatio="xMidYMid meet"/>
@@ -11797,6 +12923,12 @@ async function buildClientWatermarkedDownload({ fileName, dataUrl, fallbackText,
     throw new Error("PDF watermarking for this file requires the production download route. Try the original download, or re-open from database-backed storage.");
   }
   throw new Error("This file type cannot be watermarked in the browser yet.");
+}
+
+function clientWatermarkText(settings: AdminSettings["settings"]["watermark"], userLabel: string, timestamp: string, includeIp: boolean) {
+  if (settings.mode === "CUSTOM_TEXT") return `${settings.customText || "GreenLight Confidential"} | ${timestamp}`;
+  if (settings.mode === "USER_ONLY") return `${userLabel} | ${timestamp}`;
+  return `${userLabel} | ${timestamp}${includeIp ? " | IP captured on server when available" : ""}`;
 }
 
 function triggerBrowserDownload(href: string, fileName: string) {
@@ -12757,7 +13889,11 @@ function titleForView(view: HammerView, context: { project: HammerProject; docum
     "studio-status": "Studio Status",
     reports: "Studio Status",
     executive: "Studio Status",
-    "admin-users": "Admin",
+    "admin-overview": "Admin",
+    "admin-users": "Admin Users",
+    "admin-settings": "Admin Settings",
+    "admin-troubleshooting": "Admin Troubleshooting",
+    "admin-data-quality": "Admin Data Quality",
     account: "Account"
   };
   return titles[view];
@@ -12835,8 +13971,12 @@ function breadcrumbsForView(view: HammerView, context: { project: HammerProject;
   if (view === "project-documents") return [...projectTrail, { label: "Documents" }];
   if (view === "project-assets") return [...projectTrail, { label: "Assets" }];
   if (view === "asset-detail") return [{ label: "Assets", href: "/assets" }, { label: context.asset.title }];
-  if (view === "project-new") return [{ label: "Admin", href: "/admin/users" }, { label: "New Project" }];
-  if (view === "admin-users") return [{ label: "Admin" }, { label: "Users" }];
+  if (view === "project-new") return [{ label: "Admin", href: "/admin" }, { label: "New Project" }];
+  if (view === "admin-overview") return [{ label: "Admin" }, { label: "Overview" }];
+  if (view === "admin-users") return [{ label: "Admin", href: "/admin" }, { label: "Users" }];
+  if (view === "admin-settings") return [{ label: "Admin", href: "/admin" }, { label: "Settings" }];
+  if (view === "admin-troubleshooting") return [{ label: "Admin", href: "/admin" }, { label: "Troubleshooting" }];
+  if (view === "admin-data-quality") return [{ label: "Admin", href: "/admin" }, { label: "Data Quality" }];
   if (view === "account") return [{ label: "GreenLight" }, { label: "Account" }];
   return [{ label: "GreenLight" }, { label: titleForView(view, context) }];
 }
@@ -12848,7 +13988,8 @@ function backHrefForView(view: HammerView, context: { project: HammerProject; do
   if (["project-documents", "project-assets"].includes(view)) return `/projects/${context.project.id}`;
   if (view === "project-detail") return "/projects";
   if (view === "asset-detail") return "/assets";
-  if (view === "project-new") return "/admin/users";
+  if (view === "project-new") return "/admin";
+  if (["admin-users", "admin-settings", "admin-troubleshooting", "admin-data-quality"].includes(view)) return "/admin";
   return null;
 }
 

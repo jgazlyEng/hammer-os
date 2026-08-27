@@ -15,7 +15,7 @@ const authErrorMessages: Record<string, string> = {
 export default function LoginPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const authError = searchParams.get("error");
+  const authError = searchParams?.get("error");
   const [email, setEmail] = useState("admin@hammer.local");
   const [password, setPassword] = useState("");
   const [message, setMessage] = useState(authError ? authErrorMessages[authError] ?? "Sign-in failed. Please try again." : "Sign in with Google or your GreenLight account.");
