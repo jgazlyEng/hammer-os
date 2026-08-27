@@ -4142,6 +4142,7 @@ function Scripts({
   const scopedProjectId = projectId ?? activeProjectId;
   const projectNameForId = (lookupProjectId?: string) => lookupProjectId ? projectTitleFromList(lookupProjectId, projects) : "Inbox";
   const canManageLibrary = canManageScriptLibrary(currentUser?.role);
+  const canDownload = canDownloadFiles(currentUser?.role);
   const assignedProjectIds = new Set(currentUser ? assignedProjectsForUser(currentUser.id).map((assignedProject) => assignedProject.id) : []);
   const requestedSection = selectedSection ?? (canManageLibrary ? "inbox" : "projects");
   const effectiveSection = !canManageLibrary && requestedSection !== "projects" ? "projects" : requestedSection;
@@ -4186,7 +4187,7 @@ function Scripts({
           action={onUpload ? <PrimaryButton icon={Plus} label="Add Document" onClick={() => setUploadOpen(true)} /> : undefined}
         />
         {uploadOpen && onUpload ? <DocumentUploadPanel projectId={scopedProjectId} documents={docs} onUpload={onUpload} onDone={() => setUploadOpen(false)} onCancel={() => setUploadOpen(false)} /> : null}
-        <DocumentRows docs={docs} versions={versions} projects={projects} omitProject={Boolean(projectId)} onDelete={onDelete} onAssignToProject={canManageLibrary ? onAssignToProject : undefined} assignableProjects={projects} defaultProjectId={scopedProjectId} emptyLabel={projectName ? `No documents for ${projectName} yet. Upload a script, treatment, outline, or coverage document.` : "No documents match this view."} />
+        <DocumentRows docs={docs} versions={versions} projects={projects} currentUser={currentUser} canDownload={canDownload} omitProject={Boolean(projectId)} onDelete={onDelete} assignableProjects={projects} defaultProjectId={scopedProjectId} emptyLabel={projectName ? `No documents for ${projectName} yet. Upload a script, treatment, outline, or coverage document.` : "No documents match this view."} />
       </Panel>
     );
   }
@@ -4238,25 +4239,25 @@ function Scripts({
 
       {effectiveSection === "inbox" && canManageLibrary ? (
         <ScriptLibraryPanel title="Incoming Scripts" eyebrow="Triage" count={incomingDocs.length} description="Unassigned submissions and specs that have not been attached to a project yet.">
-          <DocumentRows docs={incomingDocs} versions={versions} projects={projects} showInboxMeta onDelete={onDelete} onAssignToProject={onAssignToProject} assignableProjects={projects} defaultProjectId={scopedProjectId} emptyLabel="No incoming scripts match these filters." />
+          <DocumentRows docs={incomingDocs} versions={versions} projects={projects} currentUser={currentUser} canDownload={canDownload} showInboxMeta onDelete={onDelete} onAssignToProject={onAssignToProject} assignableProjects={projects} defaultProjectId={scopedProjectId} emptyLabel="No incoming scripts match these filters." />
         </ScriptLibraryPanel>
       ) : null}
 
       {effectiveSection === "inbox" && !canManageLibrary ? (
         <ScriptLibraryPanel title="Active Project Scripts" eyebrow="Assigned Access" count={projectDocs.length} description="Incoming submissions are limited to producers, executives, and admins. Your scripts are grouped by the projects you can access.">
-          <GroupedProjectDocuments groups={groupedProjectDocs} versions={versions} projects={projects} canManageLibrary={canManageLibrary} onDelete={onDelete} />
+          <GroupedProjectDocuments groups={groupedProjectDocs} versions={versions} projects={projects} currentUser={currentUser} canDownload={canDownload} canManageLibrary={canManageLibrary} onDelete={onDelete} />
         </ScriptLibraryPanel>
       ) : null}
 
       {effectiveSection === "projects" ? (
         <ScriptLibraryPanel title="Active Project Scripts" eyebrow="By Project" count={projectDocs.length} description="Scripts, treatments, outlines, notes, decks, and coverage grouped by project so the library is not dependent on the top project switcher.">
-          <GroupedProjectDocuments groups={groupedProjectDocs} versions={versions} projects={projects} canManageLibrary={canManageLibrary} onDelete={onDelete} onAssignToProject={canManageLibrary ? onAssignToProject : undefined} />
+          <GroupedProjectDocuments groups={groupedProjectDocs} versions={versions} projects={projects} currentUser={currentUser} canDownload={canDownload} canManageLibrary={canManageLibrary} onDelete={onDelete} />
         </ScriptLibraryPanel>
       ) : null}
 
       {effectiveSection === "all" ? (
         <ScriptLibraryPanel title="Library" eyebrow="Manager View" count={allDocs.length} description={canManageLibrary ? "A complete manager view across incoming submissions and active project documents." : "Everything you can access across your assigned projects."}>
-          <DocumentRows docs={allDocs} versions={versions} projects={projects} showInboxMeta={canManageLibrary} onDelete={onDelete} onAssignToProject={canManageLibrary ? onAssignToProject : undefined} assignableProjects={projects} defaultProjectId={scopedProjectId} emptyLabel="No scripts match these filters." />
+          <DocumentRows docs={allDocs} versions={versions} projects={projects} currentUser={currentUser} canDownload={canDownload} showInboxMeta={canManageLibrary} onDelete={onDelete} onAssignToProject={canManageLibrary ? onAssignToProject : undefined} assignableProjects={projects} defaultProjectId={scopedProjectId} emptyLabel="No scripts match these filters." />
         </ScriptLibraryPanel>
       ) : null}
 
@@ -4286,16 +4287,18 @@ function GroupedProjectDocuments({
   groups,
   versions,
   projects,
+  currentUser,
+  canDownload,
   canManageLibrary,
-  onDelete,
-  onAssignToProject
+  onDelete
 }: {
   groups: Array<{ project: HammerProject; docs: HammerDocument[] }>;
   versions: HammerDocumentVersion[];
   projects: HammerProject[];
+  currentUser?: HammerUser;
+  canDownload?: boolean;
   canManageLibrary: boolean;
   onDelete?: (documentId: string) => void;
-  onAssignToProject?: (documentId: string, projectId: string) => void;
 }) {
   if (!groups.length) return <EmptyState label="No project scripts match these filters." />;
   return (
@@ -4309,7 +4312,7 @@ function GroupedProjectDocuments({
             </div>
             <span className="rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-[11px] text-studio-300">{group.docs.length}</span>
           </div>
-          <DocumentRows docs={group.docs} versions={versions} projects={projects} omitProject showInboxMeta={canManageLibrary} onDelete={onDelete} onAssignToProject={onAssignToProject} assignableProjects={projects} defaultProjectId={group.project.id} emptyLabel={`No scripts for ${group.project.title} match these filters.`} />
+          <DocumentRows docs={group.docs} versions={versions} projects={projects} currentUser={currentUser} canDownload={canDownload} omitProject showInboxMeta={canManageLibrary} onDelete={onDelete} assignableProjects={projects} defaultProjectId={group.project.id} emptyLabel={`No scripts for ${group.project.title} match these filters.`} />
         </div>
       ))}
     </div>
@@ -4907,6 +4910,8 @@ function DocumentRows({
   docs,
   versions = hammerVersions,
   projects = hammerProjects,
+  currentUser,
+  canDownload = false,
   omitProject = false,
   showInboxMeta = false,
   onDelete,
@@ -4918,6 +4923,8 @@ function DocumentRows({
   docs: HammerDocument[];
   versions?: HammerDocumentVersion[];
   projects?: HammerProject[];
+  currentUser?: HammerUser;
+  canDownload?: boolean;
   omitProject?: boolean;
   showInboxMeta?: boolean;
   onDelete?: (documentId: string) => Promise<void> | void;
@@ -4970,8 +4977,7 @@ function DocumentRows({
             {pagedDocs.map((doc) => {
             const version = currentVersionFor(doc.id, docs, versions);
             const selectedProjectId = assignmentDrafts[doc.id] ?? "";
-            const canMoveDocument = Boolean(onAssignToProject && assignableProjects.length);
-            const moveLabel = doc.projectId ? "Move" : "Assign";
+            const canAssignIncomingDocument = Boolean(onAssignToProject && assignableProjects.length && !doc.projectId);
             return (
               <tr key={doc.id} className="text-studio-200">
                 <td className="py-2.5 font-semibold"><Link href={`/scripts/${doc.id}`}>{doc.title}</Link></td>
@@ -4982,7 +4988,14 @@ function DocumentRows({
                 <td>{doc.writerName ?? userName(doc.createdById)}</td>
                 <td>{doc.updatedAt}</td>
                 <td className="space-x-1.5">
-                  {canMoveDocument ? (
+                  {canDownload && currentUser && version ? (
+                    <DownloadFileLink fileName={version.fileName} dataUrl={version.dataUrl} fallbackText={version.extractedText} resourceType="documentVersion" resourceId={version.id} currentUser={currentUser} compact />
+                  ) : canDownload ? (
+                    <span className="inline-flex rounded border border-white/10 bg-white/[0.025] px-1.5 py-1 text-[11px] font-semibold text-studio-500" title="No uploaded file version is attached to this document yet.">
+                      No file
+                    </span>
+                  ) : null}
+                  {canAssignIncomingDocument ? (
                     <span className="inline-flex items-center gap-1 align-middle">
                       <select
                         aria-label={`Project for ${doc.title}`}
@@ -4993,7 +5006,7 @@ function DocumentRows({
                         <option value="">Select project</option>
                         {assignableProjects.map((project) => <option key={project.id} value={project.id}>{project.title}</option>)}
                       </select>
-                      <button type="button" disabled={!selectedProjectId || selectedProjectId === doc.projectId} onClick={() => selectedProjectId && onAssignToProject?.(doc.id, selectedProjectId)} className="rounded border border-emerald-400/25 bg-emerald-400/5 px-1.5 py-1 text-[11px] font-semibold text-emerald-300 hover:border-emerald-300/50 hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-40">{moveLabel}</button>
+                      <button type="button" disabled={!selectedProjectId} onClick={() => selectedProjectId && onAssignToProject?.(doc.id, selectedProjectId)} className="rounded border border-emerald-400/25 bg-emerald-400/5 px-1.5 py-1 text-[11px] font-semibold text-emerald-300 hover:border-emerald-300/50 hover:text-emerald-200 disabled:cursor-not-allowed disabled:opacity-40">Assign</button>
                     </span>
                   ) : null}
                   {onDelete ? (
@@ -11664,8 +11677,14 @@ function DownloadFileLink({
   const [open, setOpen] = useState(false);
   const [includeIp, setIncludeIp] = useState(true);
   const [message, setMessage] = useState("");
+  const [mounted, setMounted] = useState(false);
   const href = dataUrl || textDownloadUrl(fallbackText);
   const hasDownloadSource = Boolean(href || (resourceType && resourceId));
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   if (!hasDownloadSource) return null;
 
   async function downloadFile(watermark: boolean) {
@@ -11694,6 +11713,41 @@ function DownloadFileLink({
     }
   }
 
+  const dialog = open && mounted ? createPortal(
+    <div className="fixed inset-0 z-[140] grid place-items-center bg-studio-950/75 p-4 backdrop-blur-sm" onClick={() => setOpen(false)}>
+      <div className="modal-card w-full max-w-md rounded-xl border border-white/12 bg-studio-950 p-4 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="font-display text-[11px] uppercase tracking-[0.16em] text-amberline">Secure Download</p>
+            <h3 className="mt-1 text-lg font-semibold text-studio-100">{fileName}</h3>
+          </div>
+          <button type="button" onClick={() => setOpen(false)} className="rounded-md border border-white/10 p-1.5 text-studio-400 hover:text-studio-100" aria-label="Close download options">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <p className="mt-3 text-[13px] leading-5 text-studio-300">
+          Watermarked downloads stamp the file with the signed-in user, UTC date/time, and optionally the requester IP. Use original only when the reviewer will not accept a watermark.
+        </p>
+        <label className="mt-3 flex items-center gap-2 text-[13px] text-studio-300">
+          <input type="checkbox" checked={includeIp} onChange={(event) => setIncludeIp(event.target.checked)} className="h-4 w-4 accent-amberline" />
+          Include IP address when available
+        </label>
+        {message ? <p className="mt-3 rounded border border-rose-400/25 bg-rose-500/10 px-2.5 py-2 text-xs text-rose-200">{message}</p> : null}
+        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+          <button type="button" onClick={() => downloadFile(true)} className="inline-flex items-center justify-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 transition hover:bg-emerald-300">
+            <ShieldCheck className="h-4 w-4" />
+            Download Watermarked
+          </button>
+          <button type="button" onClick={() => downloadFile(false)} className="inline-flex items-center justify-center gap-1.5 rounded-md border border-white/12 bg-white/[0.025] px-3 py-2 text-sm font-semibold text-studio-200 transition hover:border-white/30">
+            <Download className="h-4 w-4" />
+            Download Original
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  ) : null;
+
   return (
     <>
       <button
@@ -11711,39 +11765,7 @@ function DownloadFileLink({
         <Download className="h-3 w-3" />
         {compact ? null : "Download"}
       </button>
-      {open ? (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => setOpen(false)}>
-          <div className="w-full max-w-md rounded-xl border border-white/12 bg-studio-950 p-4 shadow-2xl" onClick={(event) => event.stopPropagation()}>
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="font-display text-[11px] uppercase tracking-[0.16em] text-amberline">Secure Download</p>
-                <h3 className="mt-1 text-lg font-semibold text-studio-100">{fileName}</h3>
-              </div>
-              <button type="button" onClick={() => setOpen(false)} className="rounded-md border border-white/10 p-1.5 text-studio-400 hover:text-studio-100" aria-label="Close download options">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <p className="mt-3 text-[13px] leading-5 text-studio-300">
-              Watermarked downloads stamp the file with the signed-in user, UTC date/time, and optionally the requester IP. Use original only when the reviewer will not accept a watermark.
-            </p>
-            <label className="mt-3 flex items-center gap-2 text-[13px] text-studio-300">
-              <input type="checkbox" checked={includeIp} onChange={(event) => setIncludeIp(event.target.checked)} className="h-4 w-4 accent-amberline" />
-              Include IP address when available
-            </label>
-            {message ? <p className="mt-3 rounded border border-rose-400/25 bg-rose-500/10 px-2.5 py-2 text-xs text-rose-200">{message}</p> : null}
-            <div className="mt-4 grid gap-2 sm:grid-cols-2">
-              <button type="button" onClick={() => downloadFile(true)} className="inline-flex items-center justify-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 transition hover:bg-emerald-300">
-                <ShieldCheck className="h-4 w-4" />
-                Download Watermarked
-              </button>
-              <button type="button" onClick={() => downloadFile(false)} className="inline-flex items-center justify-center gap-1.5 rounded-md border border-white/12 bg-white/[0.025] px-3 py-2 text-sm font-semibold text-studio-200 transition hover:border-white/30">
-                <Download className="h-4 w-4" />
-                Download Original
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {dialog}
     </>
   );
 }

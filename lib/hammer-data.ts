@@ -5828,6 +5828,20 @@ export const hammerVersions: HammerDocumentVersion[] = [
     createdAt: "2026-06-21",
     notes: "Treatment under first read.",
     extractedText: "A former stunt coordinator builds impossible paper kites to deliver messages across a divided city."
+  },
+  {
+    id: "ver-business-1",
+    documentId: "doc-hammer-business",
+    versionNumber: 1,
+    status: "APPROVED",
+    fileName: "greenlight-deck-notes.md",
+    fileType: "text/markdown",
+    fileSize: 16420,
+    storagePath: "projects/project-hammer/documents/doc-hammer-business/versions/ver-business-1/greenlight-deck-notes.md",
+    uploadedById: "user-producer",
+    createdAt: "2026-06-12",
+    notes: "Greenlight deck notes for executive review.",
+    extractedText: "# Greenlight Deck Notes\n\nPackage current script, visual references, and open risks for the next studio status review."
   }
 ];
 
