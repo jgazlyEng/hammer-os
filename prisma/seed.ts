@@ -13,8 +13,25 @@ function toProjectRole(role: HammerRole) {
   if (role === "ADMIN") return "owner";
   if (role === "EXECUTIVE") return "executive";
   if (role === "PRODUCER") return "producer";
-  if (role === "DEVELOPMENT" || role === "ARTIST" || role === "WRITER") return "department_lead";
+  if (role === "ARTIST") return "artist";
+  if (role === "STANDARD" || role === "DEVELOPMENT" || role === "WRITER" || role === "CONTRACTOR") return "standard";
   return "viewer";
+}
+
+function toAppRole(role: HammerRole) {
+  if (role === "ADMIN") return "admin";
+  if (role === "EXECUTIVE") return "executive";
+  if (role === "PRODUCER") return "producer";
+  if (role === "ARTIST") return "artist";
+  return "standard";
+}
+
+function toUserRole(role: HammerRole) {
+  if (role === "ADMIN") return "ADMIN";
+  if (role === "EXECUTIVE") return "EXECUTIVE";
+  if (role === "PRODUCER") return "PRODUCER";
+  if (role === "ARTIST") return "ARTIST";
+  return "STANDARD";
 }
 
 function readProjectLeadCsv() {
@@ -140,17 +157,15 @@ async function main() {
       where: { email: user.email },
       update: {
         name: user.name,
-        googleId: user.googleId,
-        role: user.role,
-        appRole: user.role === "ADMIN" ? "admin" : user.role === "EXECUTIVE" ? "executive" : "producer"
+        googleId: user.googleId
       },
       create: {
         id: user.id,
         email: user.email,
         name: user.name,
         googleId: user.googleId,
-        role: user.role,
-        appRole: user.role === "ADMIN" ? "admin" : user.role === "EXECUTIVE" ? "executive" : "producer"
+        role: toUserRole(user.role),
+        appRole: toAppRole(user.role)
       }
     });
   }

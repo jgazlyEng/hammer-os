@@ -87,5 +87,5 @@ function optionalDate(value: unknown) {
 }
 
 function optionalProjectRole(value: unknown) {
-  return value === "owner" || value === "executive" || value === "producer" || value === "department_lead" || value === "viewer" ? value : undefined;
+  return value === "owner" || value === "executive" || value === "producer" || value === "artist" || value === "standard" || value === "department_lead" || value === "viewer" ? value : undefined;
 }

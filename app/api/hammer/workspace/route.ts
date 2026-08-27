@@ -17,11 +17,13 @@ export async function GET(request: Request) {
     const projectIds = Object.keys(auth.user.projectRoles);
     const projectWhere = canViewAllProjects(auth.user.appRole) ? { deletedAt: null } : { deletedAt: null, memberships: { some: { userId: auth.user.id } } };
     const documentWhere = canSeeLibrary ? { deletedAt: null } : { deletedAt: null, projectId: { in: projectIds } };
+    const prospectWhere = canSeeLibrary ? { deletedAt: null } : { deletedAt: null, id: "__no_shared_prospects__" };
+    const contactWhere = canSeeLibrary ? { deletedAt: null } : { deletedAt: null, id: "__no_shared_contacts__" };
 
     const [projects, projectLeads, prospectAssets, documents, versions, supportingDocuments, assets, tasks, contacts, contactRelationships, outreachEngagements, users, approvals, comments, scriptCollections, scriptCollectionItems, slateCollections, slateCollectionItems] = await Promise.all([
       prisma.project.findMany({ where: projectWhere, orderBy: { updatedAt: "desc" } }),
-      prisma.prospect.findMany({ where: { deletedAt: null }, orderBy: [{ promotedProjectId: "asc" }, { updatedAt: "desc" }] }),
-      prisma.prospectAsset.findMany({ where: { deletedAt: null, prospect: { deletedAt: null } }, orderBy: { createdAt: "desc" } }),
+      prisma.prospect.findMany({ where: prospectWhere, orderBy: [{ promotedProjectId: "asc" }, { updatedAt: "desc" }] }),
+      prisma.prospectAsset.findMany({ where: { deletedAt: null, prospect: prospectWhere }, orderBy: { createdAt: "desc" } }),
       prisma.document.findMany({ where: documentWhere, include: { tags: { orderBy: [{ key: "asc" }, { value: "asc" }] } }, orderBy: { updatedAt: "desc" } }),
       prisma.documentVersion.findMany({
         where: { document: documentWhere },
@@ -48,9 +50,9 @@ export async function GET(request: Request) {
         include: { subtasks: { where: { deletedAt: null }, orderBy: [{ completed: "asc" }, { createdAt: "asc" }] } },
         orderBy: [{ sortOrder: "asc" }, { updatedAt: "desc" }]
       }),
-      prisma.contact.findMany({ where: { deletedAt: null }, orderBy: { updatedAt: "desc" } }),
-      prisma.contactRelationship.findMany({ orderBy: { createdAt: "desc" } }),
-      prisma.outreachEngagement.findMany({ where: { contact: { deletedAt: null } }, orderBy: [{ engagementDate: "desc" }, { createdAt: "desc" }] }),
+      prisma.contact.findMany({ where: contactWhere, orderBy: { updatedAt: "desc" } }),
+      prisma.contactRelationship.findMany({ where: canSeeLibrary ? undefined : { fromContactId: "__no_shared_contacts__" }, orderBy: { createdAt: "desc" } }),
+      prisma.outreachEngagement.findMany({ where: { contact: contactWhere }, orderBy: [{ engagementDate: "desc" }, { createdAt: "desc" }] }),
       prisma.user.findMany({ orderBy: { name: "asc" } }),
       prisma.hammerApproval.findMany({ where: canSeeLibrary ? undefined : { projectId: { in: projectIds } }, orderBy: { createdAt: "desc" } }),
       prisma.comment.findMany({ where: canSeeLibrary ? undefined : { projectId: { in: projectIds } }, orderBy: { createdAt: "desc" } }),
@@ -65,23 +67,13 @@ export async function GET(request: Request) {
       prisma.slateCollection.findMany({
         where: canSeeLibrary ? undefined : {
           items: {
-            some: {
-              OR: [
-                { project: projectWhere },
-                { prospectId: { not: null } }
-              ]
-            }
+            some: { project: projectWhere }
           }
         },
         orderBy: { updatedAt: "desc" }
       }),
       prisma.slateCollectionItem.findMany({
-        where: canSeeLibrary ? undefined : {
-          OR: [
-            { project: projectWhere },
-            { prospectId: { not: null } }
-          ]
-        },
+        where: canSeeLibrary ? undefined : { project: projectWhere },
         orderBy: [{ sortOrder: "asc" }, { addedAt: "desc" }]
       })
     ]);
@@ -1589,12 +1581,14 @@ function slateCollectionItemTypeField(value: unknown): SlateCollectionItemType {
 const slateCollectionItemTypes: SlateCollectionItemType[] = ["PROJECT", "PROSPECT"];
 
 function appRoleField(value: unknown) {
-  return value === "admin" || value === "executive" || value === "producer" || value === "department_lead" ? value : "producer";
+  return value === "admin" || value === "executive" || value === "producer" || value === "artist" || value === "standard" || value === "department_lead" ? value : "standard";
 }
 
 function userRoleForAppRole(value: string): UserRole {
   if (value === "admin") return "ADMIN";
   if (value === "executive") return "EXECUTIVE";
+  if (value === "artist") return "ARTIST";
+  if (value === "standard") return "STANDARD";
   if (value === "department_lead") return "DEVELOPMENT";
   return "PRODUCER";
 }
@@ -1603,6 +1597,8 @@ function hammerRoleForAppRole(value?: string) {
   if (value === "admin") return "ADMIN";
   if (value === "executive") return "EXECUTIVE";
   if (value === "producer") return "PRODUCER";
+  if (value === "artist") return "ARTIST";
+  if (value === "standard") return "STANDARD";
   if (value === "department_lead") return "DEVELOPMENT";
   return undefined;
 }

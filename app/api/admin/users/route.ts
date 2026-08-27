@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import type { AppRole } from "@prisma/client";
+import type { AppRole, UserRole } from "@prisma/client";
 import { hashPassword, isDatabaseConfigured, requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
@@ -80,6 +80,7 @@ export async function POST(request: Request) {
         email,
         name,
         appRole,
+        role: userRoleForAppRole(appRole),
         passwordHash: hashPassword(password)
       },
       select: {
@@ -115,5 +116,14 @@ function stringField(value: unknown) {
 }
 
 function appRoleField(value: unknown): AppRole {
-  return value === "admin" || value === "executive" || value === "producer" || value === "department_lead" ? value : "producer";
+  return value === "admin" || value === "executive" || value === "producer" || value === "artist" || value === "standard" || value === "department_lead" ? value : "standard";
+}
+
+function userRoleForAppRole(value: AppRole): UserRole {
+  if (value === "admin") return "ADMIN";
+  if (value === "executive") return "EXECUTIVE";
+  if (value === "producer") return "PRODUCER";
+  if (value === "artist") return "ARTIST";
+  if (value === "standard") return "STANDARD";
+  return "DEVELOPMENT";
 }

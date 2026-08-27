@@ -1,6 +1,7 @@
 import type { HammerRole } from "@/lib/hammer-data";
 
 const roleRank: Record<HammerRole, number> = {
+  STANDARD: 1,
   VIEWER: 1,
   CONTRACTOR: 2,
   ARTIST: 3,
@@ -20,11 +21,11 @@ export function canViewExecutive(role: HammerRole) {
 }
 
 export function canUploadDocuments(role: HammerRole) {
-  return roleRank[role] >= roleRank.WRITER && role !== "VIEWER";
+  return roleRank[role] >= roleRank.ARTIST && role !== "VIEWER" && role !== "STANDARD";
 }
 
 export function canRunBreakdown(role: HammerRole) {
-  return ["ADMIN", "PRODUCER", "DEVELOPMENT"].includes(role);
+  return ["ADMIN", "PRODUCER", "EXECUTIVE"].includes(role);
 }
 
 export function canApprove(role: HammerRole) {
@@ -32,5 +33,5 @@ export function canApprove(role: HammerRole) {
 }
 
 export function canUploadAssets(role: HammerRole) {
-  return ["ADMIN", "PRODUCER", "DEVELOPMENT", "ARTIST"].includes(role);
+  return ["ADMIN", "PRODUCER", "ARTIST"].includes(role);
 }

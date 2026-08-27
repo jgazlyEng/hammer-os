@@ -107,7 +107,7 @@ const HAMMER_LOCAL_OUTREACH_ENGAGEMENTS_STORAGE_KEY = "hammer:outreach-engagemen
 
 type HammerView = "dashboard" | "projects" | "prospects" | "collections" | "notes" | "project-new" | "project-detail" | "project-documents" | "project-assets" | "scripts" | "script-detail" | "script-versions" | "script-diff" | "script-breakdown" | "assets" | "asset-detail" | "tasks" | "contacts" | "reviews" | "studio-status" | "reports" | "executive" | "admin-users" | "account";
 type ScriptLibrarySection = "inbox" | "projects" | "all";
-type AppRole = "admin" | "executive" | "producer" | "department_lead";
+type AppRole = "admin" | "executive" | "producer" | "artist" | "standard" | "department_lead";
 
 interface DocumentUploadResponse {
   document?: HammerDocument;
@@ -389,7 +389,7 @@ function productionFallbackUser(): HammerUser {
     email: "",
     name: "Loading",
     googleId: "",
-    role: "VIEWER"
+    role: "STANDARD"
   };
 }
 
@@ -398,11 +398,12 @@ function hammerRoleForSessionRole(role?: string): HammerUser["role"] {
   if (normalized === "admin" || normalized === "administrator") return "ADMIN";
   if (normalized === "executive" || normalized === "exec") return "EXECUTIVE";
   if (normalized === "producer") return "PRODUCER";
-  if (normalized === "department_lead" || normalized === "development") return "DEVELOPMENT";
   if (normalized === "artist") return "ARTIST";
+  if (normalized === "standard") return "STANDARD";
+  if (normalized === "department_lead" || normalized === "development") return "DEVELOPMENT";
   if (normalized === "writer") return "WRITER";
   if (normalized === "contractor") return "CONTRACTOR";
-  return "VIEWER";
+  return "STANDARD";
 }
 
 export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: HammerView; id?: string; selectedTaskId?: string; scriptSection?: string }) {
@@ -11866,19 +11867,23 @@ function canManageScriptLibrary(role?: string) {
 }
 
 function canDownloadFiles(role?: string) {
-  return isManagerRole(role);
+  const normalizedRole = role?.toUpperCase();
+  return isManagerRole(role) || normalizedRole === "ARTIST";
 }
 
 const appRoleOptions: { value: AppRole; label: string }[] = [
   { value: "admin", label: "Admin" },
-  { value: "executive", label: "Executive" },
   { value: "producer", label: "Producer" },
-  { value: "department_lead", label: "Department Lead" }
+  { value: "executive", label: "Executive" },
+  { value: "artist", label: "Artist" },
+  { value: "standard", label: "Standard" }
 ];
 
 function hammerRoleForAppRole(role: AppRole): HammerUser["role"] {
   if (role === "admin") return "ADMIN";
   if (role === "executive") return "EXECUTIVE";
+  if (role === "artist") return "ARTIST";
+  if (role === "standard") return "STANDARD";
   if (role === "department_lead") return "DEVELOPMENT";
   return "PRODUCER";
 }
@@ -11887,7 +11892,8 @@ function appRoleForHammerRole(role: HammerUser["role"]): AppRole {
   if (role === "ADMIN") return "admin";
   if (role === "EXECUTIVE") return "executive";
   if (role === "PRODUCER") return "producer";
-  return "department_lead";
+  if (role === "ARTIST") return "artist";
+  return "standard";
 }
 
 function canViewAllProjects(role?: string) {

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import type { AppRole, Prisma } from "@prisma/client";
+import type { AppRole, Prisma, UserRole } from "@prisma/client";
 import { hashPassword, isDatabaseConfigured, requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
@@ -15,10 +15,12 @@ export async function PATCH(request: Request, { params }: { params: { id: string
 
   const body = await request.json();
   const password = typeof body.password === "string" ? body.password : "";
+  const appRole = optionalAppRole(body.appRole);
   const data: Prisma.UserUpdateInput = {
     name: optionalString(body.name),
     email: optionalString(body.email)?.toLowerCase(),
-    appRole: optionalAppRole(body.appRole),
+    appRole,
+    role: appRole ? userRoleForAppRole(appRole) : undefined,
     passwordHash: password.length ? hashPassword(password) : undefined
   };
 
@@ -98,5 +100,14 @@ function optionalString(value: unknown) {
 }
 
 function optionalAppRole(value: unknown): AppRole | undefined {
-  return value === "admin" || value === "executive" || value === "producer" || value === "department_lead" ? value : undefined;
+  return value === "admin" || value === "executive" || value === "producer" || value === "artist" || value === "standard" || value === "department_lead" ? value : undefined;
+}
+
+function userRoleForAppRole(value: AppRole): UserRole {
+  if (value === "admin") return "ADMIN";
+  if (value === "executive") return "EXECUTIVE";
+  if (value === "producer") return "PRODUCER";
+  if (value === "artist") return "ARTIST";
+  if (value === "standard") return "STANDARD";
+  return "DEVELOPMENT";
 }

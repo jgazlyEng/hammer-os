@@ -6,8 +6,8 @@ import { EmptyState, Panel, SectionHeader } from "@/components/ui";
 import { projects as seededProjects } from "@/lib/mock-data";
 import type { Project } from "@/lib/types";
 
-type AppRole = "admin" | "executive" | "producer" | "department_lead";
-type ProjectRole = "owner" | "executive" | "producer" | "department_lead" | "viewer";
+type AppRole = "admin" | "executive" | "producer" | "artist" | "standard" | "department_lead";
+type ProjectRole = "owner" | "executive" | "producer" | "artist" | "standard" | "department_lead" | "viewer";
 
 interface AdminMembership {
   id: string;
@@ -47,16 +47,18 @@ const emptyDraft: UserDraft = {
 
 const appRoles: Array<{ value: AppRole; label: string; detail: string }> = [
   { value: "admin", label: "Admin", detail: "Full system and user management access." },
-  { value: "executive", label: "Executive", detail: "Read executive dashboards and reports." },
-  { value: "producer", label: "Producer", detail: "Manage projects, scripts, changes, and approvals." },
-  { value: "department_lead", label: "Department Lead", detail: "Review approvals and department impacts." }
+  { value: "producer", label: "Producer", detail: "View, download, and manage all studio materials." },
+  { value: "executive", label: "Executive", detail: "View and download all studio materials and status views." },
+  { value: "artist", label: "Artist", detail: "View and download assigned project materials only." },
+  { value: "standard", label: "Standard", detail: "View only items explicitly shared through access assignments." }
 ];
 
 const projectRoles: Array<{ value: ProjectRole; label: string }> = [
   { value: "owner", label: "Owner" },
   { value: "producer", label: "Producer" },
   { value: "executive", label: "Executive" },
-  { value: "department_lead", label: "Department Lead" },
+  { value: "artist", label: "Artist" },
+  { value: "standard", label: "Standard" },
   { value: "viewer", label: "Viewer" }
 ];
 
@@ -80,10 +82,11 @@ export function AdminWorkspace() {
   const roleCounts = useMemo(() => {
     return users.reduce<Record<AppRole, number>>(
       (counts, user) => {
-        counts[user.appRole] += 1;
+        const role = user.appRole === "department_lead" ? "artist" : user.appRole;
+        counts[role] += 1;
         return counts;
       },
-      { admin: 0, executive: 0, producer: 0, department_lead: 0 }
+      { admin: 0, executive: 0, producer: 0, artist: 0, standard: 0, department_lead: 0 }
     );
   }, [users]);
 
@@ -249,11 +252,12 @@ export function AdminWorkspace() {
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-5">
         <AdminMetric label="Admins" value={roleCounts.admin} />
-        <AdminMetric label="Executives" value={roleCounts.executive} />
         <AdminMetric label="Producers" value={roleCounts.producer} />
-        <AdminMetric label="Department Leads" value={roleCounts.department_lead} />
+        <AdminMetric label="Executives" value={roleCounts.executive} />
+        <AdminMetric label="Artists" value={roleCounts.artist} />
+        <AdminMetric label="Standard" value={roleCounts.standard} />
       </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[0.85fr_1.15fr]">
@@ -345,7 +349,7 @@ export function AdminWorkspace() {
               </button>
               <div className="mt-4 grid gap-4 md:grid-cols-2">
                 <Field label="Global Role">
-                  <select className="field" value={selectedUser.appRole} onChange={(event) => updateUser(selectedUser, { appRole: event.target.value as AppRole })}>
+                  <select className="field" value={normalizedAppRole(selectedUser.appRole)} onChange={(event) => updateUser(selectedUser, { appRole: event.target.value as AppRole })}>
                     {appRoles.map((role) => <option key={role.value} value={role.value}>{role.label}</option>)}
                   </select>
                 </Field>
@@ -440,11 +444,17 @@ function AdminMetric({ label, value }: { label: string; value: number }) {
 }
 
 function RoleBadge({ role }: { role: AppRole }) {
-  const label = role.replace("_", " ");
-  const tone = role === "admin" ? "border-red-300/45 bg-red-500/20 text-red-200" : role === "producer" ? "border-amberline/35 bg-amberline/10 text-amberline" : "border-signal/35 bg-signal/10 text-signal";
+  const normalizedRole = normalizedAppRole(role);
+  const label = normalizedRole.replace("_", " ");
+  const tone = normalizedRole === "admin" ? "border-red-300/45 bg-red-500/20 text-red-200" : normalizedRole === "producer" ? "border-amberline/35 bg-amberline/10 text-amberline" : "border-signal/35 bg-signal/10 text-signal";
   return <span className={`inline-flex rounded border px-2 py-1 font-display text-[11px] uppercase ${tone}`}>{label}</span>;
 }
 
 function labelForProjectRole(role: ProjectRole) {
-  return role.split("_").map((part) => part[0]?.toUpperCase() + part.slice(1)).join(" ");
+  const normalizedRole = role === "department_lead" ? "artist" : role;
+  return normalizedRole.split("_").map((part) => part[0]?.toUpperCase() + part.slice(1)).join(" ");
+}
+
+function normalizedAppRole(role: AppRole) {
+  return role === "department_lead" ? "artist" : role;
 }

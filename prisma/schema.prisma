@@ -16,6 +16,7 @@ enum UserRole {
   ARTIST
   CONTRACTOR
   VIEWER
+  STANDARD
 }
 
 enum ProjectStatus {
@@ -282,6 +283,8 @@ enum AppRole {
   executive
   producer
   department_lead
+  artist
+  standard
 }
 
 enum ProjectRole {
@@ -289,6 +292,8 @@ enum ProjectRole {
   executive
   producer
   department_lead
+  artist
+  standard
   viewer
 }
 

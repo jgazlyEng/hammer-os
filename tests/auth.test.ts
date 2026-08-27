@@ -26,20 +26,36 @@ describe("auth helpers", () => {
     assert.equal(decoded?.projectRoles.project_a, "producer");
   });
 
-  it("enforces project role boundaries", () => {
-    const departmentLead: AuthenticatedUser = {
+  it("enforces assigned-project boundaries for artists", () => {
+    const artist: AuthenticatedUser = {
       id: "user_2",
-      email: "lead@example.com",
-      name: "Department Lead",
-      appRole: "department_lead",
-      projectRoles: { project_a: "department_lead" }
+      email: "artist@example.com",
+      name: "Artist",
+      appRole: "artist",
+      projectRoles: { project_a: "artist" }
     };
 
-    assert.equal(userCanAccessProject(departmentLead, "project_a"), true);
-    assert.equal(userCanAccessProject(departmentLead, "project_b"), false);
-    assert.equal(userCanApprove(departmentLead, "project_a"), true);
-    assert.equal(userCanManageProject(departmentLead, "project_a"), false);
-    assert.equal(userCanUploadScripts(departmentLead, "project_a"), false);
+    assert.equal(userCanAccessProject(artist, "project_a"), true);
+    assert.equal(userCanAccessProject(artist, "project_b"), false);
+    assert.equal(userCanApprove(artist, "project_a"), false);
+    assert.equal(userCanManageProject(artist, "project_a"), false);
+    assert.equal(userCanUploadScripts(artist, "project_a"), false);
+  });
+
+  it("keeps standard users limited to explicitly shared projects", () => {
+    const standard: AuthenticatedUser = {
+      id: "user_3",
+      email: "standard@example.com",
+      name: "Standard User",
+      appRole: "standard",
+      projectRoles: { project_a: "standard" }
+    };
+
+    assert.equal(userCanAccessProject(standard, "project_a"), true);
+    assert.equal(userCanAccessProject(standard, "project_b"), false);
+    assert.equal(userCanManageProject(standard, "project_a"), false);
+    assert.equal(userCanApprove(standard, "project_a"), false);
+    assert.equal(userCanUploadScripts(standard, "project_a"), false);
   });
 
   it("allows admins to cross project boundaries", () => {
