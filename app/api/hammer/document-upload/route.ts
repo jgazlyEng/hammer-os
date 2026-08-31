@@ -11,6 +11,14 @@ export const maxDuration = 300;
 
 const documentTypes: DocumentType[] = ["SCRIPT", "TREATMENT", "OUTLINE", "NOTES", "COVERAGE", "BUSINESS_DOCUMENT"];
 const MAX_UPLOAD_BYTES = 250 * 1024 * 1024;
+const UPLOAD_POLICY_KEY = "upload.policy";
+const defaultUploadPolicy = {
+  maxUploadMb: 250,
+  allowedExtensions: [".pdf", ".fdx", ".txt", ".md"],
+  allowDocx: false,
+  parseOnUpload: true,
+  warnOnEmptyText: true
+};
 
 export async function POST(request: Request) {
   const requestId = crypto.randomUUID();
@@ -25,9 +33,11 @@ export async function POST(request: Request) {
     const formData = await request.formData();
     const file = formData.get("file");
     if (!(file instanceof File)) return NextResponse.json({ error: "Choose a PDF, FDX, TXT, or MD file first." }, { status: 400 });
-    if (file.size > MAX_UPLOAD_BYTES) return NextResponse.json({ error: "Uploads must be 250MB or smaller." }, { status: 400 });
-    if (!isAllowedScriptUploadFile(file)) {
-      return NextResponse.json({ error: "DOCX script parsing is disabled for now. Upload PDF, FDX, TXT, or MD instead." }, { status: 400 });
+    const uploadPolicy = await getUploadPolicy();
+    const maxUploadBytes = Math.min(uploadPolicy.maxUploadMb * 1024 * 1024, MAX_UPLOAD_BYTES);
+    if (file.size > maxUploadBytes) return NextResponse.json({ error: `Uploads must be ${Math.round(maxUploadBytes / 1024 / 1024)}MB or smaller.` }, { status: 400 });
+    if (!isAllowedScriptUploadFile(file, uploadPolicy)) {
+      return NextResponse.json({ error: `Unsupported file type. Upload ${uploadPolicy.allowedExtensions.join(", ")}${uploadPolicy.allowDocx ? ", or .docx" : ""}.` }, { status: 400 });
     }
 
     const uploader = await prisma.user.findUnique({ where: { id: auth.user.id }, select: { id: true } });
@@ -86,6 +96,9 @@ export async function POST(request: Request) {
 
     uploadStage = "saving document metadata";
     const result = await prisma.$transaction(async (tx) => {
+      const queuedNote = uploadPolicy.parseOnUpload
+        ? "Text extraction is queued. The original file has been stored and GreenLight will update this version when parsing finishes."
+        : "Text extraction is disabled by the current upload policy. The original file has been stored.";
       const document = existingDocument ?? await tx.document.create({
         data: {
           projectId,
@@ -111,18 +124,19 @@ export async function POST(request: Request) {
           storagePath: storedUpload.storagePath,
           extractedText: "",
           uploadedById: auth.user.id,
-          notes: combineUploadNotes(initialNotes, "Text extraction is queued. The original file has been stored and GreenLight will update this version when parsing finishes.")
+          notes: combineUploadNotes(initialNotes, queuedNote)
         }
       });
 
       await tx.uploadJob.update({
         where: { id: uploadJobId },
         data: {
-          status: "PARSING",
-          stage: "parsing",
+          status: uploadPolicy.parseOnUpload ? "PARSING" : "COMPLETE",
+          stage: uploadPolicy.parseOnUpload ? "parsing" : "complete",
           documentId: document.id,
           documentVersionId: version.id,
           storagePath: storedUpload.storagePath,
+          completedAt: uploadPolicy.parseOnUpload ? undefined : now,
           detailJson: { documentId: document.id, versionId: version.id, versionNumber: nextVersionNumber, fileName, projectId: projectId ?? null } as Prisma.InputJsonValue
         }
       });
@@ -146,32 +160,37 @@ export async function POST(request: Request) {
           action: existingDocument ? "document.version_uploaded" : "document.created",
           entityType: "Document",
           entityId: document.id,
-          detailJson: { fileName, projectId, versionNumber: nextVersionNumber, storagePath: storedUpload.storagePath, extractionQueued: true } as Prisma.InputJsonValue
+          detailJson: { fileName, projectId, versionNumber: nextVersionNumber, storagePath: storedUpload.storagePath, extractionQueued: uploadPolicy.parseOnUpload } as Prisma.InputJsonValue
         }
       });
 
       return { document: updatedDocument, version };
     });
 
-    void extractAndPersistUploadText({
-      requestId,
-      versionId: result.version.id,
-      documentId: result.document.id,
-      uploadJobId,
-      fileName,
-      fileType,
-      bytes,
-      initialNotes,
-      actorUserId: auth.user.id,
-      actor: auth.user.email
-    });
+    if (uploadPolicy.parseOnUpload) {
+      void extractAndPersistUploadText({
+        requestId,
+        versionId: result.version.id,
+        documentId: result.document.id,
+        uploadJobId,
+        fileName,
+        fileType,
+        bytes,
+        initialNotes,
+        warnOnEmptyText: uploadPolicy.warnOnEmptyText,
+        actorUserId: auth.user.id,
+        actor: auth.user.email
+      });
+    }
 
     return NextResponse.json({
       document: toDocument(result.document),
       version: toVersion(result.version),
       uploadJob: toUploadJob(await prisma.uploadJob.findUnique({ where: { id: uploadJobId } })),
-      warning: "Upload saved. Text extraction is running in the background; refresh the document in a moment to see parsed text, breakdown, and diff support.",
-      extractionQueued: true
+      warning: uploadPolicy.parseOnUpload
+        ? "Upload saved. Text extraction is running in the background; refresh the document in a moment to see parsed text, breakdown, and diff support."
+        : "Upload saved. Text extraction is disabled by the current upload policy.",
+      extractionQueued: uploadPolicy.parseOnUpload
     }, { status: 201 });
   } catch (error) {
     const detail = uploadErrorMessage(error);
@@ -264,11 +283,12 @@ async function extractAndPersistUploadText(input: {
   fileType: string;
   bytes: Buffer;
   initialNotes?: string;
+  warnOnEmptyText: boolean;
   actorUserId: string;
   actor: string;
 }) {
   try {
-    const extraction = await extractUploadText(input.fileName, input.fileType, input.bytes);
+    const extraction = await extractUploadText(input.fileName, input.fileType, input.bytes, input.warnOnEmptyText);
     const uploadStatus = extraction.warning ? "WARNING" : "COMPLETE";
     await prisma.$transaction(async (tx) => {
       await tx.documentVersion.update({
@@ -334,7 +354,7 @@ async function updateUploadJob(id: string, data: Parameters<typeof prisma.upload
   return prisma.uploadJob.update({ where: { id }, data });
 }
 
-async function extractUploadText(fileName: string, fileType: string, bytes: Buffer) {
+async function extractUploadText(fileName: string, fileType: string, bytes: Buffer, warnOnEmptyText = true) {
   const lowerName = fileName.toLowerCase();
   if (lowerName.endsWith(".pdf") || fileType === "application/pdf") {
     try {
@@ -351,15 +371,66 @@ async function extractUploadText(fileName: string, fileType: string, bytes: Buff
     const text = bytes.toString("utf8").trim();
     return {
       text,
-      warning: text ? undefined : "Uploaded successfully, but the file did not contain readable text. Add a text-based version before running breakdown or diff."
+      warning: text || !warnOnEmptyText ? undefined : "Uploaded successfully, but the file did not contain readable text. Add a text-based version before running breakdown or diff."
+    };
+  }
+  if (lowerName.endsWith(".docx") || fileType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+    return {
+      text: "",
+      warning: warnOnEmptyText ? "DOCX was stored, but DOCX text parsing is disabled for now. Upload PDF, FDX, TXT, or MD for breakdown and diff support." : undefined
     };
   }
   throw new Error("Unsupported file type. Upload PDF, FDX, TXT, or MD.");
 }
 
-function isAllowedScriptUploadFile(file: File) {
+function isAllowedScriptUploadFile(file: File, uploadPolicy: typeof defaultUploadPolicy) {
   const lowerName = file.name.toLowerCase();
-  return lowerName.endsWith(".pdf") || lowerName.endsWith(".fdx") || lowerName.endsWith(".txt") || lowerName.endsWith(".md") || file.type === "application/pdf" || file.type === "text/plain" || file.type === "text/markdown";
+  const allowedExtensions = new Set(uploadPolicy.allowedExtensions.map((extension) => extension.toLowerCase()));
+  if (allowedExtensions.has(".docx") && !uploadPolicy.allowDocx) allowedExtensions.delete(".docx");
+  const extensionAllowed = Array.from(allowedExtensions).some((extension) => lowerName.endsWith(extension));
+  const mimeAllowed =
+    (allowedExtensions.has(".pdf") && file.type === "application/pdf") ||
+    (allowedExtensions.has(".txt") && file.type === "text/plain") ||
+    (allowedExtensions.has(".md") && file.type === "text/markdown") ||
+    (uploadPolicy.allowDocx && file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+  return extensionAllowed || mimeAllowed;
+}
+
+async function getUploadPolicy() {
+  try {
+    const setting = await prisma.appSetting.findUnique({ where: { key: UPLOAD_POLICY_KEY } });
+    return normalizeUploadPolicy(setting?.valueJson);
+  } catch {
+    return defaultUploadPolicy;
+  }
+}
+
+function normalizeUploadPolicy(value: unknown) {
+  const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const extensions = Array.isArray(record.allowedExtensions)
+    ? record.allowedExtensions.filter((item): item is string => typeof item === "string").map(normalizeUploadExtension).filter(Boolean)
+    : typeof record.allowedExtensions === "string"
+      ? record.allowedExtensions.split(/[,\s]+/).map(normalizeUploadExtension).filter(Boolean)
+      : defaultUploadPolicy.allowedExtensions;
+  return {
+    maxUploadMb: clampUploadNumber(record.maxUploadMb, 1, 500, defaultUploadPolicy.maxUploadMb),
+    allowedExtensions: Array.from(new Set(extensions.length ? extensions : defaultUploadPolicy.allowedExtensions)),
+    allowDocx: typeof record.allowDocx === "boolean" ? record.allowDocx : defaultUploadPolicy.allowDocx,
+    parseOnUpload: typeof record.parseOnUpload === "boolean" ? record.parseOnUpload : defaultUploadPolicy.parseOnUpload,
+    warnOnEmptyText: typeof record.warnOnEmptyText === "boolean" ? record.warnOnEmptyText : defaultUploadPolicy.warnOnEmptyText
+  };
+}
+
+function normalizeUploadExtension(value: string) {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return "";
+  return normalized.startsWith(".") ? normalized : `.${normalized}`;
+}
+
+function clampUploadNumber(value: unknown, min: number, max: number, fallback: number) {
+  const number = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(number)));
 }
 
 function combineUploadNotes(notes: string | undefined, warning: string | undefined) {
