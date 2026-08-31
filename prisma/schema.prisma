@@ -451,6 +451,8 @@ model User {
   documentsCreated Document[]      @relation("DocumentCreator")
   documentTagsCreated DocumentTag[]
   documentVersionsUploaded DocumentVersion[] @relation("DocumentVersionUploader")
+  scriptCoveragesCreated ScriptCoverage[] @relation("ScriptCoverageCreator")
+  scriptCoveragesUpdated ScriptCoverage[] @relation("ScriptCoverageUpdater")
   uploadJobsCreated UploadJob[]       @relation("UploadJobCreator")
   supportingDocumentsUploaded SupportingDocument[] @relation("SupportingDocumentUploader")
   prospectAssetsUploaded ProspectAsset[] @relation("ProspectAssetUploader")
@@ -621,6 +623,7 @@ model DocumentVersion {
   currentForDocument Document?             @relation("CurrentDocumentVersion")
   uploadedBy         User?                 @relation("DocumentVersionUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
   uploadJobs         UploadJob[]
+  coverage           ScriptCoverage?
   scenes             Scene[]               @relation("DocumentVersionScenes")
   diffsFrom          DocumentDiff[]        @relation("DocumentDiffFrom")
   diffsTo            DocumentDiff[]        @relation("DocumentDiffTo")
@@ -629,6 +632,32 @@ model DocumentVersion {
   @@unique([documentId, versionNumber])
   @@index([documentId, createdAt])
   @@index([status])
+}
+
+model ScriptCoverage {
+  id                    String          @id @default(cuid())
+  documentVersionId     String          @unique
+  aiStatus              String          @default("NOT_RUN")
+  aiModel               String?
+  aiSummaryJson         Json?
+  aiGeneratedAt         DateTime?
+  humanOverallScore     Int?
+  humanRecommendation   String?
+  humanCriteriaJson     Json?
+  humanNotes            String?         @db.Text
+  createdById           String?
+  updatedById           String?
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  documentVersion       DocumentVersion @relation(fields: [documentVersionId], references: [id], onDelete: Cascade)
+  createdBy             User?           @relation("ScriptCoverageCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy             User?           @relation("ScriptCoverageUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([aiStatus])
+  @@index([humanOverallScore])
+  @@index([humanRecommendation])
+  @@index([updatedAt])
 }
 
 model UploadJob {

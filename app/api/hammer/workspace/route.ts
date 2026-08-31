@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { AssetStatus, AssetType, CommentTargetType, CommentVisibility, ContactRelationshipType, ContactStatus, ContactType, DocumentType, DocumentVersionStatus, OutreachEngagementType, Prisma, ProjectStatus, ProjectStage, Prospect, SlateCollectionItemType, SupportingDocumentType, TaskPriority, TaskStatus, TaskTargetType, UserRole } from "@prisma/client";
 import { forbidden, hashPassword, isDatabaseConfigured, requireUser, verifyPassword } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { generateLocalScriptCoverage, normalizeSummary } from "@/lib/script-coverage";
 
 export const runtime = "nodejs";
 
@@ -40,7 +41,8 @@ export async function GET(request: Request) {
           uploadedById: true,
           createdAt: true,
           notes: true,
-          markdownNotes: true
+          markdownNotes: true,
+          coverage: true
         }
       }),
       prisma.supportingDocument.findMany({ where: { deletedAt: null, scriptDocument: documentWhere }, orderBy: { createdAt: "desc" } }),
@@ -291,6 +293,80 @@ export async function POST(request: Request) {
           where: { id: stringField(body.versionId) },
           data: { markdownNotes: optionalString(body.markdownNotes) ?? null }
         })) });
+
+      case "generateScriptCoverage": {
+        const version = await prisma.documentVersion.findUnique({
+          where: { id: stringField(body.versionId) },
+          include: { document: { select: { id: true, title: true, writerName: true, source: true, projectId: true, deletedAt: true } } }
+        });
+        if (!version || version.document.deletedAt) return NextResponse.json({ error: "Script version not found." }, { status: 404 });
+        if (!canAccessAssociatedProject(auth.user.appRole, auth.user.projectRoles, version.document.projectId)) return NextResponse.json(forbidden(), { status: 403 });
+        const generated = generateLocalScriptCoverage({
+          title: version.document.title,
+          writerName: version.document.writerName,
+          source: version.document.source,
+          fileName: version.fileName,
+          versionNumber: version.versionNumber,
+          extractedText: version.extractedText
+        });
+        const coverage = await prisma.scriptCoverage.upsert({
+          where: { documentVersionId: version.id },
+          create: {
+            documentVersionId: version.id,
+            aiStatus: generated.warning ? "WARNING" : "COMPLETE",
+            aiModel: generated.model,
+            aiSummaryJson: generated.summary as Prisma.InputJsonValue,
+            aiGeneratedAt: new Date(),
+            createdById: auth.user.id,
+            updatedById: auth.user.id
+          },
+          update: {
+            aiStatus: generated.warning ? "WARNING" : "COMPLETE",
+            aiModel: generated.model,
+            aiSummaryJson: generated.summary as Prisma.InputJsonValue,
+            aiGeneratedAt: new Date(),
+            updatedById: auth.user.id
+          }
+        });
+        await prisma.auditLog.create({
+          data: audit(auth.user.id, auth.user.email, "script.coverage_generated", "ScriptCoverage", coverage.id, { documentId: version.document.id, versionId: version.id, provider: generated.provider, warning: generated.warning })
+        }).catch(() => undefined);
+        return NextResponse.json({ coverage: toScriptCoverage(coverage), warning: generated.warning });
+      }
+
+      case "updateScriptCoverage": {
+        const version = await prisma.documentVersion.findUnique({
+          where: { id: stringField(body.versionId) },
+          select: { id: true, document: { select: { id: true, projectId: true, deletedAt: true } } }
+        });
+        if (!version || version.document.deletedAt) return NextResponse.json({ error: "Script version not found." }, { status: 404 });
+        if (!canAccessAssociatedProject(auth.user.appRole, auth.user.projectRoles, version.document.projectId, true)) return NextResponse.json(forbidden(), { status: 403 });
+        const humanCriteria = normalizeHumanCriteria(body.humanCriteria);
+        const coverage = await prisma.scriptCoverage.upsert({
+          where: { documentVersionId: version.id },
+          create: {
+            documentVersionId: version.id,
+            aiStatus: "NOT_RUN",
+            humanOverallScore: nullableScore(body.humanOverallScore),
+            humanRecommendation: optionalString(body.humanRecommendation),
+            humanCriteriaJson: humanCriteria as Prisma.InputJsonValue,
+            humanNotes: optionalText(body.humanNotes),
+            createdById: auth.user.id,
+            updatedById: auth.user.id
+          },
+          update: {
+            humanOverallScore: nullableScore(body.humanOverallScore),
+            humanRecommendation: optionalString(body.humanRecommendation),
+            humanCriteriaJson: humanCriteria as Prisma.InputJsonValue,
+            humanNotes: optionalText(body.humanNotes),
+            updatedById: auth.user.id
+          }
+        });
+        await prisma.auditLog.create({
+          data: audit(auth.user.id, auth.user.email, "script.coverage_updated", "ScriptCoverage", coverage.id, { documentId: version.document.id, versionId: version.id, humanRecommendation: coverage.humanRecommendation, humanOverallScore: coverage.humanOverallScore })
+        }).catch(() => undefined);
+        return NextResponse.json({ coverage: toScriptCoverage(coverage) });
+      }
 
       case "createComment": {
         const targetType = commentTargetTypeField(body.targetType);
@@ -1097,8 +1173,43 @@ function toDocumentTag(tag: { id: string; documentId: string; key: string; value
   return { id: tag.id, documentId: tag.documentId, key: tag.key, value: tag.value, createdById: tag.createdById ?? undefined, createdAt: dateString(tag.createdAt) };
 }
 
-function toVersion(version: { id: string; documentId: string; versionNumber: number; status: DocumentVersionStatus; fileName: string; fileType: string; fileSize: number; storagePath: string; dataUrl?: string | null; uploadedById: string | null; createdAt: Date; notes: string | null; markdownNotes?: string | null; extractedText?: string | null }) {
-  return { id: version.id, documentId: version.documentId, versionNumber: version.versionNumber, status: version.status, fileName: version.fileName, fileType: version.fileType, fileSize: version.fileSize, storagePath: version.storagePath, dataUrl: version.dataUrl ?? undefined, uploadedById: version.uploadedById ?? "", createdAt: dateString(version.createdAt), notes: version.notes ?? "", markdownNotes: version.markdownNotes ?? undefined, extractedText: version.extractedText ?? "" };
+function toVersion(version: { id: string; documentId: string; versionNumber: number; status: DocumentVersionStatus; fileName: string; fileType: string; fileSize: number; storagePath: string; dataUrl?: string | null; uploadedById: string | null; createdAt: Date; notes: string | null; markdownNotes?: string | null; extractedText?: string | null; coverage?: ScriptCoverageRecord | null }) {
+  return { id: version.id, documentId: version.documentId, versionNumber: version.versionNumber, status: version.status, fileName: version.fileName, fileType: version.fileType, fileSize: version.fileSize, storagePath: version.storagePath, dataUrl: version.dataUrl ?? undefined, uploadedById: version.uploadedById ?? "", createdAt: dateString(version.createdAt), notes: version.notes ?? "", markdownNotes: version.markdownNotes ?? undefined, extractedText: version.extractedText ?? "", coverage: version.coverage ? toScriptCoverage(version.coverage) : undefined };
+}
+
+type ScriptCoverageRecord = {
+  id: string;
+  documentVersionId: string;
+  aiStatus: string;
+  aiModel: string | null;
+  aiSummaryJson: Prisma.JsonValue | null;
+  aiGeneratedAt: Date | null;
+  humanOverallScore: number | null;
+  humanRecommendation: string | null;
+  humanCriteriaJson: Prisma.JsonValue | null;
+  humanNotes: string | null;
+  createdById: string | null;
+  updatedById: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+function toScriptCoverage(coverage: ScriptCoverageRecord) {
+  return {
+    id: coverage.id,
+    documentVersionId: coverage.documentVersionId,
+    aiStatus: coverage.aiStatus,
+    aiModel: coverage.aiModel ?? undefined,
+    aiSummary: coverage.aiSummaryJson ? normalizeSummary(coverage.aiSummaryJson) : undefined,
+    aiGeneratedAt: coverage.aiGeneratedAt ? dateString(coverage.aiGeneratedAt) : undefined,
+    humanOverallScore: coverage.humanOverallScore ?? undefined,
+    humanRecommendation: coverage.humanRecommendation ?? undefined,
+    humanCriteria: normalizeHumanCriteria(coverage.humanCriteriaJson),
+    humanNotes: coverage.humanNotes ?? undefined,
+    createdById: coverage.createdById ?? undefined,
+    updatedById: coverage.updatedById ?? undefined,
+    updatedAt: dateString(coverage.updatedAt)
+  };
 }
 
 function toSupportingDocument(document: { id: string; scriptDocumentId: string; title: string; type: SupportingDocumentType; source?: string | null; notes: string | null; fileName: string; fileType: string; fileSize: number; storagePath: string; dataUrl?: string | null; extractedText: string | null; uploadedById: string | null; createdAt: Date }) {
@@ -1465,6 +1576,27 @@ function optionalNumber(value: unknown) {
   if (value === "" || value === null || value === undefined) return undefined;
   const number = Number(value);
   return Number.isFinite(number) ? number : undefined;
+}
+
+function nullableScore(value: unknown) {
+  if (value === "" || value === null || value === undefined) return null;
+  const number = Number(value);
+  if (!Number.isFinite(number)) return null;
+  return Math.max(1, Math.min(10, Math.round(number)));
+}
+
+function normalizeHumanCriteria(value: unknown) {
+  const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  return {
+    concept: nullableScore(record.concept),
+    character: nullableScore(record.character),
+    structure: nullableScore(record.structure),
+    dialogue: nullableScore(record.dialogue),
+    originality: nullableScore(record.originality),
+    marketability: nullableScore(record.marketability),
+    budgetFeasibility: nullableScore(record.budgetFeasibility),
+    packagingPotential: nullableScore(record.packagingPotential)
+  };
 }
 
 function projectLeadPatch(body: ActionBody): Prisma.ProspectUpdateInput {
