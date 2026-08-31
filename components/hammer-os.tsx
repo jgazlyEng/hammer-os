@@ -105,7 +105,7 @@ const HAMMER_LOCAL_VERSION_MARKDOWN_STORAGE_KEY = "hammer:version-markdown-notes
 const HAMMER_LOCAL_COMMENTS_STORAGE_KEY = "hammer:comments";
 const HAMMER_LOCAL_OUTREACH_ENGAGEMENTS_STORAGE_KEY = "hammer:outreach-engagements";
 
-type HammerView = "dashboard" | "projects" | "prospects" | "collections" | "notes" | "project-new" | "project-detail" | "project-documents" | "project-assets" | "scripts" | "script-detail" | "script-versions" | "script-diff" | "script-breakdown" | "assets" | "asset-detail" | "tasks" | "contacts" | "reviews" | "studio-status" | "reports" | "executive" | "admin-overview" | "admin-users" | "admin-settings" | "admin-troubleshooting" | "admin-data-quality" | "account";
+type HammerView = "dashboard" | "projects" | "prospects" | "collections" | "notes" | "project-new" | "project-detail" | "project-documents" | "project-assets" | "scripts" | "script-detail" | "script-versions" | "script-diff" | "script-breakdown" | "assets" | "asset-detail" | "tasks" | "contacts" | "reviews" | "studio-status" | "reports" | "executive" | "admin-overview" | "admin-users" | "admin-settings" | "admin-troubleshooting" | "admin-data-quality" | "admin-export" | "admin-access-audit" | "account";
 type ScriptLibrarySection = "inbox" | "projects" | "all";
 type AppRole = "admin" | "executive" | "producer" | "artist" | "standard" | "department_lead";
 
@@ -1846,8 +1846,8 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     }
     if (view === "account") return <AccountSettings user={sessionUser} onUpdateAccount={updateAccount} />;
     if (view === "reviews") return <LegacyRedirect title="Reviews are folded into the slate" detail="Review work now starts from the relevant Development Slate item or Prospect, so the queue is easier to follow in context." href="/projects" label="Open Development Slate" />;
-    if (["admin-overview", "admin-users", "admin-settings", "admin-troubleshooting", "admin-data-quality"].includes(view) && currentUser.role !== "ADMIN") return <AccessDenied title="Admin access required" detail="Only admins can manage projects, users, roles, and project access." />;
-    if (["admin-overview", "admin-users", "admin-settings", "admin-troubleshooting", "admin-data-quality"].includes(view)) {
+    if (["admin-overview", "admin-users", "admin-settings", "admin-troubleshooting", "admin-data-quality", "admin-export", "admin-access-audit"].includes(view) && currentUser.role !== "ADMIN") return <AccessDenied title="Admin access required" detail="Only admins can manage projects, users, roles, and project access." />;
+    if (["admin-overview", "admin-users", "admin-settings", "admin-troubleshooting", "admin-data-quality", "admin-export", "admin-access-audit"].includes(view)) {
       return <AdminUsers section={adminSectionForView(view)} projects={projects} users={users} currentUser={currentUser} databaseMode={workspaceMode === "database"} onCreateUser={createUser} onUpdateUserRole={updateUserRole} onDeleteUser={deleteUser} />;
     }
     return <AccessDenied title="Page unavailable" detail="This GreenLight page is not available." />;
@@ -10499,9 +10499,25 @@ type AdminSettings = {
       mode: "CUSTOM_TEXT" | "USER_ONLY" | "USER_AND_IP";
       customText: string;
     };
+    uploadPolicy: {
+      maxUploadMb: number;
+      allowedExtensions: string[];
+      allowDocx: boolean;
+      parseOnUpload: boolean;
+      warnOnEmptyText: boolean;
+    };
   };
   updatedAt?: string | null;
   updatedBy?: string | null;
+};
+
+type AdminAccessAudit = {
+  mode?: "database" | "demo";
+  error?: string;
+  summary: { users: number; fullAccessUsers: number; assignedUsers: number; unassignedUsers: number };
+  users: Array<{ id: string; name: string; email: string; appRole: string; fullAccess: boolean; projects: Array<{ id: string; title: string; role: string }>; documents: number; collections: number }>;
+  projects: Array<{ id: string; title: string; status: string; members: Array<{ id: string; name: string; email: string; role: string; inherited: boolean }>; documents: Array<{ id: string; title: string; type: string }> }>;
+  collections?: Array<{ id: string; type: string; name: string; owner: string; items: number }>;
 };
 
 const adminProjectRoleOptions: Array<{ value: AdminProjectRole; label: string }> = [
@@ -10513,7 +10529,7 @@ const adminProjectRoleOptions: Array<{ value: AdminProjectRole; label: string }>
   { value: "viewer", label: "Viewer" }
 ];
 
-type AdminSection = "overview" | "users" | "settings" | "troubleshooting" | "data-quality";
+type AdminSection = "overview" | "users" | "settings" | "troubleshooting" | "data-quality" | "export" | "access-audit";
 
 function AdminUsers({
   section,
@@ -10551,6 +10567,7 @@ function AdminUsers({
   const [adminImportHistory, setAdminImportHistory] = useState<AdminImportHistory | null>(null);
   const [adminDuplicateReview, setAdminDuplicateReview] = useState<AdminDuplicateReview | null>(null);
   const [adminSettings, setAdminSettings] = useState<AdminSettings | null>(null);
+  const [adminAccessAudit, setAdminAccessAudit] = useState<AdminAccessAudit | null>(null);
   const [adminToolMessage, setAdminToolMessage] = useState("");
   const [adminToolBusy, setAdminToolBusy] = useState(false);
   const adminUserPageSize = useResponsiveTablePageSize({ max: 14, reservedHeight: 520 });
@@ -10574,7 +10591,7 @@ function AdminUsers({
 
   const refreshAdminTools = useCallback(async () => {
     if (!databaseMode) return;
-    const [usersResponse, healthResponse, dataQualityResponse, storageResponse, uploadResponse, auditResponse, importResponse, duplicateResponse, settingsResponse] = await Promise.all([
+    const [usersResponse, healthResponse, dataQualityResponse, storageResponse, uploadResponse, auditResponse, importResponse, duplicateResponse, settingsResponse, accessAuditResponse] = await Promise.all([
       fetch("/api/admin/users", { cache: "no-store" }).catch(() => null),
       fetch("/api/admin/system-health", { cache: "no-store" }).catch(() => null),
       fetch("/api/admin/data-quality", { cache: "no-store" }).catch(() => null),
@@ -10583,7 +10600,8 @@ function AdminUsers({
       fetch("/api/admin/audit-log", { cache: "no-store" }).catch(() => null),
       fetch("/api/admin/import-history", { cache: "no-store" }).catch(() => null),
       fetch("/api/admin/duplicates", { cache: "no-store" }).catch(() => null),
-      fetch("/api/admin/settings", { cache: "no-store" }).catch(() => null)
+      fetch("/api/admin/settings", { cache: "no-store" }).catch(() => null),
+      fetch("/api/admin/access-audit", { cache: "no-store" }).catch(() => null)
     ]);
     if (usersResponse?.ok) {
       const data = await usersResponse.json().catch(() => null) as { users?: AdminAccessUser[] } | null;
@@ -10620,6 +10638,10 @@ function AdminUsers({
     if (settingsResponse?.ok) {
       const data = await settingsResponse.json().catch(() => null) as AdminSettings | null;
       setAdminSettings(data);
+    }
+    if (accessAuditResponse?.ok) {
+      const data = await accessAuditResponse.json().catch(() => null) as AdminAccessAudit | null;
+      setAdminAccessAudit(data);
     }
   }, [databaseMode]);
 
@@ -10743,6 +10765,8 @@ function AdminUsers({
           <AdminAuditLogPanel data={adminAuditLog} databaseMode={databaseMode} onRefresh={() => void refreshAdminTools()} />
         </>
       ) : null}
+      {section === "export" ? <AdminExportCenterPanel databaseMode={databaseMode} /> : null}
+      {section === "access-audit" ? <AdminAccessAuditPanel data={adminAccessAudit} databaseMode={databaseMode} onRefresh={() => void refreshAdminTools()} /> : null}
       {section === "settings" ? <AdminSettingsPanel data={adminSettings} databaseMode={databaseMode} onSaved={setAdminSettings} /> : null}
       {section === "users" ? (
         <Panel>
@@ -10858,14 +10882,16 @@ function AdminUsers({
 const adminSections: Array<{ key: AdminSection; href: string; label: string; detail: string }> = [
   { key: "overview", href: "/admin", label: "Overview", detail: "Health at a glance" },
   { key: "users", href: "/admin/users", label: "Users", detail: "Roles and access" },
-  { key: "settings", href: "/admin/settings", label: "Settings", detail: "Watermark defaults" },
+  { key: "settings", href: "/admin/settings", label: "Settings", detail: "Watermark and uploads" },
   { key: "troubleshooting", href: "/admin/troubleshooting", label: "Troubleshooting", detail: "Uploads and storage" },
-  { key: "data-quality", href: "/admin/data-quality", label: "Data Quality", detail: "Imports, duplicates, logs" }
+  { key: "data-quality", href: "/admin/data-quality", label: "Data Quality", detail: "Imports, duplicates, logs" },
+  { key: "export", href: "/admin/export", label: "Export", detail: "CSV downloads" },
+  { key: "access-audit", href: "/admin/access-audit", label: "Access Audit", detail: "Who can see what" }
 ];
 
 function AdminSectionNav({ active }: { active: AdminSection }) {
   return (
-    <div className="grid gap-2 rounded-lg border border-white/10 bg-white/[0.018] p-2 sm:grid-cols-2 xl:grid-cols-5">
+    <div className="grid gap-2 rounded-lg border border-white/10 bg-white/[0.018] p-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
       {adminSections.map((section) => (
         <Link
           key={section.key}
@@ -10909,8 +10935,10 @@ function AdminOverviewPanel({
         <AdminOverviewCard href="/admin/data-quality" label="Potential Duplicates" value={`${duplicateReview?.summary.groups ?? 0} groups`} tone={(duplicateReview?.summary.groups ?? 0) ? "warn" : "good"} detail="Prospects, slate items, outreach" />
         <AdminOverviewCard href="/admin/troubleshooting" label="Stored Files" value={`${storageInventory?.summary.total ?? 0}`} tone="neutral" detail={`${formatBytes(storageInventory?.summary.totalSize ?? 0)} tracked`} />
         <AdminOverviewCard href="/admin/data-quality" label="Imports" value={`${importHistory?.summary.total ?? 0}`} tone="neutral" detail={`${importHistory?.summary.rowsCreated ?? 0} created / ${importHistory?.summary.rowsUpdated ?? 0} updated`} />
+        <AdminOverviewCard href="/admin/export" label="Data Export" value="Download" tone="neutral" detail="Users, slate, prospects, tasks, files" />
+        <AdminOverviewCard href="/admin/access-audit" label="Access Audit" value="Review" tone="neutral" detail="Users, projects, inherited access" />
         <AdminOverviewCard href="/admin/users" label="Users" value="Manage" tone="neutral" detail="Roles, access matrix, project membership" />
-        <AdminOverviewCard href="/admin/settings" label="Watermarking" value="Configure" tone="neutral" detail="Custom text, user only, user and IP" />
+        <AdminOverviewCard href="/admin/settings" label="System Settings" value="Configure" tone="neutral" detail="Watermarking and upload policy" />
       </div>
     </Panel>
   );
@@ -10959,6 +10987,137 @@ function AdminOpsGrid({
       <AdminDuplicateReviewPanel data={duplicateReview} databaseMode={databaseMode} onRefresh={onRefresh} />
       <AdminSettingsPanel data={settings} databaseMode={databaseMode} onSaved={onSettingsSaved} />
     </div>
+  );
+}
+
+const adminExportOptions: Array<{ type: string; label: string; detail: string }> = [
+  { type: "users", label: "Users", detail: "User accounts, global roles, and project memberships" },
+  { type: "development-slate", label: "Development Slate", detail: "Owned projects, loglines, status, stage, and owner" },
+  { type: "prospects", label: "Prospects", detail: "Incoming materials, source, urgency, rights, and owners" },
+  { type: "outreach", label: "Outreach", detail: "Talent/contact CRM fields and follow-up dates" },
+  { type: "tasks", label: "Tasks", detail: "Assignments, priority, status, due date, and project links" },
+  { type: "documents", label: "Documents", detail: "Scripts, treatments, supporting docs, writers, and current version" },
+  { type: "collections", label: "Collections", detail: "Review packets, document packets, owners, and item counts" },
+  { type: "file-inventory", label: "File Inventory", detail: "Tracked script versions, supporting files, prospect files, and assets" }
+];
+
+function AdminExportCenterPanel({ databaseMode }: { databaseMode: boolean }) {
+  return (
+    <Panel className="min-h-[520px]">
+      <SectionHeader eyebrow="Exports" title="Data Export Center" />
+      {!databaseMode ? <AdminModeNotice label="CSV exports are available in database mode." /> : (
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {adminExportOptions.map((option) => (
+            <a
+              key={option.type}
+              href={`/api/admin/export?type=${option.type}`}
+              className="group rounded-lg border border-white/10 bg-white/[0.025] p-3 transition hover:-translate-y-0.5 hover:border-amberline/35"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-studio-100">{option.label}</p>
+                  <p className="mt-1 text-xs leading-5 text-studio-400">{option.detail}</p>
+                </div>
+                <Download className="h-4 w-4 shrink-0 text-studio-500 transition group-hover:text-amberline" />
+              </div>
+            </a>
+          ))}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+function AdminAccessAuditPanel({ data, databaseMode, onRefresh }: { data: AdminAccessAudit | null; databaseMode: boolean; onRefresh: () => void }) {
+  const [mode, setMode] = useState<"users" | "projects" | "collections">("users");
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleUsers = (data?.users ?? []).filter((user) => `${user.name} ${user.email} ${user.appRole} ${user.projects.map((project) => project.title).join(" ")}`.toLowerCase().includes(normalizedQuery));
+  const visibleProjects = (data?.projects ?? []).filter((project) => `${project.title} ${project.status} ${project.members.map((member) => `${member.name} ${member.email}`).join(" ")}`.toLowerCase().includes(normalizedQuery));
+  const visibleCollections = (data?.collections ?? []).filter((collection) => `${collection.name} ${collection.type} ${collection.owner}`.toLowerCase().includes(normalizedQuery));
+
+  return (
+    <Panel className="min-h-[560px]">
+      <SectionHeader eyebrow="Access" title="Access Audit" action={<button type="button" onClick={onRefresh} className="rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline">Refresh</button>} />
+      {!databaseMode ? <AdminModeNotice label="Access audit is available in database mode." /> : data?.error ? <AdminErrorNotice message={data.error} /> : (
+        <div className="space-y-3">
+          <div className="grid gap-2 sm:grid-cols-4">
+            <AdminStorageTile label="Users" value={`${data?.summary.users ?? 0}`} tone="neutral" />
+            <AdminStorageTile label="Full Access" value={`${data?.summary.fullAccessUsers ?? 0}`} tone="good" />
+            <AdminStorageTile label="Assigned Users" value={`${data?.summary.assignedUsers ?? 0}`} tone="neutral" />
+            <AdminStorageTile label="Unassigned" value={`${data?.summary.unassignedUsers ?? 0}`} tone={(data?.summary.unassignedUsers ?? 0) ? "warn" : "good"} />
+          </div>
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+            <div className="inline-flex rounded-lg border border-white/10 bg-white/[0.025] p-1">
+              {(["users", "projects", "collections"] as const).map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => setMode(item)}
+                  className={cn("rounded-md px-3 py-1.5 text-xs font-semibold capitalize transition", mode === item ? "bg-amberline text-studio-950" : "text-studio-400 hover:text-studio-100")}
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+            <label className="relative min-w-0 md:w-72">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-studio-500" />
+              <input className="field h-9 pl-8 text-sm" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search access..." />
+            </label>
+          </div>
+          <div className="max-h-[430px] overflow-auto rounded-lg border border-white/10">
+            {mode === "users" ? (
+              <table className="data-table min-w-[940px]">
+                <thead><tr><th className="py-2">User</th><th>Role</th><th>Access</th><th>Projects</th><th>Documents</th><th>Collections</th></tr></thead>
+                <tbody className="divide-y divide-white/10">
+                  {visibleUsers.map((user) => (
+                    <tr key={user.id}>
+                      <td className="py-2.5"><p className="font-semibold text-studio-100">{user.name}</p><p className="text-xs text-studio-400">{user.email}</p></td>
+                      <td><Badge value={user.appRole} /></td>
+                      <td className="text-xs text-studio-300">{user.fullAccess ? "Full system access" : "Assigned access only"}</td>
+                      <td className="text-xs text-studio-300">{user.fullAccess ? "All projects" : user.projects.slice(0, 3).map((project) => project.title).join(", ") || "None"}{!user.fullAccess && user.projects.length > 3 ? ` +${user.projects.length - 3}` : ""}</td>
+                      <td className="text-xs text-studio-300">{user.documents}</td>
+                      <td className="text-xs text-studio-300">{user.collections}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : null}
+            {mode === "projects" ? (
+              <table className="data-table min-w-[900px]">
+                <thead><tr><th className="py-2">Project</th><th>Status</th><th>Members</th><th>Documents</th></tr></thead>
+                <tbody className="divide-y divide-white/10">
+                  {visibleProjects.map((project) => (
+                    <tr key={project.id}>
+                      <td className="py-2.5 font-semibold text-studio-100">{project.title}</td>
+                      <td><Badge value={project.status} /></td>
+                      <td className="text-xs text-studio-300">{project.members.slice(0, 4).map((member) => `${member.name}${member.inherited ? " *" : ""}`).join(", ")}{project.members.length > 4 ? ` +${project.members.length - 4}` : ""}</td>
+                      <td className="text-xs text-studio-300">{project.documents.length}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : null}
+            {mode === "collections" ? (
+              <table className="data-table min-w-[760px]">
+                <thead><tr><th className="py-2">Collection</th><th>Type</th><th>Owner</th><th>Items</th></tr></thead>
+                <tbody className="divide-y divide-white/10">
+                  {visibleCollections.map((collection) => (
+                    <tr key={collection.id}>
+                      <td className="py-2.5 font-semibold text-studio-100">{collection.name}</td>
+                      <td className="text-xs text-studio-300">{collection.type}</td>
+                      <td className="text-xs text-studio-300">{collection.owner || "Unassigned"}</td>
+                      <td className="text-xs text-studio-300">{collection.items}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : null}
+          </div>
+          <p className="text-[11px] text-studio-500">* Inherited means the user has full-access role visibility across the system.</p>
+        </div>
+      )}
+    </Panel>
   );
 }
 
@@ -11068,9 +11227,15 @@ function AdminDuplicateReviewPanel({ data, databaseMode, onRefresh }: { data: Ad
 
 function AdminSettingsPanel({ data, databaseMode, onSaved }: { data: AdminSettings | null; databaseMode: boolean; onSaved: (settings: AdminSettings) => void }) {
   const current = data?.settings.watermark ?? { defaultEnabled: true, mode: "USER_AND_IP" as const, customText: "" };
+  const currentUploadPolicy = data?.settings.uploadPolicy ?? { maxUploadMb: 250, allowedExtensions: [".pdf", ".fdx", ".txt", ".md"], allowDocx: false, parseOnUpload: true, warnOnEmptyText: true };
   const [defaultEnabled, setDefaultEnabled] = useState(current.defaultEnabled);
   const [mode, setMode] = useState<AdminSettings["settings"]["watermark"]["mode"]>(current.mode);
   const [customText, setCustomText] = useState(current.customText);
+  const [maxUploadMb, setMaxUploadMb] = useState(`${currentUploadPolicy.maxUploadMb}`);
+  const [allowedExtensions, setAllowedExtensions] = useState(currentUploadPolicy.allowedExtensions.join(", "));
+  const [allowDocx, setAllowDocx] = useState(currentUploadPolicy.allowDocx);
+  const [parseOnUpload, setParseOnUpload] = useState(currentUploadPolicy.parseOnUpload);
+  const [warnOnEmptyText, setWarnOnEmptyText] = useState(currentUploadPolicy.warnOnEmptyText);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -11079,6 +11244,14 @@ function AdminSettingsPanel({ data, databaseMode, onSaved }: { data: AdminSettin
     setMode(current.mode);
     setCustomText(current.customText);
   }, [current.customText, current.defaultEnabled, current.mode]);
+
+  useEffect(() => {
+    setMaxUploadMb(`${currentUploadPolicy.maxUploadMb}`);
+    setAllowedExtensions(currentUploadPolicy.allowedExtensions.join(", "));
+    setAllowDocx(currentUploadPolicy.allowDocx);
+    setParseOnUpload(currentUploadPolicy.parseOnUpload);
+    setWarnOnEmptyText(currentUploadPolicy.warnOnEmptyText);
+  }, [currentUploadPolicy.allowDocx, currentUploadPolicy.allowedExtensions, currentUploadPolicy.maxUploadMb, currentUploadPolicy.parseOnUpload, currentUploadPolicy.warnOnEmptyText]);
 
   async function saveSettings(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -11089,7 +11262,16 @@ function AdminSettingsPanel({ data, databaseMode, onSaved }: { data: AdminSettin
       const response = await fetch("/api/admin/settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ watermark: { defaultEnabled, mode, customText } })
+        body: JSON.stringify({
+          watermark: { defaultEnabled, mode, customText },
+          uploadPolicy: {
+            maxUploadMb: Number(maxUploadMb),
+            allowedExtensions,
+            allowDocx,
+            parseOnUpload,
+            warnOnEmptyText
+          }
+        })
       });
       const saved = await response.json().catch(() => null) as AdminSettings & { error?: string };
       if (!response.ok) throw new Error(saved?.error ?? "Could not save settings.");
@@ -11132,6 +11314,36 @@ function AdminSettingsPanel({ data, databaseMode, onSaved }: { data: AdminSettin
             <p className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">Preview</p>
             <p className="mt-1 text-sm font-semibold text-studio-100">{watermarkPreview(mode, customText)}</p>
             {data?.updatedAt ? <p className="mt-1 text-xs text-studio-500">Last updated {formatShortDateTime(data.updatedAt)}{data.updatedBy ? ` by ${data.updatedBy}` : ""}</p> : null}
+          </div>
+          <div className="rounded-lg border border-white/10 bg-white/[0.025] p-3">
+            <div>
+              <p className="text-sm font-semibold text-studio-100">Upload Policy</p>
+              <p className="mt-1 text-xs leading-5 text-studio-400">These app-level limits keep document uploads predictable. Nginx and server limits should be equal or higher.</p>
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <label className="grid gap-1.5">
+                <span className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">Max Upload Size (MB)</span>
+                <input className="field" type="number" min={1} max={500} value={maxUploadMb} onChange={(event) => setMaxUploadMb(event.target.value)} />
+              </label>
+              <label className="grid gap-1.5">
+                <span className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">Allowed Extensions</span>
+                <input className="field" value={allowedExtensions} onChange={(event) => setAllowedExtensions(event.target.value)} placeholder=".pdf, .fdx, .txt, .md" />
+              </label>
+            </div>
+            <div className="mt-3 grid gap-2 md:grid-cols-3">
+              <label className="flex items-center gap-2 rounded-md border border-white/10 bg-studio-950/25 px-3 py-2 text-xs font-semibold text-studio-300">
+                <input type="checkbox" checked={allowDocx} onChange={(event) => setAllowDocx(event.target.checked)} />
+                Allow DOCX
+              </label>
+              <label className="flex items-center gap-2 rounded-md border border-white/10 bg-studio-950/25 px-3 py-2 text-xs font-semibold text-studio-300">
+                <input type="checkbox" checked={parseOnUpload} onChange={(event) => setParseOnUpload(event.target.checked)} />
+                Parse on upload
+              </label>
+              <label className="flex items-center gap-2 rounded-md border border-white/10 bg-studio-950/25 px-3 py-2 text-xs font-semibold text-studio-300">
+                <input type="checkbox" checked={warnOnEmptyText} onChange={(event) => setWarnOnEmptyText(event.target.checked)} />
+                Warn on empty text
+              </label>
+            </div>
           </div>
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs text-studio-400">{message}</p>
@@ -11686,6 +11898,8 @@ function adminSectionForView(view: HammerView): AdminSection {
   if (view === "admin-settings") return "settings";
   if (view === "admin-troubleshooting") return "troubleshooting";
   if (view === "admin-data-quality") return "data-quality";
+  if (view === "admin-export") return "export";
+  if (view === "admin-access-audit") return "access-audit";
   return "overview";
 }
 
@@ -13894,6 +14108,8 @@ function titleForView(view: HammerView, context: { project: HammerProject; docum
     "admin-settings": "Admin Settings",
     "admin-troubleshooting": "Admin Troubleshooting",
     "admin-data-quality": "Admin Data Quality",
+    "admin-export": "Admin Export",
+    "admin-access-audit": "Admin Access Audit",
     account: "Account"
   };
   return titles[view];
@@ -13977,6 +14193,8 @@ function breadcrumbsForView(view: HammerView, context: { project: HammerProject;
   if (view === "admin-settings") return [{ label: "Admin", href: "/admin" }, { label: "Settings" }];
   if (view === "admin-troubleshooting") return [{ label: "Admin", href: "/admin" }, { label: "Troubleshooting" }];
   if (view === "admin-data-quality") return [{ label: "Admin", href: "/admin" }, { label: "Data Quality" }];
+  if (view === "admin-export") return [{ label: "Admin", href: "/admin" }, { label: "Export" }];
+  if (view === "admin-access-audit") return [{ label: "Admin", href: "/admin" }, { label: "Access Audit" }];
   if (view === "account") return [{ label: "GreenLight" }, { label: "Account" }];
   return [{ label: "GreenLight" }, { label: titleForView(view, context) }];
 }
@@ -13989,7 +14207,7 @@ function backHrefForView(view: HammerView, context: { project: HammerProject; do
   if (view === "project-detail") return "/projects";
   if (view === "asset-detail") return "/assets";
   if (view === "project-new") return "/admin";
-  if (["admin-users", "admin-settings", "admin-troubleshooting", "admin-data-quality"].includes(view)) return "/admin";
+  if (["admin-users", "admin-settings", "admin-troubleshooting", "admin-data-quality", "admin-export", "admin-access-audit"].includes(view)) return "/admin";
   return null;
 }
 
