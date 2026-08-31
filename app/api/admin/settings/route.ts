@@ -7,6 +7,7 @@ export const dynamic = "force-dynamic";
 
 const WATERMARK_KEY = "download.watermark";
 const UPLOAD_POLICY_KEY = "upload.policy";
+const LLM_PROVIDER_KEY = "llm.provider";
 
 const defaultWatermarkSettings = {
   defaultEnabled: true,
@@ -22,26 +23,36 @@ const defaultUploadPolicySettings = {
   warnOnEmptyText: true
 };
 
+const defaultLlmProviderSettings = {
+  enabled: false,
+  provider: process.env.GREENLIGHT_LLM_PROVIDER || "anthropic",
+  model: process.env.GREENLIGHT_LLM_MODEL || "claude-sonnet-5",
+  maxInputCharacters: 80000,
+  allowExternalScriptAnalysis: false
+};
+
 export async function GET(request: Request) {
   const auth = requireUser(request);
   if ("error" in auth) return NextResponse.json({ error: auth.error }, { status: auth.status });
 
   if (!isDatabaseConfigured()) {
-    return NextResponse.json({ mode: "demo", settings: { watermark: defaultWatermarkSettings, uploadPolicy: defaultUploadPolicySettings } });
+    return NextResponse.json({ mode: "demo", settings: { watermark: defaultWatermarkSettings, uploadPolicy: defaultUploadPolicySettings, llmProvider: llmProviderWithEnv(defaultLlmProviderSettings) } });
   }
 
-  const [watermark, uploadPolicy] = await Promise.all([
+  const [watermark, uploadPolicy, llmProvider] = await Promise.all([
     prisma.appSetting.findUnique({ where: { key: WATERMARK_KEY } }),
-    prisma.appSetting.findUnique({ where: { key: UPLOAD_POLICY_KEY } })
+    prisma.appSetting.findUnique({ where: { key: UPLOAD_POLICY_KEY } }),
+    prisma.appSetting.findUnique({ where: { key: LLM_PROVIDER_KEY } })
   ]);
   return NextResponse.json({
     mode: "database",
     settings: {
       watermark: normalizeWatermarkSettings(watermark?.valueJson),
-      uploadPolicy: normalizeUploadPolicySettings(uploadPolicy?.valueJson)
+      uploadPolicy: normalizeUploadPolicySettings(uploadPolicy?.valueJson),
+      llmProvider: llmProviderWithEnv(normalizeLlmProviderSettings(llmProvider?.valueJson))
     },
-    updatedAt: maxDateString(watermark?.updatedAt, uploadPolicy?.updatedAt),
-    updatedBy: watermark?.updatedBy ?? uploadPolicy?.updatedBy ?? null
+    updatedAt: maxDateString(watermark?.updatedAt, uploadPolicy?.updatedAt, llmProvider?.updatedAt),
+    updatedBy: watermark?.updatedBy ?? uploadPolicy?.updatedBy ?? llmProvider?.updatedBy ?? null
   });
 }
 
@@ -53,7 +64,8 @@ export async function PATCH(request: Request) {
   const body = await request.json().catch(() => ({})) as Record<string, unknown>;
   const watermark = normalizeWatermarkSettings(body.watermark);
   const uploadPolicy = normalizeUploadPolicySettings(body.uploadPolicy);
-  const [savedWatermark, savedUploadPolicy] = await Promise.all([
+  const llmProvider = normalizeLlmProviderSettings(body.llmProvider);
+  const [savedWatermark, savedUploadPolicy, savedLlmProvider] = await Promise.all([
     prisma.appSetting.upsert({
       where: { key: WATERMARK_KEY },
       create: {
@@ -81,6 +93,20 @@ export async function PATCH(request: Request) {
         updatedById: auth.user.id,
         updatedBy: auth.user.email
       }
+    }),
+    prisma.appSetting.upsert({
+      where: { key: LLM_PROVIDER_KEY },
+      create: {
+        key: LLM_PROVIDER_KEY,
+        valueJson: llmProvider,
+        updatedById: auth.user.id,
+        updatedBy: auth.user.email
+      },
+      update: {
+        valueJson: llmProvider,
+        updatedById: auth.user.id,
+        updatedBy: auth.user.email
+      }
     })
   ]);
 
@@ -104,11 +130,21 @@ export async function PATCH(request: Request) {
       detailJson: uploadPolicy
     }
   }).catch(() => undefined);
+  await prisma.auditLog.create({
+    data: {
+      actorUserId: auth.user.id,
+      actor: auth.user.email,
+      action: "settings.llm_provider_updated",
+      entityType: "AppSetting",
+      entityId: LLM_PROVIDER_KEY,
+      detailJson: { ...llmProvider, apiKeyConfigured: Boolean(process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY) }
+    }
+  }).catch(() => undefined);
 
   return NextResponse.json({
-    settings: { watermark, uploadPolicy },
-    updatedAt: maxDateString(savedWatermark.updatedAt, savedUploadPolicy.updatedAt),
-    updatedBy: savedWatermark.updatedBy ?? savedUploadPolicy.updatedBy
+    settings: { watermark, uploadPolicy, llmProvider: llmProviderWithEnv(llmProvider) },
+    updatedAt: maxDateString(savedWatermark.updatedAt, savedUploadPolicy.updatedAt, savedLlmProvider.updatedAt),
+    updatedBy: savedWatermark.updatedBy ?? savedUploadPolicy.updatedBy ?? savedLlmProvider.updatedBy
   });
 }
 
@@ -142,6 +178,25 @@ function normalizeExtension(value: string) {
   const normalized = value.trim().toLowerCase();
   if (!normalized) return "";
   return normalized.startsWith(".") ? normalized : `.${normalized}`;
+}
+
+function normalizeLlmProviderSettings(value: unknown) {
+  const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const provider = typeof record.provider === "string" && ["anthropic", "openai", "disabled"].includes(record.provider) ? record.provider : defaultLlmProviderSettings.provider;
+  return {
+    enabled: typeof record.enabled === "boolean" ? record.enabled : defaultLlmProviderSettings.enabled,
+    provider,
+    model: typeof record.model === "string" && record.model.trim() ? record.model.trim().slice(0, 120) : defaultLlmProviderSettings.model,
+    maxInputCharacters: clampNumber(record.maxInputCharacters, 1000, 200000, defaultLlmProviderSettings.maxInputCharacters),
+    allowExternalScriptAnalysis: typeof record.allowExternalScriptAnalysis === "boolean" ? record.allowExternalScriptAnalysis : defaultLlmProviderSettings.allowExternalScriptAnalysis
+  };
+}
+
+function llmProviderWithEnv(settings: ReturnType<typeof normalizeLlmProviderSettings>) {
+  return {
+    ...settings,
+    apiKeyConfigured: settings.provider === "anthropic" ? Boolean(process.env.ANTHROPIC_API_KEY) : settings.provider === "openai" ? Boolean(process.env.OPENAI_API_KEY) : false
+  };
 }
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number) {
