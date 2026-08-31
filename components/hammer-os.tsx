@@ -10770,6 +10770,14 @@ type AdminSettings = {
       parseOnUpload: boolean;
       warnOnEmptyText: boolean;
     };
+    llmProvider: {
+      enabled: boolean;
+      provider: "anthropic" | "openai" | "disabled";
+      model: string;
+      maxInputCharacters: number;
+      allowExternalScriptAnalysis: boolean;
+      apiKeyConfigured: boolean;
+    };
   };
   updatedAt?: string | null;
   updatedBy?: string | null;
@@ -11492,6 +11500,7 @@ function AdminDuplicateReviewPanel({ data, databaseMode, onRefresh }: { data: Ad
 function AdminSettingsPanel({ data, databaseMode, onSaved }: { data: AdminSettings | null; databaseMode: boolean; onSaved: (settings: AdminSettings) => void }) {
   const current = data?.settings.watermark ?? { defaultEnabled: true, mode: "USER_AND_IP" as const, customText: "" };
   const currentUploadPolicy = data?.settings.uploadPolicy ?? { maxUploadMb: 250, allowedExtensions: [".pdf", ".fdx", ".txt", ".md"], allowDocx: false, parseOnUpload: true, warnOnEmptyText: true };
+  const currentLlmProvider = data?.settings.llmProvider ?? { enabled: false, provider: "anthropic" as const, model: "claude-sonnet-5", maxInputCharacters: 80000, allowExternalScriptAnalysis: false, apiKeyConfigured: false };
   const [defaultEnabled, setDefaultEnabled] = useState(current.defaultEnabled);
   const [mode, setMode] = useState<AdminSettings["settings"]["watermark"]["mode"]>(current.mode);
   const [customText, setCustomText] = useState(current.customText);
@@ -11500,8 +11509,15 @@ function AdminSettingsPanel({ data, databaseMode, onSaved }: { data: AdminSettin
   const [allowDocx, setAllowDocx] = useState(currentUploadPolicy.allowDocx);
   const [parseOnUpload, setParseOnUpload] = useState(currentUploadPolicy.parseOnUpload);
   const [warnOnEmptyText, setWarnOnEmptyText] = useState(currentUploadPolicy.warnOnEmptyText);
+  const [llmEnabled, setLlmEnabled] = useState(currentLlmProvider.enabled);
+  const [llmProvider, setLlmProvider] = useState<AdminSettings["settings"]["llmProvider"]["provider"]>(currentLlmProvider.provider);
+  const [llmModel, setLlmModel] = useState(currentLlmProvider.model);
+  const [llmMaxInputCharacters, setLlmMaxInputCharacters] = useState(`${currentLlmProvider.maxInputCharacters}`);
+  const [allowExternalScriptAnalysis, setAllowExternalScriptAnalysis] = useState(currentLlmProvider.allowExternalScriptAnalysis);
   const [message, setMessage] = useState("");
+  const [testMessage, setTestMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [testingLlm, setTestingLlm] = useState(false);
 
   useEffect(() => {
     setDefaultEnabled(current.defaultEnabled);
@@ -11516,6 +11532,15 @@ function AdminSettingsPanel({ data, databaseMode, onSaved }: { data: AdminSettin
     setParseOnUpload(currentUploadPolicy.parseOnUpload);
     setWarnOnEmptyText(currentUploadPolicy.warnOnEmptyText);
   }, [currentUploadPolicy.allowDocx, currentUploadPolicy.allowedExtensions, currentUploadPolicy.maxUploadMb, currentUploadPolicy.parseOnUpload, currentUploadPolicy.warnOnEmptyText]);
+
+  useEffect(() => {
+    setLlmEnabled(currentLlmProvider.enabled);
+    setLlmProvider(currentLlmProvider.provider);
+    setLlmModel(currentLlmProvider.model);
+    setLlmMaxInputCharacters(`${currentLlmProvider.maxInputCharacters}`);
+    setAllowExternalScriptAnalysis(currentLlmProvider.allowExternalScriptAnalysis);
+    setTestMessage("");
+  }, [currentLlmProvider.allowExternalScriptAnalysis, currentLlmProvider.enabled, currentLlmProvider.maxInputCharacters, currentLlmProvider.model, currentLlmProvider.provider]);
 
   async function saveSettings(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -11534,6 +11559,13 @@ function AdminSettingsPanel({ data, databaseMode, onSaved }: { data: AdminSettin
             allowDocx,
             parseOnUpload,
             warnOnEmptyText
+          },
+          llmProvider: {
+            enabled: llmEnabled,
+            provider: llmProvider,
+            model: llmModel,
+            maxInputCharacters: Number(llmMaxInputCharacters),
+            allowExternalScriptAnalysis
           }
         })
       });
@@ -11545,6 +11577,26 @@ function AdminSettingsPanel({ data, databaseMode, onSaved }: { data: AdminSettin
       setMessage(error instanceof Error ? error.message : "Could not save settings.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function testLlmConnection() {
+    if (!databaseMode) return;
+    setTestingLlm(true);
+    setTestMessage("");
+    try {
+      const response = await fetch("/api/admin/llm-test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: llmProvider, model: llmModel })
+      });
+      const data = await response.json().catch(() => null) as { ok?: boolean; message?: string; error?: string; latencyMs?: number } | null;
+      if (!response.ok) throw new Error(data?.error ?? "LLM connection test failed.");
+      setTestMessage(`Connection OK${data?.latencyMs ? ` in ${data.latencyMs}ms` : ""}.`);
+    } catch (error) {
+      setTestMessage(error instanceof Error ? error.message : "LLM connection test failed.");
+    } finally {
+      setTestingLlm(false);
     }
   }
 
@@ -11608,6 +11660,48 @@ function AdminSettingsPanel({ data, databaseMode, onSaved }: { data: AdminSettin
                 Warn on empty text
               </label>
             </div>
+          </div>
+          <div className="rounded-lg border border-white/10 bg-white/[0.025] p-3">
+            <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-studio-100">LLM Provider</p>
+                <p className="mt-1 text-xs leading-5 text-studio-400">Choose the model provider GreenLight should use for future AI coverage and analysis. API keys stay in server environment variables.</p>
+              </div>
+              <Badge value={currentLlmProvider.apiKeyConfigured ? "API KEY CONFIGURED" : "API KEY MISSING"} subtle />
+            </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-[180px_minmax(0,1fr)_180px]">
+              <label className="grid gap-1.5">
+                <span className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">Provider</span>
+                <select className="field" value={llmProvider} onChange={(event) => setLlmProvider(event.target.value as AdminSettings["settings"]["llmProvider"]["provider"])}>
+                  <option value="anthropic">Claude / Anthropic</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="disabled">Disabled</option>
+                </select>
+              </label>
+              <label className="grid gap-1.5">
+                <span className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">Model</span>
+                <input className="field" value={llmModel} onChange={(event) => setLlmModel(event.target.value)} placeholder="claude-sonnet-5" />
+              </label>
+              <label className="grid gap-1.5">
+                <span className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">Max Characters</span>
+                <input className="field" type="number" min={1000} max={200000} value={llmMaxInputCharacters} onChange={(event) => setLlmMaxInputCharacters(event.target.value)} />
+              </label>
+            </div>
+            <div className="mt-3 grid gap-2 md:grid-cols-2">
+              <label className="flex items-center gap-2 rounded-md border border-white/10 bg-studio-950/25 px-3 py-2 text-xs font-semibold text-studio-300">
+                <input type="checkbox" checked={llmEnabled} onChange={(event) => setLlmEnabled(event.target.checked)} />
+                Enable LLM tools
+              </label>
+              <label className="flex items-center gap-2 rounded-md border border-white/10 bg-studio-950/25 px-3 py-2 text-xs font-semibold text-studio-300">
+                <input type="checkbox" checked={allowExternalScriptAnalysis} onChange={(event) => setAllowExternalScriptAnalysis(event.target.checked)} />
+                Allow external script analysis
+              </label>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <button type="button" disabled={!databaseMode || testingLlm || llmProvider !== "anthropic"} onClick={testLlmConnection} className="rounded-md border border-white/10 bg-white/[0.025] px-3 py-2 text-sm font-semibold text-studio-200 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-not-allowed disabled:opacity-50">{testingLlm ? "Testing..." : "Test Claude Connection"}</button>
+              {testMessage ? <p className="text-xs text-studio-300">{testMessage}</p> : null}
+            </div>
+            <p className="mt-2 text-[11px] leading-5 text-studio-500">For Claude, set ANTHROPIC_API_KEY on the server. GreenLight will not send script text externally unless external script analysis is enabled.</p>
           </div>
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs text-studio-400">{message}</p>
