@@ -172,6 +172,44 @@ export interface HammerDocument {
   tags?: HammerDocumentTag[];
 }
 
+export interface HammerScriptCoverageSummary {
+  logline: string;
+  synopsis: string;
+  genreTone: string;
+  mainCharacters: string[];
+  comps: string[];
+  strengths: string[];
+  concerns: string[];
+  suggestedNextStep: string;
+  scoreDraft: {
+    concept: number;
+    character: number;
+    structure: number;
+    dialogue: number;
+    originality: number;
+    marketability: number;
+    budgetFeasibility: number;
+    packagingPotential: number;
+    overall: number;
+  };
+}
+
+export interface HammerScriptCoverage {
+  id: string;
+  documentVersionId: string;
+  aiStatus: string;
+  aiModel?: string;
+  aiSummary?: HammerScriptCoverageSummary;
+  aiGeneratedAt?: string;
+  humanOverallScore?: number;
+  humanRecommendation?: string;
+  humanCriteria?: Record<string, number | null>;
+  humanNotes?: string;
+  createdById?: string;
+  updatedById?: string;
+  updatedAt: string;
+}
+
 export interface HammerDocumentVersion {
   id: string;
   documentId: string;
@@ -187,6 +225,7 @@ export interface HammerDocumentVersion {
   notes: string;
   markdownNotes?: string;
   extractedText: string;
+  coverage?: HammerScriptCoverage;
 }
 
 export interface HammerScriptCollection {

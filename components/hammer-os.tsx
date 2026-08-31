@@ -66,6 +66,7 @@ import {
   type HammerUser,
   type HammerAsset,
   type HammerDocument,
+  type HammerScriptCoverage,
   type HammerDocumentTag,
   type HammerDocumentVersion,
   type HammerComment,
@@ -92,6 +93,7 @@ import {
 import { buildTextDiff } from "@/lib/hammer-diff";
 import { extractPdfText } from "@/lib/pdf-parser";
 import { parseScriptText } from "@/lib/script-parser";
+import { generateLocalScriptCoverage } from "@/lib/script-coverage";
 import { cn } from "@/lib/utils";
 
 const HAMMER_DISMISSED_BREAKDOWN_ENTITIES_STORAGE_KEY = "hammer:dismissed-breakdown-entities";
@@ -965,6 +967,72 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     });
   }
 
+  async function generateScriptCoverage(versionId: string) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("generateScriptCoverage", { versionId });
+      return;
+    }
+    const sourceVersion = versions.find((item) => item.id === versionId);
+    if (!sourceVersion) throw new Error("Script version not found.");
+    const sourceDocument = documents.find((item) => item.id === sourceVersion.documentId);
+    const generated = generateLocalScriptCoverage({
+      title: sourceDocument?.title ?? sourceVersion.fileName,
+      writerName: sourceDocument?.writerName,
+      source: sourceDocument?.source,
+      fileName: sourceVersion.fileName,
+      versionNumber: sourceVersion.versionNumber,
+      extractedText: sourceVersion.extractedText
+    });
+    const coverage: HammerScriptCoverage = {
+      id: `coverage-local-${versionId}`,
+      documentVersionId: versionId,
+      aiStatus: generated.warning ? "WARNING" : "COMPLETE",
+      aiModel: generated.model,
+      aiSummary: generated.summary,
+      aiGeneratedAt: new Date().toISOString().slice(0, 10),
+      humanCriteria: sourceVersion.coverage?.humanCriteria,
+      humanOverallScore: sourceVersion.coverage?.humanOverallScore,
+      humanRecommendation: sourceVersion.coverage?.humanRecommendation,
+      humanNotes: sourceVersion.coverage?.humanNotes,
+      updatedAt: new Date().toISOString().slice(0, 10)
+    };
+    setLocalVersions((current) => {
+      const source = current.some((version) => version.id === versionId) ? current : [...current, sourceVersion];
+      const next = source.map((version) => version.id === versionId ? { ...version, coverage } : version);
+      window.localStorage.setItem(HAMMER_LOCAL_VERSIONS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
+  async function updateScriptCoverage(versionId: string, input: { humanOverallScore?: number | null; humanRecommendation?: string; humanCriteria?: Record<string, number | null>; humanNotes?: string }) {
+    if (workspaceMode === "database") {
+      await runWorkspaceAction("updateScriptCoverage", { versionId, ...input });
+      return;
+    }
+    const sourceVersion = versions.find((item) => item.id === versionId);
+    if (!sourceVersion) throw new Error("Script version not found.");
+    const coverage: HammerScriptCoverage = {
+      id: sourceVersion.coverage?.id ?? `coverage-local-${versionId}`,
+      documentVersionId: versionId,
+      aiStatus: sourceVersion.coverage?.aiStatus ?? "NOT_RUN",
+      aiModel: sourceVersion.coverage?.aiModel,
+      aiSummary: sourceVersion.coverage?.aiSummary,
+      aiGeneratedAt: sourceVersion.coverage?.aiGeneratedAt,
+      humanOverallScore: input.humanOverallScore ?? undefined,
+      humanRecommendation: input.humanRecommendation || undefined,
+      humanCriteria: input.humanCriteria,
+      humanNotes: input.humanNotes || undefined,
+      updatedById: currentUser.id,
+      updatedAt: new Date().toISOString().slice(0, 10)
+    };
+    setLocalVersions((current) => {
+      const source = current.some((version) => version.id === versionId) ? current : [...current, sourceVersion];
+      const next = source.map((version) => version.id === versionId ? { ...version, coverage } : version);
+      window.localStorage.setItem(HAMMER_LOCAL_VERSIONS_STORAGE_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
   async function createComment(input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string; metadataJson?: HammerCommentMetadata }) {
     if (workspaceMode === "database") {
       await runWorkspaceAction("createComment", input);
@@ -1829,7 +1897,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     if (view === "project-assets") return <ProjectWorkspace project={project} activeTab="assets" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpdateProject={canManageScriptLibrary(currentUser.role) ? updateProject : undefined} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
     if (view === "scripts") return <LegacyRedirect title="Scripts now live inside the slate" detail="Script tracking is most useful in context. Open a Development Slate item for active project scripts and supporting documents, or use Prospects for materials the team may want to pursue." href="/projects" label="Open Development Slate" />;
     if (["script-detail", "script-versions", "script-diff", "script-breakdown"].includes(view) && !documents.some((item) => item.id === document.id)) return <EmptyScriptState />;
-    if (view === "script-detail") return <ScriptDetail documentId={document.id} documents={documents} projects={projects} users={users} versions={versions} comments={comments} currentUser={currentUser} supportingDocuments={supportingDocuments} onUpload={uploadDocumentVersion} onSupportingUpload={uploadSupportingDocument} onSupportingDelete={deleteSupportingDocument} onStatusChange={updateDocumentStatus} onUpdateVersionNotes={canManageScriptLibrary(currentUser.role) ? updateDocumentVersionNotes : undefined} onUpdateVersionMarkdown={canAccessScriptDocument(currentUser, document) ? updateDocumentVersionMarkdown : undefined} onCreateComment={createComment} onUpdateComment={updateComment} onDeleteComment={deleteComment} onUpdateMetadata={canAccessScriptDocument(currentUser, document) ? updateDocumentMetadata : undefined} onUpdateTags={canAccessScriptDocument(currentUser, document) ? updateDocumentTags : undefined} onDelete={canManageScriptLibrary(currentUser.role) ? deleteUploadedDocument : undefined} />;
+    if (view === "script-detail") return <ScriptDetail documentId={document.id} documents={documents} projects={projects} users={users} versions={versions} comments={comments} currentUser={currentUser} supportingDocuments={supportingDocuments} onUpload={uploadDocumentVersion} onSupportingUpload={uploadSupportingDocument} onSupportingDelete={deleteSupportingDocument} onStatusChange={updateDocumentStatus} onUpdateVersionNotes={canManageScriptLibrary(currentUser.role) ? updateDocumentVersionNotes : undefined} onUpdateVersionMarkdown={canAccessScriptDocument(currentUser, document) ? updateDocumentVersionMarkdown : undefined} onGenerateCoverage={canAccessScriptDocument(currentUser, document) ? generateScriptCoverage : undefined} onUpdateCoverage={canAccessScriptDocument(currentUser, document) ? updateScriptCoverage : undefined} onCreateComment={createComment} onUpdateComment={updateComment} onDeleteComment={deleteComment} onUpdateMetadata={canAccessScriptDocument(currentUser, document) ? updateDocumentMetadata : undefined} onUpdateTags={canAccessScriptDocument(currentUser, document) ? updateDocumentTags : undefined} onDelete={canManageScriptLibrary(currentUser.role) ? deleteUploadedDocument : undefined} />;
     if (view === "script-versions") return <ScriptVersions documentId={document.id} versions={versions} document={document} currentUser={currentUser} onUpload={uploadDocumentVersion} />;
     if (view === "script-diff") return <ScriptDiff documentId={document.id} versions={versions} />;
     if (view === "script-breakdown") return <ScriptBreakdown documentId={document.id} documents={documents} versions={versions} />;
@@ -6180,6 +6248,8 @@ function ScriptDetail({
   onStatusChange,
   onUpdateVersionNotes,
   onUpdateVersionMarkdown,
+  onGenerateCoverage,
+  onUpdateCoverage,
   onCreateComment,
   onUpdateComment,
   onDeleteComment,
@@ -6201,6 +6271,8 @@ function ScriptDetail({
   onStatusChange?: (versionId: string, status: ScriptStatus) => void;
   onUpdateVersionNotes?: (versionId: string, notes: string) => Promise<void>;
   onUpdateVersionMarkdown?: (versionId: string, markdownNotes: string) => Promise<void>;
+  onGenerateCoverage?: (versionId: string) => Promise<void>;
+  onUpdateCoverage?: (versionId: string, input: { humanOverallScore?: number | null; humanRecommendation?: string; humanCriteria?: Record<string, number | null>; humanNotes?: string }) => Promise<void>;
   onCreateComment?: (input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string; metadataJson?: HammerCommentMetadata }) => Promise<void>;
   onUpdateComment?: (commentId: string, input: { targetType: string; targetId: string; body: string; visibility?: HammerComment["visibility"]; projectId?: string; metadataJson?: HammerCommentMetadata }) => Promise<void>;
   onDeleteComment?: (commentId: string) => Promise<void>;
@@ -6212,7 +6284,7 @@ function ScriptDetail({
   const textState = useDocumentVersionsWithText(doc.id, versions);
   const versionsWithText = textState.versionsWithText;
   const version = currentVersionFor(doc.id, documents, versionsWithText);
-  const [tab, setTab] = useState<"overview" | "notes" | "files" | "compare" | "breakdown">("overview");
+  const [tab, setTab] = useState<"overview" | "coverage" | "notes" | "files" | "compare" | "breakdown">("overview");
   const [metadataDraft, setMetadataDraft] = useState({
     title: doc.title,
     type: doc.type,
@@ -6404,6 +6476,7 @@ function ScriptDetail({
         <div className="mt-3 flex flex-wrap gap-1.5 border-t border-white/10 pt-3">
           {[
             ["overview", "Overview"],
+            ["coverage", "Coverage"],
             ["notes", `Notes${visibleNotesCount ? ` (${visibleNotesCount})` : ""}`],
             ["files", "Files"],
             ["compare", "Compare"],
@@ -6557,6 +6630,16 @@ function ScriptDetail({
         </div>
       ) : null}
 
+      {tab === "coverage" ? (
+        <ScriptCoverageWorkspace
+          document={doc}
+          version={version}
+          currentUser={currentUser}
+          onGenerateCoverage={onGenerateCoverage}
+          onUpdateCoverage={onUpdateCoverage}
+        />
+      ) : null}
+
       {tab === "notes" ? (
         <ScriptNotesWorkspace
           document={doc}
@@ -6680,6 +6763,187 @@ function ScriptDetail({
           <p className="text-[13px] leading-6 text-studio-300">Breakdown is available when the team is ready to pull scenes, characters, locations, props, and action moments from the script. It stays out of the primary review flow until needed.</p>
         </Panel>
       ) : null}
+    </div>
+  );
+}
+
+const coverageCriteria = [
+  { key: "concept", label: "Concept" },
+  { key: "character", label: "Character" },
+  { key: "structure", label: "Structure" },
+  { key: "dialogue", label: "Dialogue" },
+  { key: "originality", label: "Originality" },
+  { key: "marketability", label: "Marketability" },
+  { key: "budgetFeasibility", label: "Budget Fit" },
+  { key: "packagingPotential", label: "Packaging" }
+] as const;
+
+const coverageRecommendations = ["PASS", "CONSIDER", "RECOMMEND", "STRONG_RECOMMEND", "NEEDS_REWRITE"] as const;
+
+function ScriptCoverageWorkspace({
+  document,
+  version,
+  currentUser,
+  onGenerateCoverage,
+  onUpdateCoverage
+}: {
+  document: HammerDocument;
+  version?: HammerDocumentVersion;
+  currentUser?: HammerUser;
+  onGenerateCoverage?: (versionId: string) => Promise<void>;
+  onUpdateCoverage?: (versionId: string, input: { humanOverallScore?: number | null; humanRecommendation?: string; humanCriteria?: Record<string, number | null>; humanNotes?: string }) => Promise<void>;
+}) {
+  const coverage = version?.coverage;
+  const summary = coverage?.aiSummary;
+  const canEditCoverage = Boolean(version && onUpdateCoverage);
+  const [overallScore, setOverallScore] = useState(`${coverage?.humanOverallScore ?? ""}`);
+  const [recommendation, setRecommendation] = useState(coverage?.humanRecommendation ?? "CONSIDER");
+  const [humanNotes, setHumanNotes] = useState(coverage?.humanNotes ?? "");
+  const [criteria, setCriteria] = useState<Record<string, string>>(() => Object.fromEntries(coverageCriteria.map((item) => [item.key, `${coverage?.humanCriteria?.[item.key] ?? ""}`])));
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState<"generate" | "save" | "">("");
+
+  useEffect(() => {
+    setOverallScore(`${coverage?.humanOverallScore ?? ""}`);
+    setRecommendation(coverage?.humanRecommendation ?? "CONSIDER");
+    setHumanNotes(coverage?.humanNotes ?? "");
+    setCriteria(Object.fromEntries(coverageCriteria.map((item) => [item.key, `${coverage?.humanCriteria?.[item.key] ?? ""}`])));
+    setMessage("");
+  }, [coverage?.humanCriteria, coverage?.humanNotes, coverage?.humanOverallScore, coverage?.humanRecommendation, version?.id]);
+
+  async function generateCoverage() {
+    if (!version || !onGenerateCoverage) return;
+    setBusy("generate");
+    setMessage("");
+    try {
+      await onGenerateCoverage(version.id);
+      setMessage("Coverage draft generated.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not generate coverage.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function saveCoverage() {
+    if (!version || !onUpdateCoverage) return;
+    setBusy("save");
+    setMessage("");
+    try {
+      await onUpdateCoverage(version.id, {
+        humanOverallScore: overallScore ? Number(overallScore) : null,
+        humanRecommendation: recommendation,
+        humanNotes,
+        humanCriteria: Object.fromEntries(coverageCriteria.map((item) => [item.key, criteria[item.key] ? Number(criteria[item.key]) : null]))
+      });
+      setMessage("Human rating saved.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not save rating.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  return (
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
+      <Panel>
+        <SectionHeader
+          eyebrow="Coverage Draft"
+          title="Script Version Summary"
+          action={version && onGenerateCoverage ? (
+            <button type="button" onClick={generateCoverage} disabled={busy === "generate"} className="inline-flex items-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-wait disabled:opacity-60">
+              {busy === "generate" ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileText className="h-4 w-4" />}
+              {summary ? "Regenerate Draft" : "Generate Draft"}
+            </button>
+          ) : undefined}
+        />
+        {!version ? <EmptyState label="No version is available for coverage yet." /> : summary ? (
+          <div className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-3">
+              <SmallStat label="Version" value={`v${version.versionNumber}`} />
+              <SmallStat label="Draft Score" value={`${summary.scoreDraft.overall}/10`} />
+              <SmallStat label="Status" value={statusLabel(coverage?.aiStatus ?? "NOT_RUN")} />
+            </div>
+            {coverage?.aiModel ? <p className="text-[11px] text-studio-500">Generated by {coverage.aiModel}{coverage.aiGeneratedAt ? ` on ${coverage.aiGeneratedAt}` : ""}. External LLM analysis is disabled until explicitly approved.</p> : null}
+            <CoverageTextBlock label="Logline" value={summary.logline} />
+            <CoverageTextBlock label="Synopsis" value={summary.synopsis} />
+            <CoverageTextBlock label="Genre / Tone" value={summary.genreTone} />
+            <div className="grid gap-3 md:grid-cols-2">
+              <CoverageList label="Main Characters" items={summary.mainCharacters} empty="No characters identified." />
+              <CoverageList label="Comparable Titles" items={summary.comps} empty="No comps generated yet." />
+              <CoverageList label="Strengths" items={summary.strengths} empty="No strengths generated yet." />
+              <CoverageList label="Concerns" items={summary.concerns} empty="No concerns generated yet." />
+            </div>
+            <CoverageTextBlock label="Suggested Next Step" value={summary.suggestedNextStep} />
+            <div className="grid gap-2 sm:grid-cols-4">
+              {coverageCriteria.map((item) => (
+                <AdminStorageTile key={item.key} label={item.label} value={`${summary.scoreDraft[item.key]}/10`} tone="neutral" />
+              ))}
+            </div>
+          </div>
+        ) : (
+          <EmptyState label="Generate a coverage draft from this version's extracted text, then add the human rating on the right." />
+        )}
+      </Panel>
+      <Panel>
+        <SectionHeader eyebrow="Human Read" title="Rating and Recommendation" />
+        <div className="space-y-3">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="grid gap-1.5">
+              <span className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">Overall Score</span>
+              <input className="field" type="number" min={1} max={10} value={overallScore} onChange={(event) => setOverallScore(event.target.value)} placeholder="1-10" disabled={!canEditCoverage} />
+            </label>
+            <label className="grid gap-1.5">
+              <span className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">Recommendation</span>
+              <select className="field" value={recommendation} onChange={(event) => setRecommendation(event.target.value)} disabled={!canEditCoverage}>
+                {coverageRecommendations.map((item) => <option key={item} value={item}>{statusLabel(item)}</option>)}
+              </select>
+            </label>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {coverageCriteria.map((item) => (
+              <label key={item.key} className="grid gap-1">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">{item.label}</span>
+                <input className="field" type="number" min={1} max={10} value={criteria[item.key] ?? ""} onChange={(event) => setCriteria((current) => ({ ...current, [item.key]: event.target.value }))} placeholder="1-10" disabled={!canEditCoverage} />
+              </label>
+            ))}
+          </div>
+          <label className="grid gap-1.5">
+            <span className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">Human Coverage Notes</span>
+            <textarea className="field min-h-40 whitespace-pre-wrap" value={humanNotes} onChange={(event) => setHumanNotes(event.target.value)} placeholder="Paste or write coverage notes. Formatting, line breaks, and bullets are preserved." disabled={!canEditCoverage} />
+          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" onClick={saveCoverage} disabled={!canEditCoverage || busy === "save"} className="inline-flex items-center gap-1.5 rounded-md bg-amberline px-3 py-2 text-sm font-semibold text-studio-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:opacity-50">
+              {busy === "save" ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+              Save Rating
+            </button>
+            {message ? <p className="text-xs text-studio-300">{message}</p> : null}
+          </div>
+          {coverage?.updatedAt ? <p className="text-[11px] text-studio-500">Last saved {coverage.updatedAt}{coverage.updatedById ? ` by ${currentUser?.id === coverage.updatedById ? "you" : userName(coverage.updatedById)}` : ""}</p> : null}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function CoverageTextBlock({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/[0.025] p-3">
+      <p className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">{label}</p>
+      <p className="mt-1 whitespace-pre-wrap text-[13px] leading-6 text-studio-200">{value}</p>
+    </div>
+  );
+}
+
+function CoverageList({ label, items, empty }: { label: string; items: string[]; empty: string }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/[0.025] p-3">
+      <p className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">{label}</p>
+      {items.length ? (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {items.map((item) => <span key={item} className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-xs font-semibold text-studio-200">{item}</span>)}
+        </div>
+      ) : <p className="mt-1 text-xs text-studio-500">{empty}</p>}
     </div>
   );
 }
