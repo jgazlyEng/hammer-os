@@ -1,11 +1,10 @@
 import { NextResponse } from "next/server";
 import { isDatabaseConfigured, requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { LLM_PROVIDER_KEY, readStoredLlmProviderSettings, resolveLlmApiKey } from "@/lib/llm-settings";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const LLM_PROVIDER_KEY = "llm.provider";
 
 export async function POST(request: Request) {
   const auth = requireAdmin(request);
@@ -14,13 +13,14 @@ export async function POST(request: Request) {
   const body = await request.json().catch(() => ({})) as Record<string, unknown>;
   const submittedProvider = typeof body.provider === "string" ? body.provider : undefined;
   const submittedModel = typeof body.model === "string" ? body.model.trim() : undefined;
-  const settings = isDatabaseConfigured() ? await readStoredSettings() : undefined;
+  const settings = isDatabaseConfigured() ? await readStoredLlmProviderSettings().catch(() => undefined) : undefined;
   const provider = submittedProvider || settings?.provider || "anthropic";
   const model = submittedModel || settings?.model || process.env.GREENLIGHT_LLM_MODEL || "claude-sonnet-5";
+  const apiKey = settings ? await resolveLlmApiKey({ ...settings, provider: provider as typeof settings.provider }) : process.env.ANTHROPIC_API_KEY || "";
 
   if (provider === "disabled") return NextResponse.json({ error: "LLM provider is disabled." }, { status: 400 });
   if (provider !== "anthropic") return NextResponse.json({ error: "Only Claude / Anthropic test calls are enabled right now." }, { status: 400 });
-  if (!process.env.ANTHROPIC_API_KEY) return NextResponse.json({ error: "ANTHROPIC_API_KEY is not configured on the server." }, { status: 503 });
+  if (!apiKey) return NextResponse.json({ error: "Claude API key is not configured. Add it in Admin Settings or set ANTHROPIC_API_KEY on the server." }, { status: 503 });
 
   try {
     const startedAt = Date.now();
@@ -28,7 +28,7 @@ export async function POST(request: Request) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": process.env.ANTHROPIC_API_KEY,
+        "x-api-key": apiKey,
         "anthropic-version": "2023-06-01"
       },
       body: JSON.stringify({
@@ -61,20 +61,6 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Claude connection test failed." }, { status: 502 });
-  }
-}
-
-async function readStoredSettings() {
-  try {
-    const setting = await prisma.appSetting.findUnique({ where: { key: LLM_PROVIDER_KEY } });
-    const value = setting?.valueJson;
-    const record = value && typeof value === "object" ? value as Record<string, unknown> : {};
-    return {
-      provider: typeof record.provider === "string" ? record.provider : "anthropic",
-      model: typeof record.model === "string" ? record.model : process.env.GREENLIGHT_LLM_MODEL || "claude-sonnet-5"
-    };
-  } catch {
-    return undefined;
   }
 }
 
