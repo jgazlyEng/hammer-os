@@ -10777,6 +10777,7 @@ type AdminSettings = {
       maxInputCharacters: number;
       allowExternalScriptAnalysis: boolean;
       apiKeyConfigured: boolean;
+      apiKeySource?: "admin" | "environment" | "missing";
     };
   };
   updatedAt?: string | null;
@@ -11512,6 +11513,8 @@ function AdminSettingsPanel({ data, databaseMode, onSaved }: { data: AdminSettin
   const [llmEnabled, setLlmEnabled] = useState(currentLlmProvider.enabled);
   const [llmProvider, setLlmProvider] = useState<AdminSettings["settings"]["llmProvider"]["provider"]>(currentLlmProvider.provider);
   const [llmModel, setLlmModel] = useState(currentLlmProvider.model);
+  const [llmApiKey, setLlmApiKey] = useState("");
+  const [clearLlmApiKey, setClearLlmApiKey] = useState(false);
   const [llmMaxInputCharacters, setLlmMaxInputCharacters] = useState(`${currentLlmProvider.maxInputCharacters}`);
   const [allowExternalScriptAnalysis, setAllowExternalScriptAnalysis] = useState(currentLlmProvider.allowExternalScriptAnalysis);
   const [message, setMessage] = useState("");
@@ -11537,6 +11540,8 @@ function AdminSettingsPanel({ data, databaseMode, onSaved }: { data: AdminSettin
     setLlmEnabled(currentLlmProvider.enabled);
     setLlmProvider(currentLlmProvider.provider);
     setLlmModel(currentLlmProvider.model);
+    setLlmApiKey("");
+    setClearLlmApiKey(false);
     setLlmMaxInputCharacters(`${currentLlmProvider.maxInputCharacters}`);
     setAllowExternalScriptAnalysis(currentLlmProvider.allowExternalScriptAnalysis);
     setTestMessage("");
@@ -11565,13 +11570,17 @@ function AdminSettingsPanel({ data, databaseMode, onSaved }: { data: AdminSettin
             provider: llmProvider,
             model: llmModel,
             maxInputCharacters: Number(llmMaxInputCharacters),
-            allowExternalScriptAnalysis
+            allowExternalScriptAnalysis,
+            apiKey: llmApiKey,
+            clearApiKey: clearLlmApiKey
           }
         })
       });
       const saved = await response.json().catch(() => null) as AdminSettings & { error?: string };
       if (!response.ok) throw new Error(saved?.error ?? "Could not save settings.");
       onSaved(saved);
+      setLlmApiKey("");
+      setClearLlmApiKey(false);
       setMessage("Settings saved.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not save settings.");
@@ -11665,9 +11674,9 @@ function AdminSettingsPanel({ data, databaseMode, onSaved }: { data: AdminSettin
             <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
               <div>
                 <p className="text-sm font-semibold text-studio-100">LLM Provider</p>
-                <p className="mt-1 text-xs leading-5 text-studio-400">Choose the model provider GreenLight should use for future AI coverage and analysis. API keys stay in server environment variables.</p>
+                <p className="mt-1 text-xs leading-5 text-studio-400">Choose the model provider GreenLight should use for future AI coverage and analysis. Saved API keys are encrypted server-side and never shown again.</p>
               </div>
-              <Badge value={currentLlmProvider.apiKeyConfigured ? "API KEY CONFIGURED" : "API KEY MISSING"} subtle />
+              <Badge value={currentLlmProvider.apiKeyConfigured ? `API KEY CONFIGURED${currentLlmProvider.apiKeySource === "admin" ? " IN ADMIN" : currentLlmProvider.apiKeySource === "environment" ? " ON SERVER" : ""}` : "API KEY MISSING"} subtle />
             </div>
             <div className="mt-3 grid gap-3 md:grid-cols-[180px_minmax(0,1fr)_180px]">
               <label className="grid gap-1.5">
@@ -11687,6 +11696,16 @@ function AdminSettingsPanel({ data, databaseMode, onSaved }: { data: AdminSettin
                 <input className="field" type="number" min={1000} max={200000} value={llmMaxInputCharacters} onChange={(event) => setLlmMaxInputCharacters(event.target.value)} />
               </label>
             </div>
+            <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_180px]">
+              <label className="grid gap-1.5">
+                <span className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">API Key</span>
+                <input className="field" type="password" value={llmApiKey} onChange={(event) => { setLlmApiKey(event.target.value); if (event.target.value.trim()) setClearLlmApiKey(false); }} placeholder={currentLlmProvider.apiKeyConfigured ? "Leave blank to keep current key" : "Paste Claude API key"} autoComplete="off" />
+              </label>
+              <label className="mt-5 flex items-center gap-2 rounded-md border border-white/10 bg-studio-950/25 px-3 py-2 text-xs font-semibold text-studio-300">
+                <input type="checkbox" checked={clearLlmApiKey} onChange={(event) => { setClearLlmApiKey(event.target.checked); if (event.target.checked) setLlmApiKey(""); }} disabled={!currentLlmProvider.apiKeyConfigured} />
+                Clear saved key
+              </label>
+            </div>
             <div className="mt-3 grid gap-2 md:grid-cols-2">
               <label className="flex items-center gap-2 rounded-md border border-white/10 bg-studio-950/25 px-3 py-2 text-xs font-semibold text-studio-300">
                 <input type="checkbox" checked={llmEnabled} onChange={(event) => setLlmEnabled(event.target.checked)} />
@@ -11701,7 +11720,7 @@ function AdminSettingsPanel({ data, databaseMode, onSaved }: { data: AdminSettin
               <button type="button" disabled={!databaseMode || testingLlm || llmProvider !== "anthropic"} onClick={testLlmConnection} className="rounded-md border border-white/10 bg-white/[0.025] px-3 py-2 text-sm font-semibold text-studio-200 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-not-allowed disabled:opacity-50">{testingLlm ? "Testing..." : "Test Claude Connection"}</button>
               {testMessage ? <p className="text-xs text-studio-300">{testMessage}</p> : null}
             </div>
-            <p className="mt-2 text-[11px] leading-5 text-studio-500">For Claude, set ANTHROPIC_API_KEY on the server. GreenLight will not send script text externally unless external script analysis is enabled.</p>
+            <p className="mt-2 text-[11px] leading-5 text-studio-500">To save keys from this panel, set LLM_SECRET_KEY on the server. GreenLight will not send script text externally unless external script analysis is enabled.</p>
           </div>
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs text-studio-400">{message}</p>
