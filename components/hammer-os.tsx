@@ -507,10 +507,14 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
   const slateCollectionItems = useMemo(() => workspaceMode === "database" ? workspaceSlateCollectionItems : [...hammerSlateCollectionItems, ...localSlateCollectionItems], [localSlateCollectionItems, workspaceMode, workspaceSlateCollectionItems]);
   const prospectAssets = useMemo(() => workspaceMode === "database" ? workspaceProspectAssets : localProspectAssets, [localProspectAssets, workspaceMode, workspaceProspectAssets]);
   const sessionUserEmail = sessionUser?.email?.toLowerCase();
-  const project = useMemo(() => projects.find((item) => item.id === id) ?? projects[0] ?? emptyProject, [id, projects]);
   const document = useMemo(() => documents.find((item) => item.id === id) ?? documents[0] ?? emptyDocument, [documents, id]);
   const asset = useMemo(() => assets.find((item) => item.id === id) ?? assets[0] ?? emptyAsset, [assets, id]);
   const activeProject = useMemo(() => projects.find((item) => item.id === activeProjectId) ?? projects[0] ?? emptyProject, [activeProjectId, projects]);
+  const isProjectRouteView = isProjectScopedView(view);
+  const project = useMemo(() => {
+    if (isProjectRouteView) return projects.find((item) => item.id === id) ?? emptyProject;
+    return activeProject;
+  }, [activeProject, id, isProjectRouteView, projects]);
   const currentUser = useMemo(() => users.find((user) => user.email.toLowerCase() === sessionUserEmail) ?? sessionUserToHammerUser(sessionUser, workspaceMode), [sessionUser, sessionUserEmail, users, workspaceMode]);
 
   function applyDatabaseWorkspace(data: HammerWorkspacePayload) {
@@ -763,6 +767,17 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       window.removeEventListener("storage", handleStorage);
     };
   }, [projects]);
+
+  useEffect(() => {
+    if (!isProjectRouteView || !id || !projects.some((project) => project.id === id)) return;
+    if (activeProjectId !== id) setActiveProjectId(id);
+    try {
+      window.localStorage.setItem(HAMMER_ACTIVE_PROJECT_STORAGE_KEY, id);
+      window.dispatchEvent(new CustomEvent(HAMMER_ACTIVE_PROJECT_EVENT, { detail: { projectId: id } }));
+    } catch {
+      // Route-scoped project selection is a convenience sync; rendering should not depend on storage.
+    }
+  }, [activeProjectId, id, isProjectRouteView, projects]);
 
   async function addProject(draft?: Partial<ProjectDraft>) {
     if (workspaceMode === "database") {
@@ -1929,7 +1944,10 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
       if (!canManageScriptLibrary(currentUser.role)) return <AccessDenied title="Project creation access required" detail="Only admins, producers, and executives can create new projects." />;
       return <ProjectEditor users={users} currentUser={currentUser} onCreate={addProject} />;
     }
-    if (["project-detail", "project-documents", "project-assets"].includes(view) && !projects.length) return <EmptyWorkspaceState />;
+    if (isProjectRouteView && !projects.length) return <EmptyWorkspaceState />;
+    if (isProjectRouteView && id && !projects.some((item) => item.id === id)) {
+      return <AccessDenied title="Development Slate item unavailable" detail="This slate item is not available in the current workspace, or your account does not have access to it." />;
+    }
     if (view === "project-detail") return <ProjectWorkspace project={project} activeTab="overview" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpdateProject={canManageScriptLibrary(currentUser.role) ? updateProject : undefined} onUpload={uploadDocumentVersion} onDelete={canManageScriptLibrary(currentUser.role) ? deleteUploadedDocument : undefined} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
     if (view === "project-documents") return <ProjectWorkspace project={project} activeTab="documents" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpdateProject={canManageScriptLibrary(currentUser.role) ? updateProject : undefined} onUpload={uploadDocumentVersion} onDelete={canManageScriptLibrary(currentUser.role) ? deleteUploadedDocument : undefined} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
     if (view === "project-assets") return <ProjectWorkspace project={project} activeTab="assets" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpdateProject={canManageScriptLibrary(currentUser.role) ? updateProject : undefined} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
@@ -14852,4 +14870,8 @@ function backHrefForView(view: HammerView, context: { project: HammerProject; do
 function scopedProjectTitle(view: HammerView, activeProject: HammerProject) {
   if (["assets", "reviews"].includes(view)) return activeProject.title;
   return null;
+}
+
+function isProjectScopedView(view: HammerView) {
+  return view === "project-detail" || view === "project-documents" || view === "project-assets";
 }
