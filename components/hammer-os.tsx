@@ -8212,7 +8212,8 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
           <SmallStat label="Locations" value={`${activeRun ? persistedCounts.LOCATION ?? 0 : parsed?.environments.length ?? 0}`} />
           <SmallStat label="Props / Actions" value={`${activeRun ? (persistedCounts.PROP ?? 0) + (persistedCounts.ACTION ?? 0) : (parsed?.props.length ?? 0) + (parsed?.stuntBeats.length ?? 0)}`} />
         </div>
-        {activeRun ? <p className="mt-3 rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 text-xs text-studio-300">Latest run: {statusLabel(activeRun.status)} / {activeRun.createdAt.slice(0, 10)}{activeRun.createdByName ? ` by ${activeRun.createdByName}` : ""}</p> : null}
+        {activeRun ? <p className="mt-3 rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 text-xs text-studio-300">Latest run: {statusLabel(activeRun.status)} / {activeRun.parserName.includes("anthropic") ? "Claude enhanced" : "Standard parser"} / {activeRun.createdAt.slice(0, 10)}{activeRun.createdByName ? ` by ${activeRun.createdByName}` : ""}</p> : null}
+        {activeRun?.warning ? <p className="mt-3 rounded border border-yellow-300/25 bg-yellow-300/10 px-2.5 py-2 text-xs text-yellow-100">{activeRun.warning}</p> : null}
         {persistedLoading ? <p className="mt-3 rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 text-xs text-studio-300">Loading saved breakdown runs...</p> : null}
         {textState.loading ? <p className="mt-3 rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 text-xs text-studio-300">Loading script text for breakdown...</p> : null}
         {textState.message ? <p className="mt-3 rounded border border-ember/30 bg-ember/10 px-2.5 py-2 text-xs text-ember">{textState.message}</p> : null}
