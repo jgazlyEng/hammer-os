@@ -124,6 +124,8 @@ enum CommentTargetType {
   PROSPECT
   DOCUMENT
   DOCUMENT_VERSION
+  BREAKDOWN_RUN
+  BREAKDOWN_ELEMENT
   SCENE
   ENTITY
   ASSET
@@ -174,6 +176,8 @@ enum TaskTargetType {
   PROJECT_LEAD
   DOCUMENT
   DOCUMENT_VERSION
+  BREAKDOWN_RUN
+  BREAKDOWN_ELEMENT
   SCENE
   ENTITY
   ASSET
@@ -313,6 +317,53 @@ enum UploadJobStatus {
   FAILED
 }
 
+enum BreakdownRunStatus {
+  DRAFT
+  RUNNING
+  READY_FOR_REVIEW
+  NEEDS_REVISION
+  APPROVED
+  ARCHIVED
+  FAILED
+}
+
+enum BreakdownTaxonomyCategory {
+  CHARACTER
+  EXTRAS
+  LOCATION
+  PROP
+  VEHICLE
+  WARDROBE
+  SFX
+  ANIMAL
+  ACTION
+  VFX
+  NOTE
+  OTHER
+}
+
+enum BreakdownElementStatus {
+  UNREVIEWED
+  ACCEPTED
+  IGNORED
+  MERGED
+  NEEDS_REVIEW
+}
+
+enum BreakdownPageSource {
+  MEASURED
+  ESTIMATED
+  UNKNOWN
+}
+
+enum TagScope {
+  DOCUMENT
+  BREAKDOWN
+  ASSET
+  PROJECT
+  PROSPECT
+}
+
 enum SlateCollectionItemType {
   PROJECT
   PROSPECT
@@ -354,6 +405,8 @@ model Project {
   scriptVersions          ScriptVersion[]
   sequences               Sequence[]
   scenes                  Scene[]
+  breakdownRuns           BreakdownRun[]
+  breakdownElements       BreakdownElement[]
   shots                   Shot[]
   previzShots             PrevizShot[]
   departments             Department[]
@@ -451,6 +504,8 @@ model User {
   documentsCreated Document[]      @relation("DocumentCreator")
   documentTagsCreated DocumentTag[]
   documentVersionsUploaded DocumentVersion[] @relation("DocumentVersionUploader")
+  breakdownRunsCreated BreakdownRun[] @relation("BreakdownRunCreator")
+  breakdownRunsApproved BreakdownRun[] @relation("BreakdownRunApprover")
   scriptCoveragesCreated ScriptCoverage[] @relation("ScriptCoverageCreator")
   scriptCoveragesUpdated ScriptCoverage[] @relation("ScriptCoverageUpdater")
   uploadJobsCreated UploadJob[]       @relation("UploadJobCreator")
@@ -506,6 +561,7 @@ model Document {
   createdBy        User?             @relation("DocumentCreator", fields: [createdById], references: [id], onDelete: SetNull)
   versions         DocumentVersion[] @relation("DocumentVersions")
   uploadJobs       UploadJob[]
+  breakdownRuns    BreakdownRun[]
   diffs            DocumentDiff[]
   supportingDocuments SupportingDocument[]
   collectionItems ScriptCollectionItem[]
@@ -531,6 +587,25 @@ model DocumentTag {
   @@index([documentId])
   @@index([key])
   @@unique([documentId, key, value])
+}
+
+model Tag {
+  id          String    @id @default(cuid())
+  scope       TagScope  @default(BREAKDOWN)
+  key         String
+  value       String
+  label       String?
+  description String?   @db.Text
+  color       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  breakdownElements BreakdownElementTag[]
+
+  @@unique([scope, key, value])
+  @@index([scope])
+  @@index([key])
+  @@index([value])
 }
 
 model ScriptCollection {
@@ -625,6 +700,8 @@ model DocumentVersion {
   uploadJobs         UploadJob[]
   coverage           ScriptCoverage?
   scenes             Scene[]               @relation("DocumentVersionScenes")
+  breakdownRuns      BreakdownRun[]
+  breakdownElements  BreakdownElement[]
   diffsFrom          DocumentDiff[]        @relation("DocumentDiffFrom")
   diffsTo            DocumentDiff[]        @relation("DocumentDiffTo")
   assetLinks         AssetLink[]
@@ -658,6 +735,120 @@ model ScriptCoverage {
   @@index([humanOverallScore])
   @@index([humanRecommendation])
   @@index([updatedAt])
+}
+
+model BreakdownRun {
+  id                String                  @id @default(cuid())
+  projectId         String
+  documentId        String?
+  documentVersionId String
+  parserName        String                  @default("greenlight-production-breakdown")
+  parserVersion     String?
+  status            BreakdownRunStatus      @default(DRAFT)
+  summaryJson       Json?
+  statsJson         Json?
+  warning           String?                 @db.Text
+  error             String?                 @db.Text
+  createdById       String?
+  approvedById      String?
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+  completedAt       DateTime?
+  approvedAt        DateTime?
+
+  project           Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  document          Document?               @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  documentVersion   DocumentVersion         @relation(fields: [documentVersionId], references: [id], onDelete: Cascade)
+  createdBy         User?                   @relation("BreakdownRunCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  approvedBy        User?                   @relation("BreakdownRunApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  elements          BreakdownElement[]
+  sceneElements     BreakdownSceneElement[]
+
+  @@index([projectId])
+  @@index([documentId])
+  @@index([documentVersionId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model BreakdownElement {
+  id                String                    @id @default(cuid())
+  runId             String
+  projectId         String
+  documentVersionId String
+  entityId          String?
+  stableKey         String
+  category          BreakdownTaxonomyCategory
+  displayName       String
+  normalizedName    String
+  description       String?                   @db.Text
+  evidenceText      String?                   @db.Text
+  sourceText        String?                   @db.Text
+  firstPageNumber   Float?
+  lastPageNumber    Float?
+  pageSource        BreakdownPageSource       @default(UNKNOWN)
+  confidence        Float?
+  status            BreakdownElementStatus    @default(UNREVIEWED)
+  sortOrder         Int                       @default(0)
+  metadataJson      Json?
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+
+  run               BreakdownRun              @relation(fields: [runId], references: [id], onDelete: Cascade)
+  project           Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  documentVersion   DocumentVersion           @relation(fields: [documentVersionId], references: [id], onDelete: Cascade)
+  entity            Entity?                   @relation(fields: [entityId], references: [id], onDelete: SetNull)
+  sceneElements     BreakdownSceneElement[]
+  tags              BreakdownElementTag[]
+  assetLinks        AssetLink[]
+
+  @@unique([runId, stableKey])
+  @@index([projectId])
+  @@index([documentVersionId])
+  @@index([category])
+  @@index([status])
+  @@index([normalizedName])
+  @@index([entityId])
+}
+
+model BreakdownSceneElement {
+  id                 String           @id @default(cuid())
+  runId              String
+  breakdownElementId String
+  sceneId            String?
+  sceneNumber        String?
+  sceneHeading       String?
+  occurrenceCount    Int              @default(1)
+  firstPageNumber    Float?
+  lastPageNumber     Float?
+  importance         EntityImportance @default(MEDIUM)
+  evidenceText       String?          @db.Text
+  notes              String?          @db.Text
+  metadataJson       Json?
+  createdAt          DateTime         @default(now())
+
+  run                BreakdownRun     @relation(fields: [runId], references: [id], onDelete: Cascade)
+  breakdownElement   BreakdownElement @relation(fields: [breakdownElementId], references: [id], onDelete: Cascade)
+  scene              Scene?           @relation(fields: [sceneId], references: [id], onDelete: SetNull)
+
+  @@unique([breakdownElementId, sceneId, sceneNumber])
+  @@index([runId])
+  @@index([breakdownElementId])
+  @@index([sceneId])
+  @@index([sceneNumber])
+}
+
+model BreakdownElementTag {
+  id                 String           @id @default(cuid())
+  breakdownElementId String
+  tagId              String
+  createdAt          DateTime         @default(now())
+
+  breakdownElement   BreakdownElement @relation(fields: [breakdownElementId], references: [id], onDelete: Cascade)
+  tag                Tag              @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([breakdownElementId, tagId])
+  @@index([tagId])
 }
 
 model UploadJob {
@@ -987,6 +1178,7 @@ model Scene {
   shots             Shot[]
   changeRequests    ChangeRequest[]
   sceneEntities     SceneEntity[]
+  breakdownElements BreakdownSceneElement[]
   assetLinks        AssetLink[]
 
   @@index([projectId])
@@ -1006,6 +1198,7 @@ model Entity {
 
   project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
   scenes       SceneEntity[]
+  breakdownElements BreakdownElement[]
   assetLinks   AssetLink[]
 
   @@unique([projectId, type, name])
@@ -1136,6 +1329,7 @@ model AssetLink {
   projectId         String
   sceneId           String?
   entityId          String?
+  breakdownElementId String?
   documentVersionId String?
   linkType          LinkType         @default(REFERENCE)
   createdAt         DateTime         @default(now())
@@ -1144,11 +1338,13 @@ model AssetLink {
   project           Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   scene             Scene?           @relation(fields: [sceneId], references: [id], onDelete: SetNull)
   entity            Entity?          @relation(fields: [entityId], references: [id], onDelete: SetNull)
+  breakdownElement  BreakdownElement? @relation(fields: [breakdownElementId], references: [id], onDelete: SetNull)
   documentVersion   DocumentVersion? @relation(fields: [documentVersionId], references: [id], onDelete: SetNull)
 
   @@index([projectId])
   @@index([sceneId])
   @@index([entityId])
+  @@index([breakdownElementId])
 }
 
 model Comment {
