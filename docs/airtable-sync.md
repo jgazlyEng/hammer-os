@@ -15,6 +15,8 @@ Set these in the app server `.env`:
 AIRTABLE_API_KEY="your_airtable_personal_access_token"
 AIRTABLE_BASE_ID="appKCINmEMPpqkwqt"
 AIRTABLE_SYNC_TABLES="Projects,Cultural Trends,Public IP"
+# If table names fail, use exact Airtable table IDs while keeping GreenLight tab labels:
+# AIRTABLE_SYNC_TABLES="Projects=tblXXXXXXXXXXXXXX,Cultural Trends=tblYYYYYYYYYYYYYY,Public IP=tblZZZZZZZZZZZZZZ"
 # Optional only if a future Airtable setup uses one source table with multiple views:
 # AIRTABLE_SOURCE_TABLE="tblXXXXXXXXXXXXXX"
 # AIRTABLE_SYNC_VIEWS="Projects=viwXXXXXXXXXXXXXX,Public IP=viwYYYYYYYYYYYYYY,Cultural Trends=viwZZZZZZZZZZZZZZ"

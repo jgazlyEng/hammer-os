@@ -8,6 +8,11 @@ type AirtableSyncView = {
   view: string;
 };
 
+type AirtableSyncTable = {
+  label: string;
+  table: string;
+};
+
 type AirtableRecord = {
   id: string;
   createdTime?: string;
@@ -47,7 +52,7 @@ export type AirtableSyncStatus = {
   configured: boolean;
   baseId: string;
   sourceTable: string;
-  tables: string[];
+  tables: AirtableSyncTable[];
   views: AirtableSyncView[];
   databaseCounts: Array<{
     source: string;
@@ -85,7 +90,7 @@ export async function syncAirtableProspects(prisma: PrismaClient): Promise<Airta
 
   const syncTargets = config.sourceTable
     ? config.views.map((view) => ({ label: view.label, tableOrId: config.sourceTable, view: view.view }))
-    : config.tables.map((tableName) => ({ label: tableName, tableOrId: tableName, view: undefined }));
+    : config.tables.map((table) => ({ label: table.label, tableOrId: table.table, view: undefined }));
 
   for (const syncTarget of syncTargets) {
     const records = await fetchAirtableRecords(config.baseId, syncTarget.tableOrId, syncTarget.view, syncTarget.label, config.apiKey);
@@ -283,9 +288,16 @@ function airtableRecordToProspectData(baseId: string, tableName: string, record:
   };
 }
 
-function parseTableList(value?: string) {
+function parseTableList(value?: string): AirtableSyncTable[] {
   const tables = value?.split(",").map((table) => table.trim()).filter(Boolean);
-  return tables?.length ? tables : DEFAULT_TABLES;
+  const entries = tables?.length ? tables : DEFAULT_TABLES;
+  return entries.map((entry) => {
+    const separatorIndex = entry.indexOf("=");
+    if (separatorIndex === -1) return { label: entry, table: entry };
+    const label = entry.slice(0, separatorIndex).trim();
+    const table = entry.slice(separatorIndex + 1).trim();
+    return { label: label || table, table: table || label };
+  });
 }
 
 function parseViewList(viewValue?: string, tableValue?: string): AirtableSyncView[] {
@@ -299,7 +311,7 @@ function parseViewList(viewValue?: string, tableValue?: string): AirtableSyncVie
       return { label: label || view, view: view || label };
     });
   }
-  return parseTableList(tableValue).map((tableName) => ({ label: tableName, view: tableName }));
+  return parseTableList(tableValue).map((table) => ({ label: table.label, view: table.table }));
 }
 
 function normalizeFields(fields: Record<string, unknown>) {
