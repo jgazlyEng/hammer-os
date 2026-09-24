@@ -16,7 +16,8 @@
     "db:seed": "tsx prisma/seed.ts",
     "db:cleanup-demo": "tsx prisma/cleanup-demo-data.ts",
     "db:dedupe-prospects": "tsx prisma/dedupe-prospects.ts",
-    "airtable:sync": "tsx scripts/airtable-sync.ts"
+    "airtable:sync": "tsx scripts/airtable-sync.ts",
+    "airtable:status": "tsx scripts/airtable-status.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

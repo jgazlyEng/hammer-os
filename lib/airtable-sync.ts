@@ -1,6 +1,7 @@
 import type { PrismaClient, Prisma } from "@prisma/client";
 
 const DEFAULT_BASE_ID = "appKCINmEMPpqkwqt";
+const DEFAULT_SOURCE_TABLE = "Projects/IP";
 const DEFAULT_TABLES = ["Projects", "Cultural Trends", "Public IP"];
 
 type AirtableRecord = {
@@ -17,6 +18,7 @@ type AirtableListResponse = {
 
 export type AirtableSyncSummary = {
   baseId: string;
+  sourceTable: string;
   tables: Array<{
     tableName: string;
     received: number;
@@ -28,9 +30,22 @@ export type AirtableSyncSummary = {
   totalUpdated: number;
 };
 
+export type AirtableSyncStatus = {
+  configured: boolean;
+  baseId: string;
+  sourceTable: string;
+  tables: string[];
+  databaseCounts: Array<{
+    source: string;
+    count: number;
+    lastSyncedAt?: string;
+  }>;
+};
+
 export function airtableSyncConfig() {
   return {
     baseId: process.env.AIRTABLE_BASE_ID?.trim() || DEFAULT_BASE_ID,
+    sourceTable: process.env.AIRTABLE_SOURCE_TABLE?.trim() || process.env.AIRTABLE_TABLE_NAME?.trim() || DEFAULT_SOURCE_TABLE,
     apiKey: process.env.AIRTABLE_API_KEY?.trim() || process.env.AIRTABLE_PAT?.trim() || "",
     tables: parseTableList(process.env.AIRTABLE_SYNC_TABLES),
     secret: process.env.AIRTABLE_SYNC_SECRET?.trim() || ""
@@ -45,6 +60,7 @@ export async function syncAirtableProspects(prisma: PrismaClient): Promise<Airta
 
   const summary: AirtableSyncSummary = {
     baseId: config.baseId,
+    sourceTable: config.sourceTable,
     tables: [],
     totalReceived: 0,
     totalCreated: 0,
@@ -52,7 +68,7 @@ export async function syncAirtableProspects(prisma: PrismaClient): Promise<Airta
   };
 
   for (const tableName of config.tables) {
-    const records = await fetchAirtableRecords(config.baseId, tableName, config.apiKey);
+    const records = await fetchAirtableRecords(config.baseId, config.sourceTable, tableName, config.apiKey);
     let created = 0;
     let updated = 0;
 
@@ -96,13 +112,46 @@ export async function syncAirtableProspects(prisma: PrismaClient): Promise<Airta
   return summary;
 }
 
-async function fetchAirtableRecords(baseId: string, tableName: string, apiKey: string) {
+export async function getAirtableProspectStatus(prisma: PrismaClient): Promise<AirtableSyncStatus> {
+  const config = airtableSyncConfig();
+  const grouped = await prisma.prospect.groupBy({
+    by: ["airtableTableName"],
+    where: { deletedAt: null },
+    _count: { _all: true },
+    _max: { airtableLastSyncedAt: true },
+    orderBy: { airtableTableName: "asc" }
+  });
+  const manualCount = await prisma.prospect.count({
+    where: {
+      deletedAt: null,
+      airtableTableName: null
+    }
+  });
+
+  return {
+    configured: Boolean(config.apiKey),
+    baseId: config.baseId,
+    sourceTable: config.sourceTable,
+    tables: config.tables,
+    databaseCounts: [
+      ...grouped.map((row) => ({
+        source: row.airtableTableName || "Other / Manual",
+        count: row._count._all,
+        lastSyncedAt: row._max.airtableLastSyncedAt?.toISOString()
+      })),
+      ...(manualCount ? [{ source: "Other / Manual", count: manualCount }] : [])
+    ]
+  };
+}
+
+async function fetchAirtableRecords(baseId: string, sourceTable: string, viewName: string, apiKey: string) {
   const records: AirtableRecord[] = [];
   let offset = "";
 
   do {
-    const url = new URL(`https://api.airtable.com/v0/${encodeURIComponent(baseId)}/${encodeURIComponent(tableName)}`);
+    const url = new URL(`https://api.airtable.com/v0/${encodeURIComponent(baseId)}/${encodeURIComponent(sourceTable)}`);
     url.searchParams.set("pageSize", "100");
+    url.searchParams.set("view", viewName);
     if (offset) url.searchParams.set("offset", offset);
 
     const response = await fetch(url, {
@@ -115,7 +164,7 @@ async function fetchAirtableRecords(baseId: string, tableName: string, apiKey: s
     const payload = await response.json().catch(() => ({})) as AirtableListResponse;
     if (!response.ok) {
       const message = payload.error?.message || response.statusText || "Airtable request failed.";
-      throw new Error(`Airtable sync failed for ${tableName}: ${message}`);
+      throw new Error(`Airtable sync failed for view ${viewName} on table ${sourceTable}: ${message}`);
     }
 
     records.push(...(payload.records ?? []));
