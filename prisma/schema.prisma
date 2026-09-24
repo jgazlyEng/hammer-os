@@ -467,6 +467,12 @@ model Prospect {
   scriptStatus            String?
   format                  String?
   scriptPdf               String?   @db.Text
+  airtableBaseId          String?
+  airtableTableName       String?
+  airtableRecordId        String?
+  airtableCreatedTime     DateTime?
+  airtableLastSyncedAt    DateTime?
+  airtableFieldsJson      Json?
   promotedProjectId       String?
   deletedAt               DateTime?
   createdAt               DateTime  @default(now())
@@ -484,8 +490,12 @@ model Prospect {
   @@index([nextActionStatus])
   @@index([owner])
   @@index([scriptStatus])
+  @@index([airtableTableName])
+  @@index([airtableRecordId])
+  @@index([airtableLastSyncedAt])
   @@index([promotedProjectId])
   @@index([deletedAt])
+  @@unique([airtableBaseId, airtableTableName, airtableRecordId])
 }
 
 model User {
