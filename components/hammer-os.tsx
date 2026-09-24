@@ -2332,7 +2332,7 @@ function Projects({
   const searchParams = useSearchParams();
   const section = mode === "prospects" ? "slate" : "active";
   const [slateSearch, setSlateSearch] = useState("");
-  const [filters, setFilters] = useState({ lane: "ALL", genre: "ALL", urgency: "ALL", rights: "ALL", nextAction: "ALL", owner: "ALL", scriptStatus: "ALL", format: "ALL" });
+  const [filters, setFilters] = useState({ genre: [] as string[], urgency: [] as string[], rights: [] as string[], nextAction: [] as string[], owner: [] as string[], scriptStatus: [] as string[], format: [] as string[] });
   const [showSlateFilters, setShowSlateFilters] = useState(false);
   const [selectedLeadId, setSelectedLeadId] = useState("");
   const [selectedLeadTitle, setSelectedLeadTitle] = useState("");
@@ -2340,24 +2340,22 @@ function Projects({
   const [leadDraft, setLeadDraft] = useState<Partial<HammerProjectLead>>({});
   const [createProjectOpen, setCreateProjectOpen] = useState(false);
   const [addSlateOpen, setAddSlateOpen] = useState(false);
-  const [slatePage, setSlatePage] = useState(1);
-  const [slatePageSize, setSlatePageSize] = useState(12);
   const [slateImportMessage, setSlateImportMessage] = useState("");
   const [prospectSort, setProspectSort] = useState<{ key: ProspectSortKey; direction: "asc" | "desc" }>({ key: "title", direction: "asc" });
+  const [activeProspectSource, setActiveProspectSource] = useState("Projects");
   const displayProjectLeads = useMemo(() => dedupeProjectLeads(projectLeads), [projectLeads]);
-  const activeSlateFilterCount = useMemo(() => Object.values(filters).filter((value) => value !== "ALL").length, [filters]);
+  const activeSlateFilterCount = useMemo(() => Object.values(filters).reduce((count, values) => count + values.length, 0), [filters]);
   const normalizedSlateSearch = slateSearch.toLowerCase().trim();
   const filteredLeads = useMemo(() => displayProjectLeads.filter((lead) => {
-    const matchesSearch = !normalizedSlateSearch || `${lead.title} ${lead.logline ?? ""} ${lead.creator ?? ""} ${lead.genre ?? ""} ${lead.lane ?? ""} ${lead.notes ?? ""} ${lead.searchKeywords ?? ""} ${lead.contactRep ?? ""}`.toLowerCase().includes(normalizedSlateSearch);
+    const matchesSearch = !normalizedSlateSearch || `${lead.title} ${lead.logline ?? ""} ${lead.creator ?? ""} ${lead.genre ?? ""} ${lead.lane ?? ""} ${lead.airtableTableName ?? ""} ${lead.notes ?? ""} ${lead.searchKeywords ?? ""} ${lead.contactRep ?? ""}`.toLowerCase().includes(normalizedSlateSearch);
     return matchesSearch
-      && matchesFilter(filters.lane, lead.lane)
-      && matchesFilter(filters.genre, lead.genre)
-      && matchesFilter(filters.urgency, lead.urgencyLabel)
-      && matchesFilter(filters.rights, lead.rightsStatus)
-      && matchesFilter(filters.nextAction, lead.nextActionStatus)
+      && matchesMultiFilter(filters.genre, lead.genre)
+      && matchesMultiFilter(filters.urgency, lead.urgencyLabel)
+      && matchesMultiFilter(filters.rights, lead.rightsStatus)
+      && matchesMultiFilter(filters.nextAction, lead.nextActionStatus)
       && matchesOwnerFilter(filters.owner, lead)
-      && matchesFilter(filters.scriptStatus, lead.scriptStatus)
-      && matchesFilter(filters.format, lead.format);
+      && matchesMultiFilter(filters.scriptStatus, lead.scriptStatus)
+      && matchesMultiFilter(filters.format, lead.format);
   }), [displayProjectLeads, filters, normalizedSlateSearch]);
   const sortedLeads = useMemo(() => {
     return [...filteredLeads].sort((a, b) => {
@@ -2367,11 +2365,10 @@ function Projects({
       return prospectSort.direction === "asc" ? comparison : -comparison;
     });
   }, [filteredLeads, prospectSort.direction, prospectSort.key, users]);
-  const slateTotalPages = Math.max(1, Math.ceil(sortedLeads.length / slatePageSize));
-  const normalizedSlatePage = Math.min(slatePage, slateTotalPages);
-  const pagedLeads = sortedLeads.slice((normalizedSlatePage - 1) * slatePageSize, normalizedSlatePage * slatePageSize);
+  const prospectSections = useMemo(() => prospectSourceSections(sortedLeads), [sortedLeads]);
+  const activeProspectSection = prospectSections.find((sourceSection) => sourceSection.source === activeProspectSource) ?? prospectSections[0];
   const selectedLead = selectedLeadId
-    ? pagedLeads.find((lead) => lead.id === selectedLeadId && lead.title === selectedLeadTitle)
+    ? sortedLeads.find((lead) => lead.id === selectedLeadId && lead.title === selectedLeadTitle)
       ?? filteredLeads.find((lead) => lead.id === selectedLeadId && lead.title === selectedLeadTitle)
       ?? displayProjectLeads.find((lead) => lead.id === selectedLeadId && lead.title === selectedLeadTitle)
       ?? displayProjectLeads.find((lead) => lead.id === selectedLeadId)
@@ -2397,23 +2394,6 @@ function Projects({
     setLeadDraft(selectedLead);
   }, [selectedLead]);
 
-  useEffect(() => {
-    setSlatePage(1);
-  }, [filters.format, filters.genre, filters.lane, filters.nextAction, filters.owner, filters.rights, filters.scriptStatus, filters.urgency, slatePageSize, slateSearch]);
-
-  useEffect(() => {
-    function updateSlatePageSize() {
-      const filterPanelOpen = showSlateFilters || activeSlateFilterCount > 0;
-      const reservedHeight = filterPanelOpen ? 470 : 385;
-      const availableTableHeight = Math.max(300, window.innerHeight - reservedHeight);
-      setSlatePageSize(Math.max(6, Math.min(18, Math.floor(availableTableHeight / 49))));
-    }
-
-    updateSlatePageSize();
-    window.addEventListener("resize", updateSlatePageSize);
-    return () => window.removeEventListener("resize", updateSlatePageSize);
-  }, [activeSlateFilterCount, showSlateFilters]);
-
   async function saveLead() {
     if (!selectedLead || !onUpdateLead) return;
     const normalizedPatch = normalizeLeadPatch(leadDraft);
@@ -2435,7 +2415,7 @@ function Projects({
     }
   }
 
-  function setFilter(key: keyof typeof filters, value: string) {
+  function setFilter(key: keyof typeof filters, value: string[]) {
     setFilters((current) => ({ ...current, [key]: value }));
   }
 
@@ -2490,90 +2470,46 @@ function Projects({
               </div>
               {(showSlateFilters || activeSlateFilterCount > 0) ? (
                 <div className="mb-3 grid gap-2 rounded-md border border-white/10 bg-white/[0.025] p-2 md:grid-cols-4">
-                  <SlateFilter label="Lane" value={filters.lane} options={uniqueLeadOptions(displayProjectLeads, "lane")} onChange={(value) => setFilter("lane", value)} />
-                  <SlateFilter label="Genre" value={filters.genre} options={uniqueLeadOptions(displayProjectLeads, "genre")} onChange={(value) => setFilter("genre", value)} />
-                  <SlateFilter label="Rights" value={filters.rights} options={uniqueLeadOptions(displayProjectLeads, "rightsStatus")} onChange={(value) => setFilter("rights", value)} />
+                  <SlateMultiFilter label="Genre" value={filters.genre} options={uniqueLeadOptions(displayProjectLeads, "genre")} onChange={(value) => setFilter("genre", value)} />
+                  <SlateMultiFilter label="Rights" value={filters.rights} options={uniqueLeadOptions(displayProjectLeads, "rightsStatus")} onChange={(value) => setFilter("rights", value)} />
                   <ProspectOwnerFilter label="Owner" value={filters.owner} users={users} leads={displayProjectLeads} onChange={(value) => setFilter("owner", value)} />
-                  <SlateFilter label="Urgency" value={filters.urgency} options={uniqueLeadOptions(displayProjectLeads, "urgencyLabel")} onChange={(value) => setFilter("urgency", value)} />
-                  <SlateFilter label="Action Status" value={filters.nextAction} options={uniqueLeadOptions(displayProjectLeads, "nextActionStatus")} onChange={(value) => setFilter("nextAction", value)} />
-                  <SlateFilter label="Script Status" value={filters.scriptStatus} options={uniqueLeadOptions(displayProjectLeads, "scriptStatus")} onChange={(value) => setFilter("scriptStatus", value)} />
-                  <SlateFilter label="Format" value={filters.format} options={uniqueLeadOptions(displayProjectLeads, "format")} onChange={(value) => setFilter("format", value)} />
+                  <SlateMultiFilter label="Urgency" value={filters.urgency} options={uniqueLeadOptions(displayProjectLeads, "urgencyLabel")} onChange={(value) => setFilter("urgency", value)} />
+                  <SlateMultiFilter label="Action Status" value={filters.nextAction} options={uniqueLeadOptions(displayProjectLeads, "nextActionStatus")} onChange={(value) => setFilter("nextAction", value)} />
+                  <SlateMultiFilter label="Script Status" value={filters.scriptStatus} options={uniqueLeadOptions(displayProjectLeads, "scriptStatus")} onChange={(value) => setFilter("scriptStatus", value)} />
+                  <SlateMultiFilter label="Format" value={filters.format} options={uniqueLeadOptions(displayProjectLeads, "format")} onChange={(value) => setFilter("format", value)} />
                 </div>
               ) : null}
               <div className="mb-2 flex items-center justify-between text-xs text-studio-400">
                 <span>{filteredLeads.length} of {displayProjectLeads.length} prospects</span>
-                <button type="button" className="font-semibold text-amberline" onClick={() => { setSlateSearch(""); setFilters({ lane: "ALL", genre: "ALL", urgency: "ALL", rights: "ALL", nextAction: "ALL", owner: "ALL", scriptStatus: "ALL", format: "ALL" }); }}>Clear filters</button>
+                <button type="button" className="font-semibold text-amberline" onClick={() => { setSlateSearch(""); setFilters({ genre: [], urgency: [], rights: [], nextAction: [], owner: [], scriptStatus: [], format: [] }); }}>Clear filters</button>
               </div>
               {slateImportMessage ? <p className="mb-2 text-xs text-studio-300">{slateImportMessage}</p> : null}
-              <div className="data-scroll data-scroll-slate prospects-table-scroll">
-                <table className="data-table min-w-[1540px] table-fixed">
-                  <colgroup>
-                    <col className="w-[260px]" />
-                    <col className="w-[320px]" />
-                    <col className="w-[190px]" />
-                    <col className="w-[180px]" />
-                    <col className="w-[120px]" />
-                    <col className="w-[210px]" />
-                    <col className="w-[110px]" />
-                    <col className="w-[220px]" />
-                    <col className="w-[90px]" />
-                  </colgroup>
-                  <thead>
-                    <tr>
-                      <SortableHeader label="Title" sortKey="title" activeSort={prospectSort} onSort={toggleProspectSort} />
-                      <SortableHeader label="Logline" sortKey="logline" activeSort={prospectSort} onSort={toggleProspectSort} />
-                      <SortableHeader label="Lane" sortKey="lane" activeSort={prospectSort} onSort={toggleProspectSort} />
-                      <SortableHeader label="Genre" sortKey="genre" activeSort={prospectSort} onSort={toggleProspectSort} />
-                      <SortableHeader label="Urgency" sortKey="urgency" activeSort={prospectSort} onSort={toggleProspectSort} />
-                      <SortableHeader label="Rights" sortKey="rights" activeSort={prospectSort} onSort={toggleProspectSort} />
-                      <SortableHeader label="Owner" sortKey="owner" activeSort={prospectSort} onSort={toggleProspectSort} />
-                      <SortableHeader label="Action Status" sortKey="actionStatus" activeSort={prospectSort} onSort={toggleProspectSort} />
-                      <SortableHeader label="Score" sortKey="score" activeSort={prospectSort} onSort={toggleProspectSort} />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pagedLeads.map((lead) => (
-                      <tr key={`${lead.id}-${lead.title}`} onClick={() => openProspect(lead)} className={cn("cursor-pointer text-studio-200 hover:bg-white/[0.035]", selectedLeadId === lead.id && selectedLeadTitle === lead.title && "bg-emerald-400/10")}>
-                        <td><p className="truncate font-semibold text-studio-100">{lead.title}</p><p className="mt-0.5 truncate text-xs text-studio-400">{lead.creator || lead.sourceLink || "No source listed"}</p></td>
-                        <td><span className="line-clamp-2 text-[13px] leading-5 text-studio-300">{lead.logline || "-"}</span></td>
-                        <td><span className="block truncate">{lead.lane || "-"}</span></td>
-                        <td><span className="block truncate">{lead.genre || "-"}</span></td>
-                        <td>{lead.urgencyLabel ? <Badge value={lead.urgencyLabel} subtle /> : <span className="text-studio-500">-</span>}</td>
-                        <td><span className="block truncate">{lead.rightsStatus || "-"}</span></td>
-                        <td><span className="block truncate">{prospectOwnerLabel(lead, users)}</span></td>
-                        <td><span className="block truncate">{lead.nextActionStatus || "-"}</span></td>
-                        <td className="font-semibold text-studio-100">{lead.priorityScore ?? "-"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="mb-3 flex shrink-0 gap-1.5 overflow-x-auto border-b border-white/10 pb-2">
+                {prospectSections.map((sourceSection) => (
+                  <button
+                    key={sourceSection.source}
+                    type="button"
+                    onClick={() => setActiveProspectSource(sourceSection.source)}
+                    className={cn(
+                      "inline-flex shrink-0 items-center gap-2 rounded-t-md border border-b-0 px-3 py-2 text-xs font-semibold transition",
+                      activeProspectSection.source === sourceSection.source ? "border-amberline/50 bg-amberline/12 text-amberline" : "border-white/10 bg-white/[0.025] text-studio-300 hover:border-amberline/35 hover:text-amberline"
+                    )}
+                  >
+                    {sourceSection.source}
+                    <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", activeProspectSection.source === sourceSection.source ? "bg-amberline text-studio-950" : "bg-white/10 text-studio-400")}>{sourceSection.leads.length}</span>
+                  </button>
+                ))}
               </div>
-              {filteredLeads.length > slatePageSize ? (
-                <div className="shrink-0 pt-3 flex flex-col gap-2 text-xs text-studio-400 md:flex-row md:items-center md:justify-between">
-                  <span>
-                    Showing {(normalizedSlatePage - 1) * slatePageSize + 1}-{Math.min(normalizedSlatePage * slatePageSize, filteredLeads.length)} of {filteredLeads.length}
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      disabled={normalizedSlatePage <= 1}
-                      onClick={() => setSlatePage((page) => Math.max(1, page - 1))}
-                      className="rounded border border-white/10 px-2 py-1 font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      Previous
-                    </button>
-                    <span className="min-w-24 text-center">Page {normalizedSlatePage} of {slateTotalPages}</span>
-                    <button
-                      type="button"
-                      disabled={normalizedSlatePage >= slateTotalPages}
-                      onClick={() => setSlatePage((page) => Math.min(slateTotalPages, page + 1))}
-                      className="rounded border border-white/10 px-2 py-1 font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      Next
-                    </button>
-                  </div>
-                </div>
-              ) : null}
+              <ProspectSourceTable
+                title={activeProspectSection.source}
+                leads={activeProspectSection.leads}
+                users={users}
+                activeSort={prospectSort}
+                selectedLeadId={selectedLeadId}
+                selectedLeadTitle={selectedLeadTitle}
+                onSort={toggleProspectSort}
+                onOpen={openProspect}
+              />
             </Panel>
           </div>
           {selectedLead ? (
@@ -2631,29 +2567,119 @@ function Projects({
   );
 }
 
-function SlateFilter({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) {
+function ProspectSourceTable({
+  title,
+  leads,
+  users,
+  activeSort,
+  selectedLeadId,
+  selectedLeadTitle,
+  onSort,
+  onOpen
+}: {
+  title: string;
+  leads: HammerProjectLead[];
+  users: HammerUser[];
+  activeSort: { key: ProspectSortKey; direction: "asc" | "desc" };
+  selectedLeadId: string;
+  selectedLeadTitle: string;
+  onSort: (key: ProspectSortKey) => void;
+  onOpen: (lead: HammerProjectLead) => void;
+}) {
   return (
-    <label className="grid gap-1">
-      <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">{label}</span>
-      <select className="field" value={value} onChange={(event) => onChange(event.target.value)}>
-        <option value="ALL">All</option>
-        {options.map((option) => <option key={option} value={option}>{option}</option>)}
-      </select>
-    </label>
+    <section className="flex min-h-0 flex-1 flex-col rounded-lg border border-white/10 bg-white/[0.018] p-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <div>
+          <h3 className="font-display text-sm font-semibold text-studio-100">{title}</h3>
+          <p className="text-xs text-studio-500">{leads.length} item{leads.length === 1 ? "" : "s"}</p>
+        </div>
+      </div>
+      {leads.length ? (
+        <div className="data-scroll min-h-0 flex-1 overflow-auto">
+          <table className="data-table min-w-[1380px] table-fixed">
+            <colgroup>
+              <col className="w-[260px]" />
+              <col className="w-[360px]" />
+              <col className="w-[170px]" />
+              <col className="w-[120px]" />
+              <col className="w-[210px]" />
+              <col className="w-[160px]" />
+              <col className="w-[220px]" />
+              <col className="w-[90px]" />
+            </colgroup>
+            <thead>
+              <tr>
+                <SortableHeader label="Title" sortKey="title" activeSort={activeSort} onSort={onSort} />
+                <SortableHeader label="Logline" sortKey="logline" activeSort={activeSort} onSort={onSort} />
+                <SortableHeader label="Genre" sortKey="genre" activeSort={activeSort} onSort={onSort} />
+                <SortableHeader label="Urgency" sortKey="urgency" activeSort={activeSort} onSort={onSort} />
+                <SortableHeader label="Rights" sortKey="rights" activeSort={activeSort} onSort={onSort} />
+                <SortableHeader label="Owner" sortKey="owner" activeSort={activeSort} onSort={onSort} />
+                <SortableHeader label="Action Status" sortKey="actionStatus" activeSort={activeSort} onSort={onSort} />
+                <SortableHeader label="Score" sortKey="score" activeSort={activeSort} onSort={onSort} />
+              </tr>
+            </thead>
+            <tbody>
+              {leads.map((lead) => (
+                <tr key={`${lead.id}-${lead.title}`} onClick={() => onOpen(lead)} className={cn("cursor-pointer text-studio-200 hover:bg-white/[0.035]", selectedLeadId === lead.id && selectedLeadTitle === lead.title && "bg-emerald-400/10")}>
+                  <td><p className="truncate font-semibold text-studio-100">{lead.title}</p><p className="mt-0.5 truncate text-xs text-studio-400">{lead.creator || lead.platformSource || lead.sourceLink || "No source listed"}</p></td>
+                  <td><span className="line-clamp-2 text-[13px] leading-5 text-studio-300">{lead.logline || "-"}</span></td>
+                  <td><span className="block truncate">{lead.genre || "-"}</span></td>
+                  <td>{lead.urgencyLabel ? <Badge value={lead.urgencyLabel} subtle /> : <span className="text-studio-500">-</span>}</td>
+                  <td><span className="block truncate">{lead.rightsStatus || "-"}</span></td>
+                  <td><span className="block truncate">{prospectOwnerLabel(lead, users)}</span></td>
+                  <td><span className="block truncate">{lead.nextActionStatus || "-"}</span></td>
+                  <td className="font-semibold text-studio-100">{lead.priorityScore ?? "-"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="grid min-h-[260px] flex-1 place-items-center rounded-md border border-dashed border-white/10 text-sm text-studio-500">
+          No {title.toLowerCase()} rows match the current filters.
+        </div>
+      )}
+    </section>
   );
 }
 
-function ProspectOwnerFilter({ label, value, users, leads, onChange }: { label: string; value: string; users: HammerUser[]; leads: HammerProjectLead[]; onChange: (value: string) => void }) {
+function SlateMultiFilter({ label, value, options, optionLabels = {}, onChange }: { label: string; value: string[]; options: string[]; optionLabels?: Record<string, string>; onChange: (value: string[]) => void }) {
+  const [open, setOpen] = useState(false);
+  function toggleOption(option: string) {
+    onChange(value.includes(option) ? value.filter((item) => item !== option) : [...value, option]);
+  }
+
+  return (
+    <div className="relative grid gap-1">
+      <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">{label}</span>
+      <button type="button" className="field flex items-center justify-between gap-2 text-left" onClick={() => setOpen((current) => !current)} aria-expanded={open}>
+        <span className="truncate">{value.length ? `${value.length} selected` : "All"}</span>
+        <ChevronDown className={cn("h-3.5 w-3.5 shrink-0 text-studio-400 transition", open && "rotate-180")} />
+      </button>
+      {open ? (
+        <div className="absolute left-0 right-0 top-full z-30 mt-1 max-h-64 overflow-auto rounded-md border border-white/10 bg-studio-950 p-2 shadow-2xl">
+          <button type="button" className="mb-1 w-full rounded px-2 py-1.5 text-left text-xs font-semibold text-studio-300 transition hover:bg-white/5 hover:text-amberline" onClick={() => onChange([])}>
+            All
+          </button>
+          {options.map((option) => (
+            <label key={option} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs text-studio-300 transition hover:bg-white/5">
+              <input type="checkbox" checked={value.includes(option)} onChange={() => toggleOption(option)} className="h-3.5 w-3.5 accent-amberline" />
+              <span className="truncate">{optionLabels[option] ?? option}</span>
+            </label>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ProspectOwnerFilter({ label, value, users, leads, onChange }: { label: string; value: string[]; users: HammerUser[]; leads: HammerProjectLead[]; onChange: (value: string[]) => void }) {
   const assignedOwnerIds = new Set(leads.flatMap((lead) => lead.ownerIds ?? []));
   const ownerOptions = users.filter((user) => assignedOwnerIds.has(user.id));
+  const ownerLabels = Object.fromEntries(ownerOptions.map((user) => [user.id, user.name]));
   return (
-    <label className="grid gap-1">
-      <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-studio-500">{label}</span>
-      <select className="field" value={value} onChange={(event) => onChange(event.target.value)}>
-        <option value="ALL">All</option>
-        {ownerOptions.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
-      </select>
-    </label>
+    <SlateMultiFilter label={label} value={value} options={ownerOptions.map((user) => user.id)} optionLabels={ownerLabels} onChange={onChange} />
   );
 }
 
@@ -3433,13 +3459,13 @@ function SlateNextStepTaskCreator({
   );
 }
 
-function matchesFilter(filter: string, value?: string) {
-  return filter === "ALL" || (value || "") === filter;
+function matchesMultiFilter(filter: string[], value?: string) {
+  return !filter.length || filter.includes(value || "");
 }
 
-function matchesOwnerFilter(filter: string, lead: HammerProjectLead) {
-  if (filter === "ALL") return true;
-  return Boolean(lead.ownerIds?.includes(filter));
+function matchesOwnerFilter(filter: string[], lead: HammerProjectLead) {
+  if (!filter.length) return true;
+  return filter.some((ownerId) => lead.ownerIds?.includes(ownerId));
 }
 
 function prospectOwnerLabel(lead: HammerProjectLead, users: HammerUser[]) {
@@ -3452,6 +3478,31 @@ function prospectOwnerLabel(lead: HammerProjectLead, users: HammerUser[]) {
 
 function uniqueLeadOptions(leads: HammerProjectLead[], key: keyof HammerProjectLead) {
   return Array.from(new Set(leads.map((lead) => lead[key]).filter((value): value is string => typeof value === "string" && Boolean(value.trim())))).sort((a, b) => a.localeCompare(b)).slice(0, 160);
+}
+
+function uniqueLeadSourceOptions(leads: HammerProjectLead[]) {
+  const preferred = ["Projects", "Cultural Trends", "Public IP"];
+  return Array.from(new Set(leads.map(prospectSourceTable).filter(Boolean))).sort((a, b) => {
+    const aIndex = preferred.indexOf(a);
+    const bIndex = preferred.indexOf(b);
+    if (aIndex !== -1 || bIndex !== -1) return (aIndex === -1 ? Number.MAX_SAFE_INTEGER : aIndex) - (bIndex === -1 ? Number.MAX_SAFE_INTEGER : bIndex);
+    return a.localeCompare(b);
+  }).slice(0, 160);
+}
+
+function prospectSourceTable(lead: HammerProjectLead) {
+  return lead.airtableTableName || lead.lane || "Manual";
+}
+
+function prospectSourceSections(leads: HammerProjectLead[]) {
+  const primarySources = ["Projects", "Public IP", "Cultural Trends"];
+  const sections = primarySources.map((source) => ({
+    source,
+    leads: leads.filter((lead) => prospectSourceTable(lead) === source)
+  }));
+  const otherLeads = leads.filter((lead) => !primarySources.includes(prospectSourceTable(lead)));
+  if (otherLeads.length) sections.push({ source: "Other / Manual", leads: otherLeads });
+  return sections;
 }
 
 function ProjectCreateModal({ users, currentUser, onClose, onCreate }: { users: HammerUser[]; currentUser: HammerUser; onClose: () => void; onCreate: (draft: Partial<ProjectDraft>) => Promise<void> }) {
@@ -12820,7 +12871,7 @@ function projectSortValue(project: HammerProject, key: ProjectSortKey) {
 function prospectSortValue(lead: HammerProjectLead, key: ProspectSortKey, users: HammerUser[]) {
   if (key === "title") return lead.title;
   if (key === "logline") return lead.logline ?? "";
-  if (key === "lane") return lead.lane ?? "";
+  if (key === "lane") return prospectSourceTable(lead);
   if (key === "genre") return lead.genre ?? "";
   if (key === "urgency") return lead.urgencyLabel ?? "";
   if (key === "rights") return lead.rightsStatus ?? "";
@@ -14166,6 +14217,9 @@ function dedupeProjectLeads(leads: HammerProjectLead[]) {
 }
 
 function prospectDisplayKey(lead: HammerProjectLead) {
+  if (lead.airtableBaseId && lead.airtableTableName && lead.airtableRecordId) {
+    return `airtable:${normalizeProspectDisplayKeyPart(lead.airtableBaseId)}:${normalizeProspectDisplayKeyPart(lead.airtableTableName)}:${normalizeProspectDisplayKeyPart(lead.airtableRecordId)}`;
+  }
   const externalId = normalizeProspectDisplayKeyPart(lead.externalId);
   if (externalId) return `external:${externalId}`;
   return [

@@ -182,10 +182,10 @@ export async function POST(request: Request) {
               { externalId: { in: preparedExternalIds } }
             ]
           },
-          select: { id: true, externalId: true, title: true, creator: true, sourceLink: true, logline: true, deletedAt: true }
+          select: { id: true, externalId: true, title: true, creator: true, sourceLink: true, logline: true, airtableBaseId: true, airtableTableName: true, airtableRecordId: true, deletedAt: true }
         });
         const existingAllLeads = await prisma.prospect.findMany({
-          select: { id: true, externalId: true, title: true, creator: true, sourceLink: true, logline: true, deletedAt: true }
+          select: { id: true, externalId: true, title: true, creator: true, sourceLink: true, logline: true, airtableBaseId: true, airtableTableName: true, airtableRecordId: true, deletedAt: true }
         });
         const existingById = new Map(existingLeads.map((lead) => [lead.id, lead]));
         const existingByExternalId = new Map(existingLeads.filter((lead) => lead.externalId).map((lead) => [lead.externalId as string, lead]));
@@ -1105,6 +1105,12 @@ function toProjectLead(lead: Prospect) {
     scriptStatus: lead.scriptStatus ?? undefined,
     format: lead.format ?? undefined,
     scriptPdf: lead.scriptPdf ?? undefined,
+    airtableBaseId: lead.airtableBaseId ?? undefined,
+    airtableTableName: lead.airtableTableName ?? undefined,
+    airtableRecordId: lead.airtableRecordId ?? undefined,
+    airtableCreatedTime: lead.airtableCreatedTime ? dateTimeString(lead.airtableCreatedTime) : undefined,
+    airtableLastSyncedAt: lead.airtableLastSyncedAt ? dateTimeString(lead.airtableLastSyncedAt) : undefined,
+    airtableFieldsJson: lead.airtableFieldsJson && typeof lead.airtableFieldsJson === "object" && !Array.isArray(lead.airtableFieldsJson) ? lead.airtableFieldsJson as Record<string, unknown> : undefined,
     promotedProjectId: lead.promotedProjectId ?? undefined
   };
 }
@@ -1124,7 +1130,11 @@ function dedupeProspects(prospects: Prospect[]) {
   });
 }
 
-function prospectNaturalKey(prospect: Pick<Prospect, "externalId" | "title" | "creator" | "sourceLink" | "logline"> | Prisma.ProspectCreateInput) {
+function prospectNaturalKey(prospect: Pick<Prospect, "externalId" | "title" | "creator" | "sourceLink" | "logline" | "airtableBaseId" | "airtableTableName" | "airtableRecordId"> | Prisma.ProspectCreateInput) {
+  const airtableBaseId = typeof prospect.airtableBaseId === "string" ? normalizeProspectKeyPart(prospect.airtableBaseId) : "";
+  const airtableTableName = typeof prospect.airtableTableName === "string" ? normalizeProspectKeyPart(prospect.airtableTableName) : "";
+  const airtableRecordId = typeof prospect.airtableRecordId === "string" ? normalizeProspectKeyPart(prospect.airtableRecordId) : "";
+  if (airtableBaseId && airtableTableName && airtableRecordId) return `airtable:${airtableBaseId}:${airtableTableName}:${airtableRecordId}`;
   const externalId = typeof prospect.externalId === "string" ? normalizeProspectKeyPart(prospect.externalId) : "";
   if (externalId) return `external:${externalId}`;
   return [

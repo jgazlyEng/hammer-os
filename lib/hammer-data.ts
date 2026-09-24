@@ -102,6 +102,12 @@ export interface HammerProjectLead {
   scriptStatus?: string;
   format?: string;
   scriptPdf?: string;
+  airtableBaseId?: string;
+  airtableTableName?: string;
+  airtableRecordId?: string;
+  airtableCreatedTime?: string;
+  airtableLastSyncedAt?: string;
+  airtableFieldsJson?: Record<string, unknown>;
   promotedProjectId?: string;
 }
 
