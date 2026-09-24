@@ -3,7 +3,7 @@ import type { NextRequest } from "next/server";
 
 const SESSION_COOKIE_NAME = "hammer_session";
 
-const publicPrefixes = ["/login", "/api/auth", "/_next", "/favicon.ico", "/pdf.worker.min.mjs"];
+const publicPrefixes = ["/login", "/api/auth", "/api/admin/airtable-sync", "/_next", "/favicon.ico", "/pdf.worker.min.mjs"];
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
