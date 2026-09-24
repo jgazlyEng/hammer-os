@@ -1,8 +1,12 @@
 import type { PrismaClient, Prisma } from "@prisma/client";
 
 const DEFAULT_BASE_ID = "appKCINmEMPpqkwqt";
-const DEFAULT_SOURCE_TABLE = "Projects/IP";
 const DEFAULT_TABLES = ["Projects", "Cultural Trends", "Public IP"];
+
+type AirtableSyncView = {
+  label: string;
+  view: string;
+};
 
 type AirtableRecord = {
   id: string;
@@ -13,6 +17,15 @@ type AirtableRecord = {
 type AirtableListResponse = {
   records?: AirtableRecord[];
   offset?: string;
+  error?: { type?: string; message?: string };
+};
+
+type AirtableMetaResponse = {
+  tables?: Array<{
+    id: string;
+    name: string;
+    views?: Array<{ id: string; name: string; type?: string }>;
+  }>;
   error?: { type?: string; message?: string };
 };
 
@@ -35,6 +48,7 @@ export type AirtableSyncStatus = {
   baseId: string;
   sourceTable: string;
   tables: string[];
+  views: AirtableSyncView[];
   databaseCounts: Array<{
     source: string;
     count: number;
@@ -43,11 +57,13 @@ export type AirtableSyncStatus = {
 };
 
 export function airtableSyncConfig() {
+  const sourceTable = process.env.AIRTABLE_SOURCE_TABLE?.trim() || process.env.AIRTABLE_TABLE_NAME?.trim() || "";
   return {
     baseId: process.env.AIRTABLE_BASE_ID?.trim() || DEFAULT_BASE_ID,
-    sourceTable: process.env.AIRTABLE_SOURCE_TABLE?.trim() || process.env.AIRTABLE_TABLE_NAME?.trim() || DEFAULT_SOURCE_TABLE,
+    sourceTable,
     apiKey: process.env.AIRTABLE_API_KEY?.trim() || process.env.AIRTABLE_PAT?.trim() || "",
     tables: parseTableList(process.env.AIRTABLE_SYNC_TABLES),
+    views: sourceTable ? parseViewList(process.env.AIRTABLE_SYNC_VIEWS, process.env.AIRTABLE_SYNC_TABLES) : [],
     secret: process.env.AIRTABLE_SYNC_SECRET?.trim() || ""
   };
 }
@@ -67,8 +83,12 @@ export async function syncAirtableProspects(prisma: PrismaClient): Promise<Airta
     totalUpdated: 0
   };
 
-  for (const tableName of config.tables) {
-    const records = await fetchAirtableRecords(config.baseId, config.sourceTable, tableName, config.apiKey);
+  const syncTargets = config.sourceTable
+    ? config.views.map((view) => ({ label: view.label, tableOrId: config.sourceTable, view: view.view }))
+    : config.tables.map((tableName) => ({ label: tableName, tableOrId: tableName, view: undefined }));
+
+  for (const syncTarget of syncTargets) {
+    const records = await fetchAirtableRecords(config.baseId, syncTarget.tableOrId, syncTarget.view, syncTarget.label, config.apiKey);
     let created = 0;
     let updated = 0;
 
@@ -77,18 +97,18 @@ export async function syncAirtableProspects(prisma: PrismaClient): Promise<Airta
         where: {
           airtableBaseId_airtableTableName_airtableRecordId: {
             airtableBaseId: config.baseId,
-            airtableTableName: tableName,
+            airtableTableName: syncTarget.label,
             airtableRecordId: record.id
           }
         },
         select: { id: true }
       });
-      const data = airtableRecordToProspectData(config.baseId, tableName, record);
+      const data = airtableRecordToProspectData(config.baseId, syncTarget.label, record);
       await prisma.prospect.upsert({
         where: {
           airtableBaseId_airtableTableName_airtableRecordId: {
             airtableBaseId: config.baseId,
-            airtableTableName: tableName,
+            airtableTableName: syncTarget.label,
             airtableRecordId: record.id
           }
         },
@@ -103,7 +123,7 @@ export async function syncAirtableProspects(prisma: PrismaClient): Promise<Airta
       else created += 1;
     }
 
-    summary.tables.push({ tableName, received: records.length, created, updated });
+    summary.tables.push({ tableName: syncTarget.label, received: records.length, created, updated });
     summary.totalReceived += records.length;
     summary.totalCreated += created;
     summary.totalUpdated += updated;
@@ -133,6 +153,7 @@ export async function getAirtableProspectStatus(prisma: PrismaClient): Promise<A
     baseId: config.baseId,
     sourceTable: config.sourceTable,
     tables: config.tables,
+    views: config.views,
     databaseCounts: [
       ...grouped.map((row) => ({
         source: row.airtableTableName || "Other / Manual",
@@ -144,14 +165,43 @@ export async function getAirtableProspectStatus(prisma: PrismaClient): Promise<A
   };
 }
 
-async function fetchAirtableRecords(baseId: string, sourceTable: string, viewName: string, apiKey: string) {
+export async function inspectAirtableBase() {
+  const config = airtableSyncConfig();
+  if (!config.apiKey) {
+    throw new Error("Airtable inspect is missing AIRTABLE_API_KEY or AIRTABLE_PAT.");
+  }
+  const response = await fetch(`https://api.airtable.com/v0/meta/bases/${encodeURIComponent(config.baseId)}/tables`, {
+    headers: {
+      Authorization: `Bearer ${config.apiKey}`,
+      Accept: "application/json"
+    },
+    cache: "no-store"
+  });
+  const payload = await response.json().catch(() => ({})) as AirtableMetaResponse;
+  if (!response.ok) {
+    const message = payload.error?.message || response.statusText || "Airtable metadata request failed.";
+    throw new Error(`Airtable inspect failed: ${message}`);
+  }
+  return {
+    baseId: config.baseId,
+    configuredSourceTable: config.sourceTable,
+    configuredViews: config.views,
+    tables: (payload.tables ?? []).map((table) => ({
+      id: table.id,
+      name: table.name,
+      views: (table.views ?? []).map((view) => ({ id: view.id, name: view.name, type: view.type }))
+    }))
+  };
+}
+
+async function fetchAirtableRecords(baseId: string, tableOrId: string, viewName: string | undefined, label: string, apiKey: string) {
   const records: AirtableRecord[] = [];
   let offset = "";
 
   do {
-    const url = new URL(`https://api.airtable.com/v0/${encodeURIComponent(baseId)}/${encodeURIComponent(sourceTable)}`);
+    const url = new URL(`https://api.airtable.com/v0/${encodeURIComponent(baseId)}/${encodeURIComponent(tableOrId)}`);
     url.searchParams.set("pageSize", "100");
-    url.searchParams.set("view", viewName);
+    if (viewName) url.searchParams.set("view", viewName);
     if (offset) url.searchParams.set("offset", offset);
 
     const response = await fetch(url, {
@@ -164,7 +214,9 @@ async function fetchAirtableRecords(baseId: string, sourceTable: string, viewNam
     const payload = await response.json().catch(() => ({})) as AirtableListResponse;
     if (!response.ok) {
       const message = payload.error?.message || response.statusText || "Airtable request failed.";
-      throw new Error(`Airtable sync failed for view ${viewName} on table ${sourceTable}: ${message}`);
+      throw new Error(viewName
+        ? `Airtable sync failed for ${label} using view ${viewName} on table ${tableOrId}: ${message}`
+        : `Airtable sync failed for table ${tableOrId}: ${message}`);
     }
 
     records.push(...(payload.records ?? []));
@@ -234,6 +286,20 @@ function airtableRecordToProspectData(baseId: string, tableName: string, record:
 function parseTableList(value?: string) {
   const tables = value?.split(",").map((table) => table.trim()).filter(Boolean);
   return tables?.length ? tables : DEFAULT_TABLES;
+}
+
+function parseViewList(viewValue?: string, tableValue?: string): AirtableSyncView[] {
+  const rawViews = viewValue?.split(",").map((view) => view.trim()).filter(Boolean);
+  if (rawViews?.length) {
+    return rawViews.map((entry) => {
+      const separatorIndex = entry.indexOf("=");
+      if (separatorIndex === -1) return { label: entry, view: entry };
+      const label = entry.slice(0, separatorIndex).trim();
+      const view = entry.slice(separatorIndex + 1).trim();
+      return { label: label || view, view: view || label };
+    });
+  }
+  return parseTableList(tableValue).map((tableName) => ({ label: tableName, view: tableName }));
 }
 
 function normalizeFields(fields: Record<string, unknown>) {
