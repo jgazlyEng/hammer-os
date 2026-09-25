@@ -2443,11 +2443,13 @@ function Projects({
 
   return (
     <div className={cn(section === "active" ? "space-y-4" : "flex h-full min-h-0 flex-col gap-3")}>
-      <Panel className="shrink-0">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <SectionHeader eyebrow={section === "active" ? "Development Slate" : "Prospects"} title={section === "active" ? "Development Slate" : "Prospects"} action={section === "active" ? (canCreateProject ? <PrimaryButton icon={Plus} label="Create Slate Item" onClick={() => setCreateProjectOpen(true)} /> : undefined) : <div className="flex flex-wrap gap-1.5"><PrimaryButton icon={Plus} label="Add Prospect" onClick={() => setAddSlateOpen(true)} /><label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline"><UploadCloud className="h-3.5 w-3.5" />Import CSV<input className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => importSlateCsv(event.target.files?.[0])} /></label></div>} />
-        </div>
-      </Panel>
+      {section === "active" ? (
+        <Panel className="shrink-0">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <SectionHeader eyebrow="Development Slate" title="Development Slate" action={canCreateProject ? <PrimaryButton icon={Plus} label="Create Slate Item" onClick={() => setCreateProjectOpen(true)} /> : undefined} />
+          </div>
+        </Panel>
+      ) : null}
 
       {section === "active" ? (
         <Panel>
@@ -2462,11 +2464,19 @@ function Projects({
                   <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-studio-400" />
                   <input className="field pl-8" value={slateSearch} onChange={(event) => setSlateSearch(event.target.value)} placeholder="Search title, creator, logline, vendor, contact, notes" />
                 </div>
-                <button type="button" onClick={() => setShowSlateFilters((open) => !open)} className={cn("inline-flex min-h-10 items-center justify-center gap-2 rounded-md border px-3 py-2 text-xs font-semibold transition", activeSlateFilterCount ? "border-amberline/35 bg-amberline/10 text-amberline" : "border-white/10 bg-white/[0.025] text-studio-300 hover:border-amberline/35 hover:text-amberline")} aria-expanded={showSlateFilters}>
-                  Filters
-                  {activeSlateFilterCount ? <span className="rounded-full bg-amberline px-1.5 py-0.5 text-[10px] text-studio-950">{activeSlateFilterCount}</span> : null}
-                  <ChevronDown className={cn("h-3.5 w-3.5 transition", showSlateFilters && "rotate-180")} />
-                </button>
+                <div className="flex flex-wrap items-center justify-end gap-1.5">
+                  <PrimaryButton icon={Plus} label="Add Prospect" onClick={() => setAddSlateOpen(true)} />
+                  <label className="inline-flex min-h-10 cursor-pointer items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-2 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline">
+                    <UploadCloud className="h-3.5 w-3.5" />
+                    Import CSV
+                    <input className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => importSlateCsv(event.target.files?.[0])} />
+                  </label>
+                  <button type="button" onClick={() => setShowSlateFilters((open) => !open)} className={cn("inline-flex min-h-10 items-center justify-center gap-2 rounded-md border px-3 py-2 text-xs font-semibold transition", activeSlateFilterCount ? "border-amberline/35 bg-amberline/10 text-amberline" : "border-white/10 bg-white/[0.025] text-studio-300 hover:border-amberline/35 hover:text-amberline")} aria-expanded={showSlateFilters}>
+                    Filters
+                    {activeSlateFilterCount ? <span className="rounded-full bg-amberline px-1.5 py-0.5 text-[10px] text-studio-950">{activeSlateFilterCount}</span> : null}
+                    <ChevronDown className={cn("h-3.5 w-3.5 transition", showSlateFilters && "rotate-180")} />
+                  </button>
+                </div>
               </div>
               {(showSlateFilters || activeSlateFilterCount > 0) ? (
                 <div className="mb-3 grid gap-2 rounded-md border border-white/10 bg-white/[0.025] p-2 md:grid-cols-4">
@@ -2586,6 +2596,16 @@ function ProspectSourceTable({
   onSort: (key: ProspectSortKey) => void;
   onOpen: (lead: HammerProjectLead) => void;
 }) {
+  const [page, setPage] = useState(1);
+  const pageSize = useResponsiveTablePageSize({ max: 16, reservedHeight: 430 });
+  const totalPages = Math.max(1, Math.ceil(leads.length / pageSize));
+  const normalizedPage = Math.min(page, totalPages);
+  const pagedLeads = leads.slice((normalizedPage - 1) * pageSize, normalizedPage * pageSize);
+
+  useEffect(() => {
+    setPage(1);
+  }, [activeSort.direction, activeSort.key, leads.length, pageSize, title]);
+
   return (
     <section className="flex min-h-0 flex-1 flex-col rounded-lg border border-white/10 bg-white/[0.018] p-3">
       <div className="mb-2 flex items-center justify-between gap-3">
@@ -2620,7 +2640,7 @@ function ProspectSourceTable({
               </tr>
             </thead>
             <tbody>
-              {leads.map((lead) => (
+              {pagedLeads.map((lead) => (
                 <tr key={`${lead.id}-${lead.title}`} onClick={() => onOpen(lead)} className={cn("cursor-pointer text-studio-200 hover:bg-white/[0.035]", selectedLeadId === lead.id && selectedLeadTitle === lead.title && "bg-emerald-400/10")}>
                   <td><p className="truncate font-semibold text-studio-100">{lead.title}</p><p className="mt-0.5 truncate text-xs text-studio-400">{lead.creator || lead.platformSource || lead.sourceLink || "No source listed"}</p></td>
                   <td><span className="line-clamp-2 text-[13px] leading-5 text-studio-300">{lead.logline || "-"}</span></td>
@@ -2640,6 +2660,7 @@ function ProspectSourceTable({
           No {title.toLowerCase()} rows match the current filters.
         </div>
       )}
+      {leads.length ? <PaginationFooter page={normalizedPage} pageSize={pageSize} total={leads.length} onPageChange={setPage} /> : null}
     </section>
   );
 }
