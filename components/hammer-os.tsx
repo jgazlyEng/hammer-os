@@ -134,7 +134,7 @@ interface HammerBreakdownElement {
   confidence?: number;
   status: BreakdownElementStatus;
   tags: Array<{ id: string; key: string; value: string; label?: string }>;
-  scenes: Array<{ id: string; sceneNumber?: string; sceneHeading?: string; occurrenceCount: number; evidenceText?: string }>;
+  scenes: Array<{ id: string; sceneNumber?: string; sceneHeading?: string; occurrenceCount: number; firstPageNumber?: number; lastPageNumber?: number; evidenceText?: string }>;
 }
 
 interface HammerBreakdownRun {
@@ -8298,11 +8298,19 @@ type ParsedEntityRow = {
 };
 
 function PersistedBreakdownElementPanel({ run, onUpdateStatus, updating }: { run: HammerBreakdownRun; onUpdateStatus: (elementId: string, status: BreakdownElementStatus) => void; updating: boolean }) {
-  const [entityType, setEntityType] = useState("");
-  const visibleElements = run.elements.filter((element) => element.status !== "IGNORED");
-  const categoryTabs = Array.from(new Set(visibleElements.map((element) => element.category)));
-  const filteredElements = entityType ? visibleElements.filter((element) => element.category === entityType) : visibleElements;
+  const [entityType, setEntityType] = useState("CHARACTER");
+  const visibleElements = useMemo(() => run.elements.filter((element) => element.status !== "IGNORED"), [run.elements]);
+  const categoryTabs = useMemo(() => breakdownCategoryTabs(visibleElements), [visibleElements]);
+  const categoryTabsKey = categoryTabs.join("|");
+  const activeEntityType = categoryTabs.includes(entityType) ? entityType : categoryTabs[0] ?? "CHARACTER";
+  const sceneRows = useMemo(() => breakdownSceneRows(visibleElements), [visibleElements]);
+  const filteredElements = activeEntityType === "SCENES" ? [] : visibleElements.filter((element) => element.category === activeEntityType);
   const ignoredCount = run.elements.filter((element) => element.status === "IGNORED").length;
+
+  useEffect(() => {
+    if (!categoryTabs.length) return;
+    setEntityType((current) => categoryTabs.includes(current) ? current : categoryTabs[0]);
+  }, [categoryTabs, categoryTabsKey]);
 
   return (
     <Panel>
@@ -8316,9 +8324,9 @@ function PersistedBreakdownElementPanel({ run, onUpdateStatus, updating }: { run
           <button
             key={tab}
             type="button"
-            onClick={() => setEntityType((current) => current === tab ? "" : tab)}
-            className={cn("rounded border px-2 py-1 text-[11px] font-semibold uppercase transition", entityType === tab ? "border-amberline/45 bg-amberline/10 text-amberline" : "border-white/10 bg-white/[0.025] text-studio-300 hover:border-white/25")}
-            title={entityType === tab ? "Click again to clear this filter" : `Show ${statusLabel(tab)}`}
+            onClick={() => setEntityType(tab)}
+            className={cn("rounded border px-2 py-1 text-[11px] font-semibold uppercase transition", activeEntityType === tab ? "border-amberline/45 bg-amberline/10 text-amberline" : "border-white/10 bg-white/[0.025] text-studio-300 hover:border-white/25")}
+            title={`Show ${statusLabel(tab)}`}
           >
             {statusLabel(tab)}
           </button>
@@ -8328,19 +8336,45 @@ function PersistedBreakdownElementPanel({ run, onUpdateStatus, updating }: { run
         <div className="data-scroll breakdown-table-scroll">
           <table className="data-table min-w-[1180px]">
             <thead className="text-[11px] uppercase tracking-[0.12em] text-studio-400">
-              <tr>
-                <th className="py-2">Category</th>
-                <th>Item</th>
-                <th>Scenes</th>
-                <th>Pages</th>
-                <th>Department / Tags</th>
-                <th>Evidence</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
+              {activeEntityType === "SCENES" ? (
+                <tr>
+                  <th className="py-2">Scene</th>
+                  <th>Heading</th>
+                  <th>Pages</th>
+                  <th>Items</th>
+                  <th>Evidence</th>
+                </tr>
+              ) : (
+                <tr>
+                  <th className="py-2">Category</th>
+                  <th>Item</th>
+                  <th>Scenes</th>
+                  <th>Pages</th>
+                  <th>Department / Tags</th>
+                  <th>Evidence</th>
+                  <th>Status</th>
+                  <th>Actions</th>
+                </tr>
+              )}
             </thead>
             <tbody className="divide-y divide-white/10">
-              {filteredElements.map((element) => (
+              {activeEntityType === "SCENES" ? sceneRows.map((scene) => (
+                <tr key={scene.key} className="align-top text-studio-200">
+                  <td className="py-2.5 font-semibold text-studio-100">{scene.sceneNumber ? `Scene ${scene.sceneNumber}` : "Unassigned"}</td>
+                  <td className="max-w-[320px] text-xs text-studio-300">{scene.sceneHeading || "Unassigned Scene"}</td>
+                  <td className="text-xs text-studio-300">{scene.pageSummary}</td>
+                  <td className="max-w-[420px]">
+                    <div className="flex flex-wrap gap-1">
+                      {scene.items.map((item) => (
+                        <span key={`${scene.key}-${item}`} className="rounded-full border border-white/10 bg-white/[0.035] px-2 py-0.5 text-[11px] font-semibold text-studio-200">{item}</span>
+                      ))}
+                    </div>
+                  </td>
+                  <td className="max-w-[360px]">
+                    <p className="line-clamp-3 text-xs leading-5 text-studio-300">{scene.evidence || "No evidence captured."}</p>
+                  </td>
+                </tr>
+              )) : filteredElements.map((element) => (
                 <tr key={element.id} className="align-top text-studio-200">
                   <td className="py-2.5"><Badge value={element.category} /></td>
                   <td className="max-w-[220px]">
@@ -8390,11 +8424,54 @@ function PersistedBreakdownElementPanel({ run, onUpdateStatus, updating }: { run
               ))}
             </tbody>
           </table>
-          {!filteredElements.length ? <div className="p-4"><EmptyState label="No saved breakdown items match this view." /></div> : null}
+          {activeEntityType === "SCENES" && !sceneRows.length ? <div className="p-4"><EmptyState label="No scenes were captured for this breakdown." /></div> : null}
+          {activeEntityType !== "SCENES" && !filteredElements.length ? <div className="p-4"><EmptyState label="No saved breakdown items match this view." /></div> : null}
         </div>
       </div>
     </Panel>
   );
+}
+
+function breakdownCategoryTabs(elements: HammerBreakdownElement[]) {
+  const detected = new Set(elements.map((element) => element.category));
+  const preferred = ["CHARACTER", "SCENES", "LOCATION", "PROP", "ACTION", "VFX", "EXTRAS", "VEHICLE", "WARDROBE", "SFX", "ANIMAL", "NOTE", "OTHER"];
+  return preferred.filter((category) => category === "SCENES" ? elements.some((element) => element.scenes.length) : detected.has(category));
+}
+
+type BreakdownSceneTableRow = {
+  key: string;
+  sceneNumber?: string;
+  sceneHeading?: string;
+  firstPageNumber?: number;
+  lastPageNumber?: number;
+  items: string[];
+  evidence?: string;
+};
+
+function breakdownSceneRows(elements: HammerBreakdownElement[]) {
+  const rows = new Map<string, BreakdownSceneTableRow>();
+  for (const element of elements) {
+    for (const scene of element.scenes) {
+      const key = `${scene.sceneNumber ?? "unassigned"}:${scene.sceneHeading ?? "Unassigned Scene"}`;
+      const existing = rows.get(key) ?? {
+        key,
+        sceneNumber: scene.sceneNumber,
+        sceneHeading: scene.sceneHeading,
+        firstPageNumber: scene.firstPageNumber,
+        lastPageNumber: scene.lastPageNumber,
+        items: [],
+        evidence: scene.evidenceText
+      };
+      if (!existing.items.includes(element.displayName)) existing.items.push(element.displayName);
+      existing.firstPageNumber = minDefined(existing.firstPageNumber, scene.firstPageNumber);
+      existing.lastPageNumber = maxDefined(existing.lastPageNumber, scene.lastPageNumber);
+      if (!existing.evidence && scene.evidenceText) existing.evidence = scene.evidenceText;
+      rows.set(key, existing);
+    }
+  }
+  return Array.from(rows.values())
+    .map((row) => ({ ...row, pageSummary: pageRangeSummary(row.firstPageNumber, row.lastPageNumber) }))
+    .sort((a, b) => Number(a.sceneNumber) - Number(b.sceneNumber) || (a.sceneHeading ?? "").localeCompare(b.sceneHeading ?? ""));
 }
 
 function breakdownSceneSummary(element: HammerBreakdownElement) {
@@ -8406,11 +8483,25 @@ function breakdownSceneSummary(element: HammerBreakdownElement) {
 }
 
 function breakdownPageSummary(element: HammerBreakdownElement) {
-  if (element.firstPageNumber) {
-    const end = element.lastPageNumber && element.lastPageNumber !== element.firstPageNumber ? `-${element.lastPageNumber}` : "";
-    return `${element.firstPageNumber}${end} (${element.pageSource.toLowerCase()})`;
-  }
-  return "Unknown";
+  return pageRangeSummary(element.firstPageNumber, element.lastPageNumber, element.pageSource);
+}
+
+function pageRangeSummary(firstPageNumber?: number, lastPageNumber?: number, source?: string) {
+  if (!firstPageNumber) return "Unknown";
+  const end = lastPageNumber && lastPageNumber !== firstPageNumber ? `-${lastPageNumber}` : "";
+  return `${firstPageNumber}${end}${source ? ` (${source.toLowerCase()})` : ""}`;
+}
+
+function minDefined(left?: number, right?: number) {
+  if (left === undefined) return right;
+  if (right === undefined) return left;
+  return Math.min(left, right);
+}
+
+function maxDefined(left?: number, right?: number) {
+  if (left === undefined) return right;
+  if (right === undefined) return left;
+  return Math.max(left, right);
 }
 
 function ParsedEntityPanel({ parsed, projectId }: { parsed: ReturnType<typeof parseScriptText>; projectId: string }) {
