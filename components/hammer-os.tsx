@@ -8096,18 +8096,6 @@ function DiffColumn({ title, lines }: { title: string; lines: ReturnType<typeof 
   );
 }
 
-type BreakdownScene = {
-  id: string;
-  sceneNumber: string;
-  heading: string;
-  location: string;
-  timeOfDay: string;
-  synopsis: string;
-  projectId: string;
-  documentVersionId: string;
-  orderIndex: number;
-};
-
 function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = hammerVersions, workspaceMode = "demo" }: { documentId: string; documents?: HammerDocument[]; versions?: HammerDocumentVersion[]; workspaceMode?: "demo" | "database" }) {
   const doc = documents.find((item) => item.id === documentId) ?? documents[0] ?? emptyDocument;
   const textState = useDocumentVersionsWithText(doc.id, versions);
@@ -8123,40 +8111,9 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
   const latestRun = persistedRuns[0];
   const activeRun = workspaceMode === "database" ? latestRun : undefined;
   const scenes = hammerScenes.filter((scene) => scene.documentVersionId === version?.id);
-  const breakdownScenes: BreakdownScene[] = useMemo(() => (
-    activeRun
-      ? persistedScenesForRun(activeRun, parserProjectId, version?.id ?? "")
-      : parsed
-      ? parsed.scenes.map((scene) => ({
-        id: scene.id,
-        sceneNumber: String(scene.number),
-        heading: scene.slugline,
-        location: scene.location,
-        timeOfDay: scene.timeOfDay,
-        synopsis: scene.actionText,
-        projectId: parserProjectId,
-        documentVersionId: version?.id ?? "",
-        orderIndex: scene.number
-      }))
-      : scenes.length
-      ? scenes
-      : []
-  ), [activeRun, parsed, parserProjectId, scenes, version?.id]);
-  const [selectedSceneId, setSelectedSceneId] = useState("");
-  const selectedScene = breakdownScenes.find((scene) => scene.id === selectedSceneId) ?? breakdownScenes[0];
-  const persistedElements = activeRun?.elements.filter((element) => element.status !== "IGNORED") ?? [];
-  const persistedCounts = countPersistedBreakdownElements(persistedElements);
-
-  useEffect(() => {
-    if (!breakdownScenes.length) return;
-    if (!selectedSceneId || !breakdownScenes.some((scene) => scene.id === selectedSceneId)) {
-      setSelectedSceneId(breakdownScenes[0].id);
-    }
-  }, [breakdownScenes, selectedSceneId]);
 
   useEffect(() => {
     setParsed(null);
-    setSelectedSceneId("");
     setBreakdownStatus("");
   }, [version?.id]);
 
@@ -8226,7 +8183,6 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
       fileName: version?.fileName ?? "script.txt"
     });
     setParsed(nextParsed);
-    setSelectedSceneId(nextParsed.scenes[0]?.id ?? "");
     setBreakdownStatus(nextParsed.scenes.length ? `Breakdown complete. Detected ${nextParsed.scenes.length} scene${nextParsed.scenes.length === 1 ? "" : "s"}.` : "Breakdown ran, but no screenplay scene headings were detected.");
   }
 
@@ -8315,12 +8271,6 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
             </div>
             <p className="mt-1 truncate text-xs text-studio-400">{version ? `v${version.versionNumber} / ${version.fileName}` : "No uploaded version selected"}</p>
           </div>
-          <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-studio-300">
-            <BreakdownMetric label="Scenes" value={breakdownScenes.length} />
-            <BreakdownMetric label="Char" value={activeRun ? persistedCounts.CHARACTER ?? 0 : parsed?.characters.length ?? 0} />
-            <BreakdownMetric label="Loc" value={activeRun ? persistedCounts.LOCATION ?? 0 : parsed?.environments.length ?? 0} />
-            <BreakdownMetric label="Props/Action" value={activeRun ? (persistedCounts.PROP ?? 0) + (persistedCounts.ACTION ?? 0) : (parsed?.props.length ?? 0) + (parsed?.stuntBeats.length ?? 0)} />
-          </div>
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={runBreakdown} disabled={runningBreakdown || updatingBreakdown} className="inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-wait disabled:opacity-60">{runningBreakdown ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Gauge className="h-3.5 w-3.5" />}{runningBreakdown ? "Running..." : "Run Breakdown"}</button>
             <button type="button" onClick={approveBreakdown} disabled={updatingBreakdown || (!activeRun && !parsed && !scenes.length)} className="inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-not-allowed disabled:opacity-50"><CheckCircle2 className="h-3.5 w-3.5" />Approve</button>
@@ -8347,63 +8297,11 @@ type ParsedEntityRow = {
   description: string;
 };
 
-function BreakdownMetric({ label, value }: { label: string; value: number }) {
-  return (
-    <span className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/[0.03] px-2 py-1">
-      <span className="text-studio-500">{label}</span>
-      <span className="font-semibold text-studio-100">{value}</span>
-    </span>
-  );
-}
-
-function persistedScenesForRun(run: HammerBreakdownRun, projectId: string, documentVersionId: string): BreakdownScene[] {
-  const byScene = new Map<string, BreakdownScene>();
-  for (const element of run.elements) {
-    if (element.status === "IGNORED") continue;
-    for (const scene of element.scenes) {
-      const sceneNumber = scene.sceneNumber ?? "Unassigned";
-      const key = `${sceneNumber}:${scene.sceneHeading ?? ""}`;
-      if (byScene.has(key)) continue;
-      byScene.set(key, {
-        id: `breakdown-scene-${key}`,
-        sceneNumber,
-        heading: scene.sceneHeading ?? "Unassigned Scene",
-        location: inferLocationFromHeading(scene.sceneHeading ?? ""),
-        timeOfDay: inferTimeFromHeading(scene.sceneHeading ?? ""),
-        synopsis: scene.evidenceText ?? "",
-        projectId,
-        documentVersionId,
-        orderIndex: Number(sceneNumber) || byScene.size + 1
-      });
-    }
-  }
-  return Array.from(byScene.values()).sort((a, b) => a.orderIndex - b.orderIndex);
-}
-
-function inferLocationFromHeading(heading: string) {
-  const withoutPrefix = heading.replace(/^(INT\.\/EXT\.|INT\.|EXT\.)\s*/i, "");
-  const parts = withoutPrefix.split(" - ");
-  if (parts.length <= 1) return withoutPrefix || "Unspecified Location";
-  return parts.slice(0, -1).join(" - ") || "Unspecified Location";
-}
-
-function inferTimeFromHeading(heading: string) {
-  const parts = heading.split(" - ");
-  return parts.length > 1 ? parts[parts.length - 1] : "UNSPECIFIED";
-}
-
-function countPersistedBreakdownElements(elements: HammerBreakdownElement[]) {
-  return elements.reduce<Record<string, number>>((result, element) => {
-    result[element.category] = (result[element.category] ?? 0) + 1;
-    return result;
-  }, {});
-}
-
 function PersistedBreakdownElementPanel({ run, onUpdateStatus, updating }: { run: HammerBreakdownRun; onUpdateStatus: (elementId: string, status: BreakdownElementStatus) => void; updating: boolean }) {
-  const [entityType, setEntityType] = useState("ALL");
+  const [entityType, setEntityType] = useState("");
   const visibleElements = run.elements.filter((element) => element.status !== "IGNORED");
-  const categoryTabs = ["ALL", ...Array.from(new Set(visibleElements.map((element) => element.category)))];
-  const filteredElements = entityType === "ALL" ? visibleElements : visibleElements.filter((element) => element.category === entityType);
+  const categoryTabs = Array.from(new Set(visibleElements.map((element) => element.category)));
+  const filteredElements = entityType ? visibleElements.filter((element) => element.category === entityType) : visibleElements;
   const ignoredCount = run.elements.filter((element) => element.status === "IGNORED").length;
 
   return (
@@ -8418,15 +8316,16 @@ function PersistedBreakdownElementPanel({ run, onUpdateStatus, updating }: { run
           <button
             key={tab}
             type="button"
-            onClick={() => setEntityType(tab)}
+            onClick={() => setEntityType((current) => current === tab ? "" : tab)}
             className={cn("rounded border px-2 py-1 text-[11px] font-semibold uppercase transition", entityType === tab ? "border-amberline/45 bg-amberline/10 text-amberline" : "border-white/10 bg-white/[0.025] text-studio-300 hover:border-white/25")}
+            title={entityType === tab ? "Click again to clear this filter" : `Show ${statusLabel(tab)}`}
           >
             {statusLabel(tab)}
           </button>
         ))}
       </div>
       <div className="table-workspace">
-        <div className="data-scroll table-workspace-scroll">
+        <div className="data-scroll breakdown-table-scroll">
           <table className="data-table min-w-[1180px]">
             <thead className="text-[11px] uppercase tracking-[0.12em] text-studio-400">
               <tr>

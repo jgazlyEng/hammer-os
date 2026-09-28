@@ -219,6 +219,13 @@ a {
     max-height: none;
   }
 
+  .breakdown-table-scroll {
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: visible;
+    overscroll-behavior: auto;
+  }
+
   .contacts-list-scroll {
     max-height: none;
     min-height: 0;
