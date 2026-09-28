@@ -67,7 +67,11 @@ export async function PATCH(request: Request) {
     delete llmProvider.encryptedApiKey;
   }
   if (typeof llmProviderBody.apiKey === "string" && llmProviderBody.apiKey.trim()) {
-    llmProvider.encryptedApiKey = encryptSecret(llmProviderBody.apiKey);
+    try {
+      llmProvider.encryptedApiKey = encryptSecret(llmProviderBody.apiKey);
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : "Could not encrypt LLM API key." }, { status: 400 });
+    }
   }
   const [savedWatermark, savedUploadPolicy, savedLlmProvider] = await Promise.all([
     prisma.appSetting.upsert({

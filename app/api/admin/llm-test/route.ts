@@ -13,10 +13,11 @@ export async function POST(request: Request) {
   const body = await request.json().catch(() => ({})) as Record<string, unknown>;
   const submittedProvider = typeof body.provider === "string" ? body.provider : undefined;
   const submittedModel = typeof body.model === "string" ? body.model.trim() : undefined;
+  const submittedApiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
   const settings = isDatabaseConfigured() ? await readStoredLlmProviderSettings().catch(() => undefined) : undefined;
   const provider = submittedProvider || settings?.provider || "anthropic";
   const model = submittedModel || settings?.model || process.env.GREENLIGHT_LLM_MODEL || "claude-sonnet-5";
-  const apiKey = settings ? await resolveLlmApiKey({ ...settings, provider: provider as typeof settings.provider }) : process.env.ANTHROPIC_API_KEY || "";
+  const apiKey = submittedApiKey || (settings ? await resolveLlmApiKey({ ...settings, provider: provider as typeof settings.provider }) : process.env.ANTHROPIC_API_KEY || "");
 
   if (provider === "disabled") return NextResponse.json({ error: "LLM provider is disabled." }, { status: 400 });
   if (provider !== "anthropic") return NextResponse.json({ error: "Only Claude / Anthropic test calls are enabled right now." }, { status: 400 });

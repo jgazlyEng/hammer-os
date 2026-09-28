@@ -11949,7 +11949,7 @@ function AdminSettingsPanel({ data, databaseMode, onSaved }: { data: AdminSettin
       const response = await fetch("/api/admin/llm-test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider: llmProvider, model: llmModel })
+        body: JSON.stringify({ provider: llmProvider, model: llmModel, apiKey: llmApiKey })
       });
       const data = await response.json().catch(() => null) as { ok?: boolean; message?: string; error?: string; latencyMs?: number } | null;
       if (!response.ok) throw new Error(data?.error ?? "LLM connection test failed.");
