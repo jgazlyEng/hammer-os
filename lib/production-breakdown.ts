@@ -211,6 +211,10 @@ export async function updateBreakdownElementStatus(input: { elementId: string; s
   return getBreakdownRun(element.runId);
 }
 
+export async function deleteBreakdownRun(input: { runId: string }) {
+  await prisma.breakdownRun.delete({ where: { id: input.runId } });
+}
+
 async function maybeRunClaudeBreakdown(input: { sourceText: string; title: string; fileName: string; deterministic: BreakdownSource }): Promise<BreakdownSource> {
   const settings = await readStoredLlmProviderSettings().catch(() => null);
   if (!settings?.enabled || settings.provider !== "anthropic" || !settings.allowExternalScriptAnalysis) return input.deterministic;

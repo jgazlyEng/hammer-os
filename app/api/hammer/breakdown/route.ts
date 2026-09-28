@@ -3,6 +3,7 @@ import type { BreakdownElementStatus, BreakdownRunStatus, Prisma } from "@prisma
 import { forbidden, isDatabaseConfigured, requireUser, type AuthenticatedUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import {
+  deleteBreakdownRun,
   getBreakdownRun,
   listBreakdownRuns,
   runProductionBreakdown,
@@ -45,8 +46,13 @@ export async function POST(request: Request) {
   if (!access.allowed) return NextResponse.json(access.notFound ? { error: "Script version not found." } : forbidden(), { status: access.notFound ? 404 : 403 });
   if (!canRunBreakdown(auth.user, access.projectId)) return NextResponse.json(forbidden(), { status: 403 });
 
-  const run = await runProductionBreakdown({ documentVersionId, userId: auth.user.id });
-  return NextResponse.json({ mode: "database", run: run ? toBreakdownRun(run) : null }, { status: 201 });
+  try {
+    const run = await runProductionBreakdown({ documentVersionId, userId: auth.user.id });
+    return NextResponse.json({ mode: "database", run: run ? toBreakdownRun(run) : null }, { status: 201 });
+  } catch (error) {
+    console.error("[hammer:breakdown:run]", error);
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Breakdown failed unexpectedly." }, { status: 500 });
+  }
 }
 
 export async function PATCH(request: Request) {
@@ -83,6 +89,18 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ mode: "database", run: updated ? toBreakdownRun(updated) : null });
   }
 
+  if (action === "deleteRun") {
+    const runId = stringField(body.runId);
+    if (!runId) return NextResponse.json({ error: "Run id is required." }, { status: 400 });
+
+    const run = await getBreakdownRun(runId);
+    if (!run) return NextResponse.json({ error: "Breakdown run not found." }, { status: 404 });
+    if (!canApproveBreakdown(auth.user, run.projectId)) return NextResponse.json(forbidden(), { status: 403 });
+
+    await deleteBreakdownRun({ runId });
+    return NextResponse.json({ mode: "database", deletedRunId: runId });
+  }
+
   return NextResponse.json({ error: "Unsupported breakdown action." }, { status: 400 });
 }
 
@@ -98,14 +116,14 @@ async function accessForDocumentVersion(user: AuthenticatedUser, documentVersion
 }
 
 function canRunBreakdown(user: AuthenticatedUser, projectId?: string | null) {
-  if (user.appRole === "admin" || user.appRole === "producer") return true;
+  if (canViewEverything(user.appRole)) return true;
   if (!projectId) return false;
   const projectRole = user.projectRoles[projectId];
   return projectRole === "owner" || projectRole === "producer";
 }
 
 function canApproveBreakdown(user: AuthenticatedUser, projectId?: string | null) {
-  if (user.appRole === "admin" || user.appRole === "producer") return true;
+  if (canViewEverything(user.appRole)) return true;
   if (!projectId) return false;
   const projectRole = user.projectRoles[projectId];
   return projectRole === "owner" || projectRole === "producer";

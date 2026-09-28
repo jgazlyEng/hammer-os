@@ -8280,10 +8280,32 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
     }
   }
 
+  async function deleteActiveBreakdown() {
+    if (!activeRun || updatingBreakdown) return;
+    if (!window.confirm("Remove this breakdown run? This removes the generated breakdown table only; it does not delete the script or uploaded file.")) return;
+    setUpdatingBreakdown(true);
+    setBreakdownStatus("Removing breakdown...");
+    try {
+      const response = await fetch("/api/hammer/breakdown", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "deleteRun", runId: activeRun.id })
+      });
+      const data = await response.json().catch(() => null) as { deletedRunId?: string; error?: string } | null;
+      if (!response.ok) throw new Error(data?.error || "Breakdown could not be removed.");
+      setPersistedRuns((current) => current.filter((run) => run.id !== activeRun.id));
+      setBreakdownStatus("Breakdown removed. You can run a new breakdown whenever you are ready.");
+    } catch (error) {
+      setBreakdownStatus(error instanceof Error ? error.message : "Breakdown could not be removed.");
+    } finally {
+      setUpdatingBreakdown(false);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <Panel>
-        <SectionHeader eyebrow={workspaceMode === "database" ? "Server-Side Production Breakdown" : "Deterministic Parser"} title={`${doc.title} Breakdown`} action={<div className="flex gap-2"><button type="button" onClick={runBreakdown} disabled={runningBreakdown} className="inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-wait disabled:opacity-60">{runningBreakdown ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Gauge className="h-3.5 w-3.5" />}{runningBreakdown ? "Running..." : "Run Breakdown"}</button><button type="button" onClick={approveBreakdown} disabled={updatingBreakdown || (!activeRun && !parsed && !scenes.length)} className="inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-not-allowed disabled:opacity-50"><CheckCircle2 className="h-3.5 w-3.5" />Approve Breakdown</button></div>} />
+        <SectionHeader eyebrow={workspaceMode === "database" ? "Server-Side Production Breakdown" : "Deterministic Parser"} title={`${doc.title} Breakdown`} action={<div className="flex flex-wrap gap-2"><button type="button" onClick={runBreakdown} disabled={runningBreakdown || updatingBreakdown} className="inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-wait disabled:opacity-60">{runningBreakdown ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Gauge className="h-3.5 w-3.5" />}{runningBreakdown ? "Running..." : "Run Breakdown"}</button><button type="button" onClick={approveBreakdown} disabled={updatingBreakdown || (!activeRun && !parsed && !scenes.length)} className="inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-not-allowed disabled:opacity-50"><CheckCircle2 className="h-3.5 w-3.5" />Approve Breakdown</button>{activeRun ? <button type="button" onClick={deleteActiveBreakdown} disabled={updatingBreakdown} className="inline-flex items-center gap-1.5 rounded border border-rose-400/25 bg-rose-500/5 px-2.5 py-1.5 text-xs font-semibold text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200 disabled:cursor-not-allowed disabled:opacity-50"><Trash2 className="h-3.5 w-3.5" />Remove Breakdown</button> : null}</div>} />
         <div className="mb-3 rounded-lg border border-emerald-300/20 bg-emerald-400/10 p-3">
           <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
             <div className="min-w-0">
@@ -8361,7 +8383,7 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
           </div>
         ) : <EmptyState label="No scenes detected yet. Upload a screenplay-formatted PDF, FDX, or TXT and run breakdown." />}
       </Panel>
-      {activeRun ? <PersistedBreakdownElementPanel run={activeRun} onUpdateStatus={updatePersistedElementStatus} updating={updatingBreakdown} /> : parsed ? <ParsedEntityPanel parsed={parsed} projectId={parserProjectId} /> : <Panel><SectionHeader eyebrow="Editable" title="Characters, Locations, Props, Actions" /><EmptyState label="Run breakdown to detect characters, locations, props, and action moments." /></Panel>}
+      {activeRun ? <PersistedBreakdownElementPanel run={activeRun} onUpdateStatus={updatePersistedElementStatus} updating={updatingBreakdown} /> : parsed ? <ParsedEntityPanel parsed={parsed} projectId={parserProjectId} /> : <Panel><SectionHeader eyebrow="Breakdown Table" title="Production Items" /><EmptyState label="Run breakdown to detect characters, locations, props, and action moments." /></Panel>}
     </div>
   );
 }
@@ -8426,8 +8448,8 @@ function PersistedBreakdownElementPanel({ run, onUpdateStatus, updating }: { run
   return (
     <Panel>
       <SectionHeader
-        eyebrow="Saved Review"
-        title="Characters, Locations, Props, Actions"
+        eyebrow="Breakdown Table"
+        title="Production Items"
         action={ignoredCount ? <span className="rounded border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-xs text-studio-300">{ignoredCount} hidden</span> : null}
       />
       <div className="mb-3 flex flex-wrap gap-1.5">
@@ -8442,53 +8464,93 @@ function PersistedBreakdownElementPanel({ run, onUpdateStatus, updating }: { run
           </button>
         ))}
       </div>
-      <div className="grid gap-2">
-        {filteredElements.map((element) => (
-          <div key={element.id} className="grid gap-2 rounded-lg border border-white/10 bg-white/[0.03] p-3 md:grid-cols-[140px_220px_1fr_auto]">
-            <LabeledField label="Type">
-              <input className="field" value={statusLabel(element.category)} readOnly />
-            </LabeledField>
-            <LabeledField label="Name">
-              <input className="field" value={element.displayName} readOnly />
-            </LabeledField>
-            <LabeledField label="Evidence / Tags">
-              <input className="field" value={[element.evidenceText, element.tags.map((tag) => `${tag.key}:${tag.value}`).join(", ")].filter(Boolean).join(" / ")} readOnly />
-            </LabeledField>
-            <div className="flex items-end gap-1.5">
-              <button
-                type="button"
-                disabled={updating || element.status === "ACCEPTED"}
-                onClick={() => onUpdateStatus(element.id, "ACCEPTED")}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-signal/25 bg-signal/5 text-signal transition hover:border-signal/50 disabled:cursor-not-allowed disabled:opacity-50"
-                title={`Accept ${element.displayName}`}
-                aria-label={`Accept ${element.displayName}`}
-              >
-                <CheckCircle2 className="h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                disabled={updating}
-                onClick={() => onUpdateStatus(element.id, "IGNORED")}
-                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-rose-400/25 bg-rose-500/5 text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200 disabled:cursor-not-allowed disabled:opacity-50"
-                title={`Remove ${element.displayName} from this breakdown`}
-                aria-label={`Remove ${element.displayName} from this breakdown`}
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
-            </div>
-            <div className="md:col-span-4">
-              <p className="text-[11px] text-studio-400">
-                {element.scenes.length ? `Appears in ${element.scenes.length} scene${element.scenes.length === 1 ? "" : "s"}` : "No scene appearance recorded"}
-                {element.firstPageNumber ? ` / page ${element.firstPageNumber}${element.lastPageNumber && element.lastPageNumber !== element.firstPageNumber ? `-${element.lastPageNumber}` : ""} (${element.pageSource.toLowerCase()})` : ""}
-                {element.confidence ? ` / confidence ${Math.round(element.confidence * 100)}%` : ""}
-              </p>
-            </div>
-          </div>
-        ))}
-        {!filteredElements.length ? <EmptyState label="No saved breakdown items match this view." /> : null}
+      <div className="table-workspace">
+        <div className="data-scroll table-workspace-scroll">
+          <table className="data-table min-w-[1180px]">
+            <thead className="text-[11px] uppercase tracking-[0.12em] text-studio-400">
+              <tr>
+                <th className="py-2">Category</th>
+                <th>Item</th>
+                <th>Scenes</th>
+                <th>Pages</th>
+                <th>Department / Tags</th>
+                <th>Evidence</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/10">
+              {filteredElements.map((element) => (
+                <tr key={element.id} className="align-top text-studio-200">
+                  <td className="py-2.5"><Badge value={element.category} /></td>
+                  <td className="max-w-[220px]">
+                    <p className="font-semibold text-studio-100">{element.displayName}</p>
+                    {element.description ? <p className="mt-1 line-clamp-2 text-xs leading-5 text-studio-400">{element.description}</p> : null}
+                  </td>
+                  <td className="max-w-[220px] text-xs text-studio-300">{breakdownSceneSummary(element)}</td>
+                  <td className="text-xs text-studio-300">{breakdownPageSummary(element)}</td>
+                  <td className="max-w-[240px]">
+                    <div className="flex flex-wrap gap-1">
+                      {element.tags.length ? element.tags.map((tag) => (
+                        <span key={`${element.id}-${tag.id}`} className="rounded-full border border-emerald-300/25 bg-emerald-400/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-100">
+                          {tag.key}: {tag.label ?? tag.value}
+                        </span>
+                      )) : <span className="text-xs text-studio-500">No tags</span>}
+                    </div>
+                  </td>
+                  <td className="max-w-[320px]">
+                    <p className="line-clamp-3 text-xs leading-5 text-studio-300">{element.evidenceText || element.scenes.find((scene) => scene.evidenceText)?.evidenceText || "No evidence captured."}</p>
+                  </td>
+                  <td><Badge value={element.status} /></td>
+                  <td>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        disabled={updating || element.status === "ACCEPTED"}
+                        onClick={() => onUpdateStatus(element.id, "ACCEPTED")}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-signal/25 bg-signal/5 text-signal transition hover:border-signal/50 disabled:cursor-not-allowed disabled:opacity-50"
+                        title={`Accept ${element.displayName}`}
+                        aria-label={`Accept ${element.displayName}`}
+                      >
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={updating}
+                        onClick={() => onUpdateStatus(element.id, "IGNORED")}
+                        className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-rose-400/25 bg-rose-500/5 text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200 disabled:cursor-not-allowed disabled:opacity-50"
+                        title={`Remove ${element.displayName} from this breakdown`}
+                        aria-label={`Remove ${element.displayName} from this breakdown`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!filteredElements.length ? <div className="p-4"><EmptyState label="No saved breakdown items match this view." /></div> : null}
+        </div>
       </div>
     </Panel>
   );
+}
+
+function breakdownSceneSummary(element: HammerBreakdownElement) {
+  if (!element.scenes.length) return "Unassigned";
+  return element.scenes
+    .slice(0, 4)
+    .map((scene) => [scene.sceneNumber ? `Scene ${scene.sceneNumber}` : "Scene", scene.sceneHeading].filter(Boolean).join(": "))
+    .join(" / ") + (element.scenes.length > 4 ? ` / +${element.scenes.length - 4} more` : "");
+}
+
+function breakdownPageSummary(element: HammerBreakdownElement) {
+  if (element.firstPageNumber) {
+    const end = element.lastPageNumber && element.lastPageNumber !== element.firstPageNumber ? `-${element.lastPageNumber}` : "";
+    return `${element.firstPageNumber}${end} (${element.pageSource.toLowerCase()})`;
+  }
+  return "Unknown";
 }
 
 function ParsedEntityPanel({ parsed, projectId }: { parsed: ReturnType<typeof parseScriptText>; projectId: string }) {
