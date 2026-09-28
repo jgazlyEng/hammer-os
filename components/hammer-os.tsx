@@ -8304,84 +8304,36 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
 
   return (
     <div className="space-y-4">
-      <Panel>
-        <SectionHeader eyebrow={workspaceMode === "database" ? "Server-Side Production Breakdown" : "Deterministic Parser"} title={`${doc.title} Breakdown`} action={<div className="flex flex-wrap gap-2"><button type="button" onClick={runBreakdown} disabled={runningBreakdown || updatingBreakdown} className="inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-wait disabled:opacity-60">{runningBreakdown ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Gauge className="h-3.5 w-3.5" />}{runningBreakdown ? "Running..." : "Run Breakdown"}</button><button type="button" onClick={approveBreakdown} disabled={updatingBreakdown || (!activeRun && !parsed && !scenes.length)} className="inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-not-allowed disabled:opacity-50"><CheckCircle2 className="h-3.5 w-3.5" />Approve Breakdown</button>{activeRun ? <button type="button" onClick={deleteActiveBreakdown} disabled={updatingBreakdown} className="inline-flex items-center gap-1.5 rounded border border-rose-400/25 bg-rose-500/5 px-2.5 py-1.5 text-xs font-semibold text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200 disabled:cursor-not-allowed disabled:opacity-50"><Trash2 className="h-3.5 w-3.5" />Remove Breakdown</button> : null}</div>} />
-        <div className="mb-3 rounded-lg border border-emerald-300/20 bg-emerald-400/10 p-3">
-          <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-            <div className="min-w-0">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-200">Breakdown Source</p>
-              <p className="mt-1 truncate text-sm font-semibold text-studio-100">{doc.title}</p>
-              <p className="mt-0.5 truncate text-xs text-studio-300">
-                {version ? `v${version.versionNumber} / ${version.fileName}` : "No uploaded version selected"}
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-1.5">
+      <Panel className="p-3">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+          <div className="min-w-0 flex-1">
+            <p className="font-display text-[10px] uppercase tracking-[0.16em] text-amberline">{workspaceMode === "database" ? "Production Breakdown" : "Deterministic Parser"}</p>
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+              <h2 className="truncate text-base font-semibold text-studio-100">{doc.title}</h2>
               <Badge value={doc.type} />
               {version ? <Badge value={version.status} /> : null}
             </div>
+            <p className="mt-1 truncate text-xs text-studio-400">{version ? `v${version.versionNumber} / ${version.fileName}` : "No uploaded version selected"}</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-studio-300">
+            <BreakdownMetric label="Scenes" value={breakdownScenes.length} />
+            <BreakdownMetric label="Char" value={activeRun ? persistedCounts.CHARACTER ?? 0 : parsed?.characters.length ?? 0} />
+            <BreakdownMetric label="Loc" value={activeRun ? persistedCounts.LOCATION ?? 0 : parsed?.environments.length ?? 0} />
+            <BreakdownMetric label="Props/Action" value={activeRun ? (persistedCounts.PROP ?? 0) + (persistedCounts.ACTION ?? 0) : (parsed?.props.length ?? 0) + (parsed?.stuntBeats.length ?? 0)} />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={runBreakdown} disabled={runningBreakdown || updatingBreakdown} className="inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-wait disabled:opacity-60">{runningBreakdown ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Gauge className="h-3.5 w-3.5" />}{runningBreakdown ? "Running..." : "Run Breakdown"}</button>
+            <button type="button" onClick={approveBreakdown} disabled={updatingBreakdown || (!activeRun && !parsed && !scenes.length)} className="inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-not-allowed disabled:opacity-50"><CheckCircle2 className="h-3.5 w-3.5" />Approve</button>
+            {activeRun ? <button type="button" onClick={deleteActiveBreakdown} disabled={updatingBreakdown} className="inline-flex items-center gap-1.5 rounded border border-rose-400/25 bg-rose-500/5 px-2.5 py-1.5 text-xs font-semibold text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200 disabled:cursor-not-allowed disabled:opacity-50"><Trash2 className="h-3.5 w-3.5" />Remove</button> : null}
           </div>
         </div>
-        <div className="grid gap-3 md:grid-cols-4">
-          <SmallStat label="Detected Scenes" value={`${breakdownScenes.length}`} />
-          <SmallStat label="Characters" value={`${activeRun ? persistedCounts.CHARACTER ?? 0 : parsed?.characters.length ?? 0}`} />
-          <SmallStat label="Locations" value={`${activeRun ? persistedCounts.LOCATION ?? 0 : parsed?.environments.length ?? 0}`} />
-          <SmallStat label="Props / Actions" value={`${activeRun ? (persistedCounts.PROP ?? 0) + (persistedCounts.ACTION ?? 0) : (parsed?.props.length ?? 0) + (parsed?.stuntBeats.length ?? 0)}`} />
-        </div>
-        {activeRun ? <p className="mt-3 rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 text-xs text-studio-300">Latest run: {statusLabel(activeRun.status)} / {activeRun.parserName.includes("anthropic") ? "Claude enhanced" : "Standard parser"} / {activeRun.createdAt.slice(0, 10)}{activeRun.createdByName ? ` by ${activeRun.createdByName}` : ""}</p> : null}
-        {activeRun?.warning ? <p className="mt-3 rounded border border-yellow-300/25 bg-yellow-300/10 px-2.5 py-2 text-xs text-yellow-100">{activeRun.warning}</p> : null}
-        {persistedLoading ? <p className="mt-3 rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 text-xs text-studio-300">Loading saved breakdown runs...</p> : null}
-        {textState.loading ? <p className="mt-3 rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 text-xs text-studio-300">Loading script text for breakdown...</p> : null}
-        {textState.message ? <p className="mt-3 rounded border border-ember/30 bg-ember/10 px-2.5 py-2 text-xs text-ember">{textState.message}</p> : null}
-        {activeRun?.error ? <p className="mt-3 rounded border border-ember/30 bg-ember/10 px-2.5 py-2 text-xs text-ember">{activeRun.error}</p> : null}
-        {breakdownStatus ? <p className="mt-3 rounded border border-white/10 bg-white/[0.03] px-2.5 py-2 text-xs text-studio-300">{breakdownStatus}</p> : null}
-      </Panel>
-      <Panel>
-        <SectionHeader eyebrow="Editable" title="Scenes" />
-        {selectedScene ? (
-          <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
-            <div className="max-h-[560px] space-y-2 overflow-y-auto pr-1">
-              {breakdownScenes.map((scene) => (
-                <button
-                  key={scene.id}
-                  type="button"
-                  onClick={() => setSelectedSceneId(scene.id)}
-                  className={cn(
-                    "w-full rounded-md border p-2.5 text-left transition",
-                    selectedScene.id === scene.id ? "border-amberline/45 bg-amberline/10" : "border-white/10 bg-white/[0.03] hover:border-white/25"
-                  )}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-display text-[10px] uppercase tracking-[0.12em] text-amberline">Scene {scene.sceneNumber}</span>
-                    <span className="text-[11px] text-studio-400">{scene.timeOfDay}</span>
-                  </div>
-                  <p className="mt-1 line-clamp-2 text-[13px] font-semibold text-studio-100">{scene.heading}</p>
-                  <p className="mt-1 truncate text-xs text-studio-400">{scene.location}</p>
-                </button>
-              ))}
-            </div>
-            <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
-              <div className="grid gap-3 md:grid-cols-[90px_1fr_180px_160px]">
-                <LabeledField label="Scene #">
-                  <input className="field" defaultValue={selectedScene.sceneNumber} />
-                </LabeledField>
-                <LabeledField label="Heading">
-                  <input className="field" defaultValue={selectedScene.heading} />
-                </LabeledField>
-                <LabeledField label="Location">
-                  <input className="field" defaultValue={selectedScene.location} />
-                </LabeledField>
-                <LabeledField label="Timing">
-                  <input className="field" defaultValue={selectedScene.timeOfDay} />
-                </LabeledField>
-                <div className="md:col-span-4">
-                  <LabeledField label="Synopsis / Action">
-                    <textarea className="field min-h-52" defaultValue={selectedScene.synopsis} />
-                  </LabeledField>
-                </div>
-              </div>
-            </div>
-          </div>
-        ) : <EmptyState label="No scenes detected yet. Upload a screenplay-formatted PDF, FDX, or TXT and run breakdown." />}
+        {activeRun ? <p className="mt-2 truncate text-[11px] text-studio-400">Latest: {statusLabel(activeRun.status)} / {activeRun.parserName.includes("anthropic") ? "Claude enhanced" : "Standard parser"} / {activeRun.createdAt.slice(0, 10)}{activeRun.createdByName ? ` by ${activeRun.createdByName}` : ""}</p> : null}
+        {activeRun?.warning ? <p className="mt-2 rounded border border-yellow-300/25 bg-yellow-300/10 px-2.5 py-1.5 text-xs text-yellow-100">{activeRun.warning}</p> : null}
+        {persistedLoading ? <p className="mt-2 rounded border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-xs text-studio-300">Loading saved breakdown runs...</p> : null}
+        {textState.loading ? <p className="mt-2 rounded border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-xs text-studio-300">Loading script text for breakdown...</p> : null}
+        {textState.message ? <p className="mt-2 rounded border border-ember/30 bg-ember/10 px-2.5 py-1.5 text-xs text-ember">{textState.message}</p> : null}
+        {activeRun?.error ? <p className="mt-2 rounded border border-ember/30 bg-ember/10 px-2.5 py-1.5 text-xs text-ember">{activeRun.error}</p> : null}
+        {breakdownStatus ? <p className="mt-2 rounded border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-xs text-studio-300">{breakdownStatus}</p> : null}
       </Panel>
       {activeRun ? <PersistedBreakdownElementPanel run={activeRun} onUpdateStatus={updatePersistedElementStatus} updating={updatingBreakdown} /> : parsed ? <ParsedEntityPanel parsed={parsed} projectId={parserProjectId} /> : <Panel><SectionHeader eyebrow="Breakdown Table" title="Production Items" /><EmptyState label="Run breakdown to detect characters, locations, props, and action moments." /></Panel>}
     </div>
@@ -8394,6 +8346,15 @@ type ParsedEntityRow = {
   name: string;
   description: string;
 };
+
+function BreakdownMetric({ label, value }: { label: string; value: number }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/[0.03] px-2 py-1">
+      <span className="text-studio-500">{label}</span>
+      <span className="font-semibold text-studio-100">{value}</span>
+    </span>
+  );
+}
 
 function persistedScenesForRun(run: HammerBreakdownRun, projectId: string, documentVersionId: string): BreakdownScene[] {
   const byScene = new Map<string, BreakdownScene>();
