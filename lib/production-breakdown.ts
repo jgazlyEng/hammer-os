@@ -228,14 +228,16 @@ async function maybeRunClaudeBreakdown(input: { sourceText: string; title: strin
       headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
         model: settings.model,
-        max_tokens: 6000,
-        system: "You are GreenLight's film production breakdown assistant. Return strict JSON only. Extract production breakdown items from screenplay text for studio review.",
+        max_tokens: 8000,
+        system: "You are GreenLight's film production breakdown assistant. Extract production breakdown items from screenplay text for studio review. Use the provided tool exactly once.",
+        tools: [claudeBreakdownTool()],
+        tool_choice: { type: "tool", name: "submit_breakdown" },
         messages: [{ role: "user", content: claudeBreakdownPrompt(input.title, input.fileName, text) }]
       })
     });
     const data = await response.json().catch(() => null) as Record<string, unknown> | null;
     if (!response.ok) throw new Error(anthropicError(data) || `Claude breakdown failed with status ${response.status}.`);
-    const elements = normalizeClaudeElements(extractAnthropicText(data));
+    const elements = normalizeClaudeElements(extractAnthropicBreakdownPayload(data));
     if (!elements.length) throw new Error("Claude returned no usable breakdown elements.");
     return {
       parserName: "anthropic-claude-production-breakdown",
@@ -253,8 +255,7 @@ async function maybeRunClaudeBreakdown(input: { sourceText: string; title: strin
 }
 
 function claudeBreakdownPrompt(title: string, fileName: string, text: string) {
-  return `Analyze this script and return JSON with this shape only:
-{"elements":[{"category":"CHARACTER|EXTRAS|LOCATION|PROP|VEHICLE|WARDROBE|SFX|ANIMAL|ACTION|VFX|NOTE|OTHER","name":"item name","description":"short production note","evidence":"source text","sceneNumber":"1","sceneHeading":"INT. LOCATION - DAY","confidence":0.0,"tags":[{"key":"taxonomy","value":"character"},{"key":"department","value":"cast"}]}]}
+  return `Analyze this script and submit the production breakdown with the submit_breakdown tool.
 
 Rules:
 - Use category labels exactly from the allowed list.
@@ -262,6 +263,7 @@ Rules:
 - Include characters, locations, props, vehicles, wardrobe, SFX, animals, action/stunts, VFX, and important production notes.
 - Prefer useful production items over exhaustive noise.
 - Keep names clean and human-readable.
+- Keep evidence concise; do not paste long paragraphs.
 
 Title: ${title}
 File: ${fileName}
@@ -270,9 +272,56 @@ SCRIPT:
 ${text}`;
 }
 
-function normalizeClaudeElements(rawText: string): BreakdownElementDraft[] {
-  const parsed = parseJsonBlock(rawText);
-  const elements = Array.isArray(parsed?.elements) ? parsed.elements : [];
+function claudeBreakdownTool() {
+  return {
+    name: "submit_breakdown",
+    description: "Submit a GreenLight production breakdown for a screenplay.",
+    input_schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        elements: {
+          type: "array",
+          maxItems: 500,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              category: { type: "string", enum: ["CHARACTER", "EXTRAS", "LOCATION", "PROP", "VEHICLE", "WARDROBE", "SFX", "ANIMAL", "ACTION", "VFX", "NOTE", "OTHER"] },
+              name: { type: "string" },
+              description: { type: "string" },
+              evidence: { type: "string" },
+              sceneNumber: { type: "string" },
+              sceneHeading: { type: "string" },
+              confidence: { type: "number", minimum: 0, maximum: 1 },
+              tags: {
+                type: "array",
+                maxItems: 12,
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    key: { type: "string" },
+                    value: { type: "string" },
+                    label: { type: "string" }
+                  },
+                  required: ["key", "value"]
+                }
+              }
+            },
+            required: ["category", "name"]
+          }
+        }
+      },
+      required: ["elements"]
+    }
+  };
+}
+
+function normalizeClaudeElements(payload: unknown): BreakdownElementDraft[] {
+  const parsed = typeof payload === "string" ? parseJsonBlock(payload) : payload;
+  const parsedRecord = parsed && typeof parsed === "object" ? parsed as { elements?: unknown[] } : {};
+  const elements: unknown[] = Array.isArray(parsedRecord.elements) ? parsedRecord.elements : [];
   return elements.slice(0, 500).map((item, index) => {
     const record = item && typeof item === "object" ? item as Record<string, unknown> : {};
     const category = normalizeCategory(record.category);
@@ -373,13 +422,85 @@ function parseJsonBlock(text: string) {
     return JSON.parse(trimmed) as { elements?: unknown[] };
   } catch {
     const match = trimmed.match(/\{[\s\S]*\}/);
-    return match ? JSON.parse(match[0]) as { elements?: unknown[] } : null;
+    if (match) {
+      try {
+        return JSON.parse(match[0]) as { elements?: unknown[] };
+      } catch {
+        return salvageBreakdownJson(match[0]);
+      }
+    }
+    return salvageBreakdownJson(trimmed);
   }
 }
 
-function extractAnthropicText(data: Record<string, unknown> | null) {
+function extractAnthropicBreakdownPayload(data: Record<string, unknown> | null) {
   const content = Array.isArray(data?.content) ? data.content : [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const record = block as Record<string, unknown>;
+    if (record.type === "tool_use" && record.name === "submit_breakdown" && record.input && typeof record.input === "object") {
+      return record.input;
+    }
+  }
   return content.map((block) => block && typeof block === "object" && typeof (block as Record<string, unknown>).text === "string" ? (block as Record<string, unknown>).text : "").join("\n").trim();
+}
+
+function salvageBreakdownJson(text: string) {
+  const elementObjects = extractObjectLiteralsFromElementsArray(text);
+  if (!elementObjects.length) return null;
+  const elements = elementObjects
+    .map((objectText) => {
+      try {
+        return JSON.parse(objectText) as unknown;
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+  return elements.length ? { elements } : null;
+}
+
+function extractObjectLiteralsFromElementsArray(text: string) {
+  const elementsIndex = text.search(/"elements"\s*:/);
+  if (elementsIndex < 0) return [];
+  const arrayStart = text.indexOf("[", elementsIndex);
+  if (arrayStart < 0) return [];
+  const objects: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+  for (let index = arrayStart + 1; index < text.length; index += 1) {
+    const char = text[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = inString;
+      continue;
+    }
+    if (char === "\"") {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (char === "{") {
+      if (depth === 0) start = index;
+      depth += 1;
+      continue;
+    }
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        objects.push(text.slice(start, index + 1));
+        start = -1;
+      }
+      continue;
+    }
+    if (char === "]" && depth === 0) break;
+  }
+  return objects;
 }
 
 function anthropicError(data: Record<string, unknown> | null) {
@@ -434,4 +555,12 @@ function countBy(values: string[]) {
     result[value] = (result[value] ?? 0) + 1;
     return result;
   }, {});
+}
+
+export function normalizeClaudeBreakdownElementsForTest(payload: unknown) {
+  return normalizeClaudeElements(payload).map((element) => ({
+    category: element.category,
+    displayName: element.displayName,
+    sceneNumber: element.scenes[0]?.sceneNumber
+  }));
 }
