@@ -3829,7 +3829,6 @@ function ProjectWorkspace({
   const tabs = [
     { id: "overview", label: "Overview", href: `/projects/${project.id}` },
     { id: "documents", label: "Scripts & Docs", href: `/projects/${project.id}/documents` },
-    { id: "breakdown", label: "Breakdown", href: firstScript ? `/scripts/${firstScript.id}/breakdown` : `/projects/${project.id}/documents` },
     { id: "assets", label: "Reference", href: `/projects/${project.id}/assets` },
     { id: "tasks", label: "Tasks", href: "/tasks" },
   ];
@@ -3882,7 +3881,7 @@ function ProjectWorkspace({
                   </div>
                   <p className="mt-1 text-xs leading-5 text-studio-300">{firstScript ? `${firstScript.title} / v${latestVersion?.versionNumber ?? 1}` : "No script has been attached yet."}</p>
                   <p className="mt-1 line-clamp-2 text-xs leading-5 text-studio-400">{project.logline}</p>
-                  {firstScript ? <div className="mt-2 flex flex-wrap gap-1.5"><TableLink href={`/scripts/${firstScript.id}`}>Open script</TableLink><TableLink href={`/scripts/${firstScript.id}/breakdown`}>Breakdown</TableLink></div> : null}
+                  {firstScript ? <div className="mt-2 flex flex-wrap gap-1.5"><TableLink href={`/scripts/${firstScript.id}`}>Open script</TableLink><TableLink href={`/projects/${project.id}/documents`}>Open Scripts & Docs</TableLink></div> : null}
                 </div>
                 <div>
                   {visibleOpenTasks.length ? <CompactTaskRows tasks={visibleOpenTasks.slice(0, 4)} /> : <EmptyState label={canViewAllProjectAssignments ? `No open tasks for ${project.title}.` : `No tasks assigned to you for ${project.title}.`} />}
@@ -5166,6 +5165,7 @@ function DocumentRows({
             const version = currentVersionFor(doc.id, docs, versions);
             const selectedProjectId = assignmentDrafts[doc.id] ?? "";
             const canAssignIncomingDocument = Boolean(onAssignToProject && assignableProjects.length && !doc.projectId);
+            const canRunDocumentBreakdown = canBreakdownDocumentType(doc.type);
             return (
               <tr key={doc.id} className="text-studio-200">
                 <td className="py-2.5 font-semibold"><Link href={`/scripts/${doc.id}`}>{doc.title}</Link></td>
@@ -5176,6 +5176,16 @@ function DocumentRows({
                 <td>{doc.writerName ?? userName(doc.createdById)}</td>
                 <td>{doc.updatedAt}</td>
                 <td className="space-x-1.5">
+                  {canRunDocumentBreakdown ? (
+                    <Link
+                      href={`/scripts/${doc.id}/breakdown`}
+                      className="inline-flex items-center gap-1 rounded border border-emerald-400/25 bg-emerald-400/5 px-1.5 py-1 text-[11px] font-semibold text-emerald-300 transition hover:border-emerald-300/50 hover:text-emerald-200"
+                      title={`Run breakdown for ${doc.title}`}
+                    >
+                      <Gauge className="h-3 w-3" />
+                      Breakdown
+                    </Link>
+                  ) : null}
                   {canDownload && currentUser && version ? (
                     <DownloadFileLink fileName={version.fileName} dataUrl={version.dataUrl} fallbackText={version.extractedText} resourceType="documentVersion" resourceId={version.id} currentUser={currentUser} compact />
                   ) : canDownload ? (
@@ -5219,6 +5229,10 @@ function DocumentRows({
       <PaginationFooter page={normalizedPage} pageSize={pageSize} total={docs.length} onPageChange={setPage} />
     </div>
   );
+}
+
+function canBreakdownDocumentType(type: DocumentType) {
+  return type === "SCRIPT" || type === "TREATMENT" || type === "OUTLINE";
 }
 
 function Collections({
@@ -6412,7 +6426,7 @@ function ScriptDetail({
   const textState = useDocumentVersionsWithText(doc.id, versions);
   const versionsWithText = textState.versionsWithText;
   const version = currentVersionFor(doc.id, documents, versionsWithText);
-  const [tab, setTab] = useState<"overview" | "coverage" | "notes" | "files" | "compare" | "breakdown">("overview");
+  const [tab, setTab] = useState<"overview" | "coverage" | "notes" | "files" | "compare">("overview");
   const [metadataDraft, setMetadataDraft] = useState({
     title: doc.title,
     type: doc.type,
@@ -6607,8 +6621,7 @@ function ScriptDetail({
             ["coverage", "Coverage"],
             ["notes", `Notes${visibleNotesCount ? ` (${visibleNotesCount})` : ""}`],
             ["files", "Files"],
-            ["compare", "Compare"],
-            ["breakdown", "Breakdown"]
+            ["compare", "Compare"]
           ].map(([id, label]) => (
             <button
               key={id}
@@ -6882,13 +6895,6 @@ function ScriptDetail({
               <p className="mt-1 text-xs leading-5 text-studio-400">This script currently has {documentVersions.length} version{documentVersions.length === 1 ? "" : "s"}. Use Manage versions to upload a new draft.</p>
             </div>
           )}
-        </Panel>
-      ) : null}
-
-      {tab === "breakdown" ? (
-        <Panel>
-          <SectionHeader eyebrow="Optional" title="Script Breakdown" action={<TableLink href={`/scripts/${doc.id}/breakdown`}>Open Breakdown</TableLink>} />
-          <p className="text-[13px] leading-6 text-studio-300">Breakdown is available when the team is ready to pull scenes, characters, locations, props, and action moments from the script. It stays out of the primary review flow until needed.</p>
         </Panel>
       ) : null}
     </div>
@@ -8277,7 +8283,22 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
   return (
     <div className="space-y-4">
       <Panel>
-        <SectionHeader eyebrow={workspaceMode === "database" ? "Server-Side Production Breakdown" : "Deterministic Parser"} title="Script Breakdown" action={<div className="flex gap-2"><button type="button" onClick={runBreakdown} disabled={runningBreakdown} className="inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-wait disabled:opacity-60">{runningBreakdown ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Gauge className="h-3.5 w-3.5" />}{runningBreakdown ? "Running..." : "Run Breakdown"}</button><button type="button" onClick={approveBreakdown} disabled={updatingBreakdown || (!activeRun && !parsed && !scenes.length)} className="inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-not-allowed disabled:opacity-50"><CheckCircle2 className="h-3.5 w-3.5" />Approve Breakdown</button></div>} />
+        <SectionHeader eyebrow={workspaceMode === "database" ? "Server-Side Production Breakdown" : "Deterministic Parser"} title={`${doc.title} Breakdown`} action={<div className="flex gap-2"><button type="button" onClick={runBreakdown} disabled={runningBreakdown} className="inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-wait disabled:opacity-60">{runningBreakdown ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Gauge className="h-3.5 w-3.5" />}{runningBreakdown ? "Running..." : "Run Breakdown"}</button><button type="button" onClick={approveBreakdown} disabled={updatingBreakdown || (!activeRun && !parsed && !scenes.length)} className="inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-not-allowed disabled:opacity-50"><CheckCircle2 className="h-3.5 w-3.5" />Approve Breakdown</button></div>} />
+        <div className="mb-3 rounded-lg border border-emerald-300/20 bg-emerald-400/10 p-3">
+          <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-200">Breakdown Source</p>
+              <p className="mt-1 truncate text-sm font-semibold text-studio-100">{doc.title}</p>
+              <p className="mt-0.5 truncate text-xs text-studio-300">
+                {version ? `v${version.versionNumber} / ${version.fileName}` : "No uploaded version selected"}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              <Badge value={doc.type} />
+              {version ? <Badge value={version.status} /> : null}
+            </div>
+          </div>
+        </div>
         <div className="grid gap-3 md:grid-cols-4">
           <SmallStat label="Detected Scenes" value={`${breakdownScenes.length}`} />
           <SmallStat label="Characters" value={`${activeRun ? persistedCounts.CHARACTER ?? 0 : parsed?.characters.length ?? 0}`} />
