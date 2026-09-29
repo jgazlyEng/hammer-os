@@ -6457,9 +6457,8 @@ function ScriptDetail({
   const attachedSupportingDocuments = supportingDocuments.filter((item) => item.scriptDocumentId === doc.id);
   const scriptComments = comments.filter((comment) => comment.targetId === doc.id);
   const versionComments = version ? comments.filter((comment) => comment.targetId === version.id) : [];
-  const versionUploadNote = version?.notes?.trim() ?? "";
   const versionMarkdownNote = version?.markdownNotes?.trim() ?? "";
-  const visibleNotesCount = scriptComments.length + versionComments.length + (versionUploadNote ? 1 : 0) + (versionMarkdownNote ? 1 : 0);
+  const visibleNotesCount = scriptComments.length + versionComments.length + (versionMarkdownNote ? 1 : 0);
   const canDownload = canDownloadFiles(currentUser?.role);
   const hasSelectedVersion = Boolean(version);
   const selectedVersionMarkdown = version?.markdownNotes ?? "";
@@ -6647,12 +6646,6 @@ function ScriptDetail({
                   </select>
                 ) : null}
                 {doc.source ? <SmallStat label="Source" value={doc.source} /> : null}
-                {versionUploadNote ? (
-                  <div className="rounded border border-white/10 bg-white/[0.03] p-2.5 text-[13px] text-studio-300">
-                    <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Version Upload Note</p>
-                    <p>{versionUploadNote}</p>
-                  </div>
-                ) : null}
                 {onCreateComment ? (
                   <label className="grid gap-1">
                     <span className="text-[11px] font-semibold uppercase tracking-[0.12em] text-studio-400">Quick Note</span>
@@ -6785,7 +6778,6 @@ function ScriptDetail({
         <ScriptNotesWorkspace
           document={doc}
           version={version}
-          versionUploadNote={versionUploadNote}
           versionMarkdownNote={versionMarkdownNote}
           comments={[...scriptComments, ...versionComments]}
           currentUser={currentUser}
@@ -7537,7 +7529,6 @@ function GlobalNoteDialog({
 function ScriptNotesWorkspace({
   document,
   version,
-  versionUploadNote,
   versionMarkdownNote,
   comments,
   currentUser,
@@ -7548,7 +7539,6 @@ function ScriptNotesWorkspace({
 }: {
   document: HammerDocument;
   version?: HammerDocumentVersion;
-  versionUploadNote?: string;
   versionMarkdownNote?: string;
   comments: HammerComment[];
   currentUser?: HammerUser;
@@ -7570,7 +7560,6 @@ function ScriptNotesWorkspace({
   const visibleComments = comments.filter((comment) => comment.status !== "ARCHIVED");
   const noteItems = [
     ...visibleComments.map((comment) => ({ kind: "comment" as const, id: comment.id, createdAt: comment.createdAt, comment })),
-    ...(versionUploadNote?.trim() ? [{ kind: "legacy" as const, id: `upload-${version?.id ?? document.id}`, createdAt: version?.createdAt ?? document.updatedAt, title: "Version Upload Note", body: versionUploadNote, targetLabel: version ? `Version ${version.versionNumber}` : "Overall Script" }] : []),
     ...(versionMarkdownNote?.trim() ? [{ kind: "legacy" as const, id: `markdown-${version?.id ?? document.id}`, createdAt: version?.createdAt ?? document.updatedAt, title: "Version Markdown Note", body: versionMarkdownNote, targetLabel: version ? `Version ${version.versionNumber}` : "Overall Script" }] : [])
   ].sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
   const selectedComment = visibleComments.find((comment) => comment.id === selectedCommentId);
@@ -13637,18 +13626,12 @@ function CommentsPanel({
     <Panel>
       <SectionHeader eyebrow={eyebrow} title={title} />
       <div className="space-y-2">
-        {versionNote?.trim() ? (
-          <div className="rounded border border-emerald-400/20 bg-emerald-400/5 p-2.5 text-[13px] text-studio-200">
-            <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-emerald-300">Version Upload Note</p>
-            <p>{versionNote}</p>
-          </div>
-        ) : null}
         {targetComments.length ? targetComments.map((comment) => (
           <div key={comment.id} className="rounded border border-white/10 bg-white/[0.03] p-2.5 text-[13px] text-studio-300">
             <p>{comment.body}</p>
             <p className="mt-1.5 text-[11px] text-studio-500">{userName(comment.createdById)} / {comment.visibility} / {comment.createdAt}</p>
           </div>
-        )) : versionNote?.trim() ? null : <EmptyState label={emptyLabel} />}
+        )) : <EmptyState label={emptyLabel} />}
       </div>
       <div className="mt-3 grid gap-2">
         <textarea className="field min-h-24" value={body} onChange={(event) => setBody(event.target.value)} placeholder={placeholder} />
