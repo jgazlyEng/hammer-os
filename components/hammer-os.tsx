@@ -2342,7 +2342,7 @@ function Projects({
   const [addSlateOpen, setAddSlateOpen] = useState(false);
   const [slateImportMessage, setSlateImportMessage] = useState("");
   const [prospectSort, setProspectSort] = useState<{ key: ProspectSortKey; direction: "asc" | "desc" }>({ key: "title", direction: "asc" });
-  const [activeProspectSource, setActiveProspectSource] = useState("Projects");
+  const [activeProspectSource, setActiveProspectSource] = useState("Submissions");
   const displayProjectLeads = useMemo(() => dedupeProjectLeads(projectLeads), [projectLeads]);
   const activeSlateFilterCount = useMemo(() => Object.values(filters).reduce((count, values) => count + values.length, 0), [filters]);
   const normalizedSlateSearch = slateSearch.toLowerCase().trim();
@@ -2366,7 +2366,7 @@ function Projects({
     });
   }, [filteredLeads, prospectSort.direction, prospectSort.key, users]);
   const prospectSections = useMemo(() => prospectSourceSections(sortedLeads), [sortedLeads]);
-  const activeProspectSection = prospectSections.find((sourceSection) => sourceSection.source === activeProspectSource) ?? prospectSections[0];
+  const activeProspectSection = prospectSections.find((sourceSection) => sourceSection.source === activeProspectSource) ?? prospectSections[0] ?? { source: "Submissions", label: "Submissions", leads: [] };
   const selectedLead = selectedLeadId
     ? sortedLeads.find((lead) => lead.id === selectedLeadId && lead.title === selectedLeadTitle)
       ?? filteredLeads.find((lead) => lead.id === selectedLeadId && lead.title === selectedLeadTitle)
@@ -2393,6 +2393,14 @@ function Projects({
     if (!selectedLead) return;
     setLeadDraft(selectedLead);
   }, [selectedLead]);
+
+  useEffect(() => {
+    if (mode !== "prospects") return;
+    if (!prospectSections.length) return;
+    if (!prospectSections.some((sourceSection) => sourceSection.source === activeProspectSource)) {
+      setActiveProspectSource(prospectSections[0].source);
+    }
+  }, [activeProspectSource, mode, prospectSections]);
 
   async function saveLead() {
     if (!selectedLead || !onUpdateLead) return;
@@ -2505,13 +2513,13 @@ function Projects({
                       activeProspectSection.source === sourceSection.source ? "border-amberline/50 bg-amberline/12 text-amberline" : "border-white/10 bg-white/[0.025] text-studio-300 hover:border-amberline/35 hover:text-amberline"
                     )}
                   >
-                    {sourceSection.source}
+                    {sourceSection.label}
                     <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", activeProspectSection.source === sourceSection.source ? "bg-amberline text-studio-950" : "bg-white/10 text-studio-400")}>{sourceSection.leads.length}</span>
                   </button>
                 ))}
               </div>
               <ProspectSourceTable
-                title={activeProspectSection.source}
+                title={activeProspectSection.label}
                 leads={activeProspectSection.leads}
                 users={users}
                 activeSort={prospectSort}
@@ -3502,7 +3510,7 @@ function uniqueLeadOptions(leads: HammerProjectLead[], key: keyof HammerProjectL
 }
 
 function uniqueLeadSourceOptions(leads: HammerProjectLead[]) {
-  const preferred = ["Projects", "Cultural Trends", "Public IP"];
+  const preferred = ["Manual", "Projects", "Cultural Trends", "Public IP"];
   return Array.from(new Set(leads.map(prospectSourceTable).filter(Boolean))).sort((a, b) => {
     const aIndex = preferred.indexOf(a);
     const bIndex = preferred.indexOf(b);
@@ -3516,13 +3524,20 @@ function prospectSourceTable(lead: HammerProjectLead) {
 }
 
 function prospectSourceSections(leads: HammerProjectLead[]) {
-  const primarySources = ["Projects", "Public IP", "Cultural Trends"];
-  const sections = primarySources.map((source) => ({
-    source,
-    leads: leads.filter((lead) => prospectSourceTable(lead) === source)
-  }));
-  const otherLeads = leads.filter((lead) => !primarySources.includes(prospectSourceTable(lead)));
-  if (otherLeads.length) sections.push({ source: "Other / Manual", leads: otherLeads });
+  const airtableSources = [
+    { source: "Projects", label: "Prospects" },
+    { source: "Public IP", label: "Public IP" },
+    { source: "Cultural Trends", label: "Cultural Trends" }
+  ];
+  const primarySourceValues = airtableSources.map((source) => source.source);
+  const submissionLeads = leads.filter((lead) => !primarySourceValues.includes(prospectSourceTable(lead)));
+  const sections = [
+    { source: "Submissions", label: "Submissions", leads: submissionLeads },
+    ...airtableSources.map((source) => ({
+      ...source,
+      leads: leads.filter((lead) => prospectSourceTable(lead) === source.source)
+    }))
+  ];
   return sections;
 }
 
