@@ -8125,6 +8125,13 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
   const latestRun = persistedRuns[0];
   const activeRun = workspaceMode === "database" ? latestRun : undefined;
 
+  async function loadPersistedBreakdownRuns(versionId: string) {
+    const response = await fetch(`/api/hammer/breakdown?documentVersionId=${encodeURIComponent(versionId)}`, { cache: "no-store" });
+    const data = await response.json().catch(() => null) as { runs?: HammerBreakdownRun[]; error?: string } | null;
+    if (!response.ok) throw new Error(data?.error || "Breakdown history could not be loaded.");
+    return data?.runs ?? [];
+  }
+
   useEffect(() => {
     setBreakdownStatus("");
   }, [version?.id]);
@@ -8136,11 +8143,9 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
     }
     let cancelled = false;
     setPersistedLoading(true);
-    fetch(`/api/hammer/breakdown?documentVersionId=${encodeURIComponent(version.id)}`, { cache: "no-store" })
-      .then(async (response) => {
-        const data = await response.json().catch(() => null) as { runs?: HammerBreakdownRun[]; error?: string } | null;
-        if (!response.ok) throw new Error(data?.error || "Breakdown history could not be loaded.");
-        if (!cancelled) setPersistedRuns(data?.runs ?? []);
+    loadPersistedBreakdownRuns(version.id)
+      .then((runs) => {
+        if (!cancelled) setPersistedRuns(runs);
       })
       .catch((error) => {
         if (!cancelled) setBreakdownStatus(error instanceof Error ? error.message : "Breakdown history could not be loaded.");
@@ -8161,6 +8166,7 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
       }
       setRunningBreakdown(true);
       setBreakdownStatus("Running server-side breakdown...");
+      const runStartedAt = Date.now();
       try {
         const response = await fetch("/api/hammer/breakdown", {
           method: "POST",
@@ -8174,7 +8180,18 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
           setBreakdownStatus(data.run.error ? data.run.error : `Breakdown saved. Detected ${data.run.elements.length} production item${data.run.elements.length === 1 ? "" : "s"}.`);
         }
       } catch (error) {
-        setBreakdownStatus(error instanceof Error ? error.message : "Breakdown failed.");
+        try {
+          const runs = await loadPersistedBreakdownRuns(version.id);
+          setPersistedRuns(runs);
+          const completedRun = runs.find((run) => run.status !== "FAILED" && run.elements.length && new Date(run.createdAt).getTime() >= runStartedAt - 5000);
+          if (completedRun) {
+            setBreakdownStatus(`Breakdown saved. Detected ${completedRun.elements.length} production item${completedRun.elements.length === 1 ? "" : "s"}.`);
+          } else {
+            setBreakdownStatus(error instanceof Error ? error.message : "Breakdown failed.");
+          }
+        } catch {
+          setBreakdownStatus(error instanceof Error ? error.message : "Breakdown failed.");
+        }
       } finally {
         setRunningBreakdown(false);
       }
@@ -8329,7 +8346,7 @@ function PersistedBreakdownElementPanel({ run, onUpdateStatus, updating }: { run
                   <th>Heading</th>
                   <th>Pages</th>
                   <th>Items</th>
-                  <th>Evidence</th>
+                  <th>Synopsis / Evidence</th>
                 </tr>
               ) : (
                 <tr>
@@ -8441,12 +8458,24 @@ function breakdownSceneRows(elements: HammerBreakdownElement[], summaryScenes: H
   if (summaryScenes.length) {
     const elementNameByStableKey = new Map(elements.map((element) => [element.stableKey, element.displayName]));
     const elementNameByDisplay = new Map(elements.map((element) => [element.displayName, element.displayName]));
+    const itemsByScene = new Map<string, string[]>();
+    for (const element of elements) {
+      for (const scene of element.scenes) {
+        if (!scene.sceneNumber && !scene.sceneHeading) continue;
+        const key = breakdownSceneKey(scene.sceneNumber, scene.sceneHeading);
+        const items = itemsByScene.get(key) ?? [];
+        if (!items.includes(element.displayName)) items.push(element.displayName);
+        itemsByScene.set(key, items);
+      }
+    }
     return summaryScenes.map((scene, index) => {
-      const items = (scene.elementIds ?? [])
+      const summaryItems = (scene.elementIds ?? [])
         .map((id) => elementNameByStableKey.get(id) ?? elementNameByDisplay.get(id) ?? id)
         .filter(Boolean);
+      const linkedItems = itemsByScene.get(breakdownSceneKey(scene.sceneNumber, scene.sceneHeading)) ?? [];
+      const items = [...summaryItems, ...linkedItems];
       return {
-        key: `${scene.sceneNumber ?? index}:${scene.sceneHeading ?? "Scene"}`,
+        key: breakdownSceneKey(scene.sceneNumber ?? String(index), scene.sceneHeading ?? "Scene"),
         sceneNumber: scene.sceneNumber,
         sceneHeading: scene.sceneHeading,
         page: scene.page,
@@ -8462,7 +8491,7 @@ function breakdownSceneRows(elements: HammerBreakdownElement[], summaryScenes: H
   const rows = new Map<string, BreakdownSceneTableRow>();
   for (const element of elements) {
     for (const scene of element.scenes) {
-      const key = `${scene.sceneNumber ?? "unassigned"}:${scene.sceneHeading ?? "Unassigned Scene"}`;
+      const key = breakdownSceneKey(scene.sceneNumber ?? "unassigned", scene.sceneHeading ?? "Unassigned Scene");
       const existing = rows.get(key) ?? {
         key,
         sceneNumber: scene.sceneNumber,
@@ -8482,6 +8511,10 @@ function breakdownSceneRows(elements: HammerBreakdownElement[], summaryScenes: H
   return Array.from(rows.values())
     .map((row) => ({ ...row, pageSummary: pageRangeSummary(row.firstPageNumber, row.lastPageNumber) }))
     .sort(compareBreakdownSceneRows);
+}
+
+function breakdownSceneKey(sceneNumber?: string, sceneHeading?: string) {
+  return `${(sceneNumber ?? "").trim().toLowerCase()}::${(sceneHeading ?? "").trim().toLowerCase()}`;
 }
 
 function compareBreakdownSceneRows(a: BreakdownSceneTableRow & { pageSummary?: string }, b: BreakdownSceneTableRow & { pageSummary?: string }) {

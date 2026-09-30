@@ -1,6 +1,8 @@
 import type { BreakdownElementStatus, BreakdownRunStatus, BreakdownTaxonomyCategory, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { readStoredLlmProviderSettings, resolveLlmApiKey } from "@/lib/llm-settings";
+import { parseScriptText } from "@/lib/script-parser";
+import type { ParsedScriptScene } from "@/lib/types";
 
 export type ProductionBreakdownRunRecord = Prisma.BreakdownRunGetPayload<{
   include: typeof breakdownRunInclude;
@@ -43,6 +45,10 @@ type BreakdownSceneDraft = {
   synopsis?: string;
   elementIds: string[];
   evidence?: string;
+};
+
+type BreakdownSceneReference = BreakdownSceneDraft & {
+  text?: string;
 };
 
 type BreakdownSource = {
@@ -114,14 +120,23 @@ export async function runProductionBreakdown(input: { documentVersionId: string;
   }
 
   try {
+    const sceneOutline = buildSceneOutline(sourceText, {
+      projectId: version.document.projectId,
+      versionName: `v${version.versionNumber}`,
+      fileName: version.fileName
+    });
     const selected = await runClaudeSkillBreakdown({
       sourceText,
       title: version.document.title,
-      fileName: version.fileName
+      fileName: version.fileName,
+      sceneOutline
     });
+    const scenes = sceneOutline.length ? mergeClaudeSceneDetailsIntoOutline(sceneOutline, selected.scenes) : selected.scenes;
+    const elements = assignElementsToScenes(selected.elements, sceneOutline);
+    attachElementsToSceneSummaries(scenes, elements);
 
     await prisma.$transaction(async (tx) => {
-      for (const element of selected.elements) {
+      for (const element of elements) {
         const tags = await Promise.all(element.tagKeys.map((tag) => tx.tag.upsert({
           where: { scope_key_value: { scope: "BREAKDOWN", key: tag.key, value: tag.value } },
           create: { scope: "BREAKDOWN", key: tag.key, value: tag.value, label: tag.label, color: tag.color },
@@ -162,20 +177,20 @@ export async function runProductionBreakdown(input: { documentVersionId: string;
           warning: selected.warning,
           completedAt: new Date(),
           summaryJson: {
-            elementCount: selected.elements.length,
-            categories: countBy(selected.elements.map((element) => element.category)),
-            scenes: selected.scenes,
+            elementCount: elements.length,
+            categories: countBy(elements.map((element) => element.category)),
+            scenes,
             aiModel: selected.model
           },
           statsJson: {
-            characters: selected.elements.filter((element) => element.category === "CHARACTER").length,
-            extras: selected.elements.filter((element) => element.category === "EXTRAS").length,
-            locations: selected.elements.filter((element) => element.category === "LOCATION").length,
-            props: selected.elements.filter((element) => element.category === "PROP").length,
-            vehicles: selected.elements.filter((element) => element.category === "VEHICLE").length,
-            wardrobe: selected.elements.filter((element) => element.category === "WARDROBE").length,
-            sfx: selected.elements.filter((element) => element.category === "SFX").length,
-            animals: selected.elements.filter((element) => element.category === "ANIMAL").length
+            characters: elements.filter((element) => element.category === "CHARACTER").length,
+            extras: elements.filter((element) => element.category === "EXTRAS").length,
+            locations: elements.filter((element) => element.category === "LOCATION").length,
+            props: elements.filter((element) => element.category === "PROP").length,
+            vehicles: elements.filter((element) => element.category === "VEHICLE").length,
+            wardrobe: elements.filter((element) => element.category === "WARDROBE").length,
+            sfx: elements.filter((element) => element.category === "SFX").length,
+            animals: elements.filter((element) => element.category === "ANIMAL").length
           }
         }
       });
@@ -220,7 +235,140 @@ export async function deleteBreakdownRun(input: { runId: string }) {
   await prisma.breakdownRun.delete({ where: { id: input.runId } });
 }
 
-async function runClaudeSkillBreakdown(input: { sourceText: string; title: string; fileName: string }): Promise<BreakdownSource> {
+function buildSceneOutline(sourceText: string, options: { projectId: string; versionName: string; fileName: string }): BreakdownSceneReference[] {
+  try {
+    const parsed = parseScriptText(sourceText, options);
+    let estimatedPage = 1;
+    return parsed.scenes.slice(0, 300).map((scene) => {
+      const page = Math.max(1, Math.round(estimatedPage * 10) / 10);
+      estimatedPage += Math.max(scene.pageEstimate || 0.25, 0.125);
+      return sceneToBreakdownReference(scene, page);
+    });
+  } catch {
+    return [];
+  }
+}
+
+function sceneToBreakdownReference(scene: ParsedScriptScene, page: number): BreakdownSceneReference {
+  return {
+    sceneNumber: String(scene.number),
+    page,
+    intExt: scene.interiorExterior || undefined,
+    location: scene.location || undefined,
+    timeOfDay: scene.timeOfDay || undefined,
+    sceneHeading: scene.slugline || `Scene ${scene.number}`,
+    synopsis: summarizeSceneText(scene.actionText || scene.text),
+    elementIds: [],
+    evidence: scene.slugline,
+    text: scene.text
+  };
+}
+
+function stripSceneReferenceText(scene: BreakdownSceneReference): BreakdownSceneDraft {
+  const { text: _text, ...draft } = scene;
+  return draft;
+}
+
+function mergeClaudeSceneDetailsIntoOutline(sceneOutline: BreakdownSceneReference[], claudeScenes: BreakdownSceneDraft[]) {
+  const claudeByNumber = new Map(claudeScenes.filter((scene) => !isUnassignedScene(scene) && scene.sceneNumber).map((scene) => [scene.sceneNumber, scene]));
+  const claudeByHeading = new Map(claudeScenes.filter((scene) => !isUnassignedScene(scene) && scene.sceneHeading).map((scene) => [normalizeSearchText(scene.sceneHeading), scene]));
+  return sceneOutline.map((outlineScene) => {
+    const match = (outlineScene.sceneNumber ? claudeByNumber.get(outlineScene.sceneNumber) : undefined)
+      ?? (outlineScene.sceneHeading ? claudeByHeading.get(normalizeSearchText(outlineScene.sceneHeading)) : undefined);
+    const base = stripSceneReferenceText(outlineScene);
+    if (!match) return base;
+    return {
+      ...base,
+      printedNumber: match.printedNumber || base.printedNumber,
+      page: match.page ?? base.page,
+      intExt: match.intExt || base.intExt,
+      location: match.location || base.location,
+      timeOfDay: match.timeOfDay || base.timeOfDay,
+      synopsis: match.synopsis || base.synopsis,
+      evidence: match.evidence || base.evidence,
+      elementIds: Array.from(new Set([...(base.elementIds ?? []), ...(match.elementIds ?? [])]))
+    };
+  });
+}
+
+function isUnassignedScene(scene: Pick<BreakdownSceneDraft, "sceneNumber" | "sceneHeading">) {
+  const sceneNumber = (scene.sceneNumber ?? "").trim().toLowerCase();
+  const sceneHeading = (scene.sceneHeading ?? "").trim().toLowerCase();
+  return (!sceneNumber || sceneNumber === "unassigned" || sceneNumber === "unknown")
+    && (!sceneHeading || sceneHeading === "unassigned" || sceneHeading === "unassigned scene" || sceneHeading === "unknown");
+}
+
+function assignElementsToScenes(elements: BreakdownElementDraft[], sceneOutline: BreakdownSceneReference[]) {
+  if (!sceneOutline.length) return elements;
+  return elements.map((element) => {
+    const hasAssignedScene = element.scenes.some((scene) => !isUnassignedScene(scene));
+    if (hasAssignedScene) return element;
+    const matchedScene = findSceneForElement(element, sceneOutline);
+    if (!matchedScene) return element;
+    return {
+      ...element,
+      firstPageNumber: element.firstPageNumber ?? scenePageNumber(matchedScene),
+      lastPageNumber: element.lastPageNumber ?? scenePageNumber(matchedScene),
+      scenes: [{
+        sceneNumber: matchedScene.sceneNumber ?? "",
+        sceneHeading: matchedScene.sceneHeading ?? "",
+        occurrenceCount: 1,
+        firstPageNumber: matchedScene.page ? Math.floor(matchedScene.page) : undefined,
+        lastPageNumber: matchedScene.page ? Math.floor(matchedScene.page) : undefined,
+        evidenceText: element.evidenceText,
+        metadataJson: { parser: "claude-production-breakdown-skill", sceneMatchedBy: "script-evidence" }
+      }]
+    };
+  });
+}
+
+function scenePageNumber(scene: Pick<BreakdownSceneReference, "page">) {
+  return scene.page ? Math.floor(scene.page) : undefined;
+}
+
+function findSceneForElement(element: BreakdownElementDraft, sceneOutline: BreakdownSceneReference[]) {
+  const needles = [
+    element.evidenceText,
+    element.sourceText,
+    element.displayName,
+    element.normalizedName
+  ].map(normalizeSearchText).filter((value) => value.length >= 3);
+
+  for (const needle of needles) {
+    const compactNeedle = needle.slice(0, 180);
+    const matched = sceneOutline.find((scene) => normalizeSearchText(scene.text ?? "").includes(compactNeedle));
+    if (matched) return matched;
+  }
+
+  return undefined;
+}
+
+function attachElementsToSceneSummaries(scenes: BreakdownSceneDraft[], elements: BreakdownElementDraft[]) {
+  const scenesByKey = new Map(scenes.map((scene) => [sceneKey(scene.sceneNumber, scene.sceneHeading), scene]));
+  for (const element of elements) {
+    for (const ref of element.scenes) {
+      const scene = scenesByKey.get(sceneKey(ref.sceneNumber, ref.sceneHeading));
+      if (!scene) continue;
+      if (!scene.elementIds.includes(element.stableKey)) scene.elementIds.push(element.stableKey);
+    }
+  }
+}
+
+function sceneKey(sceneNumber?: string, sceneHeading?: string) {
+  return `${(sceneNumber ?? "").trim().toLowerCase()}::${(sceneHeading ?? "").trim().toLowerCase()}`;
+}
+
+function summarizeSceneText(value: string) {
+  const cleaned = value.replace(/\s+/g, " ").trim();
+  if (!cleaned) return undefined;
+  return cleaned.slice(0, 220);
+}
+
+function normalizeSearchText(value?: string) {
+  return (value ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+async function runClaudeSkillBreakdown(input: { sourceText: string; title: string; fileName: string; sceneOutline: BreakdownSceneReference[] }): Promise<BreakdownSource> {
   const settings = await readStoredLlmProviderSettings().catch(() => null);
   if (!settings?.enabled) throw new Error("Claude production breakdown is disabled in Admin Settings.");
   if (settings.provider !== "anthropic") throw new Error("Production breakdown requires Claude / Anthropic as the active LLM provider.");
@@ -238,7 +386,7 @@ async function runClaudeSkillBreakdown(input: { sourceText: string; title: strin
       system: "You are running the Production Breakdown skill for GreenLight. Follow the uploaded production-breakdown skill taxonomy exactly. Use the submit_breakdown tool exactly once.",
       tools: [claudeBreakdownTool()],
       tool_choice: { type: "tool", name: "submit_breakdown" },
-      messages: [{ role: "user", content: claudeBreakdownPrompt(input.title, input.fileName, text) }]
+      messages: [{ role: "user", content: claudeBreakdownPrompt(input.title, input.fileName, text, input.sceneOutline) }]
     })
   });
   const data = await response.json().catch(() => null) as Record<string, unknown> | null;
@@ -257,7 +405,14 @@ async function runClaudeSkillBreakdown(input: { sourceText: string; title: strin
   };
 }
 
-function claudeBreakdownPrompt(title: string, fileName: string, text: string) {
+function claudeBreakdownPrompt(title: string, fileName: string, text: string, sceneOutline: BreakdownSceneReference[]) {
+  const outline = sceneOutline.slice(0, 300).map((scene) => [
+    scene.sceneNumber ? `${scene.sceneNumber}.` : "-",
+    scene.sceneHeading ?? "Untitled Scene",
+    scene.location ? `location: ${scene.location}` : "",
+    scene.timeOfDay ? `time: ${scene.timeOfDay}` : "",
+    scene.page ? `page: ${scene.page}` : ""
+  ].filter(Boolean).join(" | ")).join("\n");
   return `Analyze this script using the Production Breakdown skill and submit the breakdown with the submit_breakdown tool.
 
 Rules:
@@ -276,9 +431,13 @@ Rules:
 - If a scene number or heading is known, include it. Otherwise leave those fields blank.
 - Also submit a complete scenes list in screenplay order, matching the production-breakdown skill scenes.csv intent.
 - Scene rows should include scene number, printed number if visible, page when known, INT/EXT, location, time of day, a one-line synopsis, and element ids present.
+- Use the provided scene outline as the canonical scene list. Match elements to these scene numbers/headings whenever the evidence appears in that scene.
 
 Title: ${title}
 File: ${fileName}
+
+SCENE OUTLINE:
+${outline || "No structural scene outline was available."}
 
 SCRIPT:
 ${text}`;
