@@ -1,8 +1,6 @@
 import type { BreakdownElementStatus, BreakdownRunStatus, BreakdownTaxonomyCategory, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { readStoredLlmProviderSettings, resolveLlmApiKey } from "@/lib/llm-settings";
-import { parseScriptText } from "@/lib/script-parser";
-import type { ParsedScriptScene } from "@/lib/types";
 
 export type ProductionBreakdownRunRecord = Prisma.BreakdownRunGetPayload<{
   include: typeof breakdownRunInclude;
@@ -34,10 +32,24 @@ type BreakdownElementDraft = {
   }>;
 };
 
+type BreakdownSceneDraft = {
+  sceneNumber?: string;
+  printedNumber?: string;
+  page?: number;
+  intExt?: string;
+  location?: string;
+  timeOfDay?: string;
+  sceneHeading?: string;
+  synopsis?: string;
+  elementIds: string[];
+  evidence?: string;
+};
+
 type BreakdownSource = {
   parserName: string;
   parserVersion: string;
   elements: BreakdownElementDraft[];
+  scenes: BreakdownSceneDraft[];
   warning?: string;
   model?: string;
 };
@@ -84,8 +96,8 @@ export async function runProductionBreakdown(input: { documentVersionId: string;
       documentId: version.documentId,
       documentVersionId: version.id,
       status: "RUNNING",
-      parserName: "greenlight-production-breakdown",
-      parserVersion: "deterministic-v1",
+      parserName: "claude-production-breakdown-skill",
+      parserVersion: "pending",
       createdById: input.userId
     }
   });
@@ -102,21 +114,10 @@ export async function runProductionBreakdown(input: { documentVersionId: string;
   }
 
   try {
-    const parsed = parseScriptText(sourceText, {
-      projectId: version.document.projectId,
-      versionName: `v${version.versionNumber}`,
-      fileName: version.fileName
-    });
-    const deterministic = {
-      parserName: "greenlight-production-breakdown",
-      parserVersion: "deterministic-v1",
-      elements: materializeDeterministicElements(parsed.scenes)
-    };
-    const selected = await maybeRunClaudeBreakdown({
+    const selected = await runClaudeSkillBreakdown({
       sourceText,
       title: version.document.title,
-      fileName: version.fileName,
-      deterministic
+      fileName: version.fileName
     });
 
     await prisma.$transaction(async (tx) => {
@@ -163,14 +164,18 @@ export async function runProductionBreakdown(input: { documentVersionId: string;
           summaryJson: {
             elementCount: selected.elements.length,
             categories: countBy(selected.elements.map((element) => element.category)),
+            scenes: selected.scenes,
             aiModel: selected.model
           },
           statsJson: {
             characters: selected.elements.filter((element) => element.category === "CHARACTER").length,
+            extras: selected.elements.filter((element) => element.category === "EXTRAS").length,
             locations: selected.elements.filter((element) => element.category === "LOCATION").length,
             props: selected.elements.filter((element) => element.category === "PROP").length,
-            action: selected.elements.filter((element) => element.category === "ACTION").length,
-            vfx: selected.elements.filter((element) => element.category === "VFX").length
+            vehicles: selected.elements.filter((element) => element.category === "VEHICLE").length,
+            wardrobe: selected.elements.filter((element) => element.category === "WARDROBE").length,
+            sfx: selected.elements.filter((element) => element.category === "SFX").length,
+            animals: selected.elements.filter((element) => element.category === "ANIMAL").length
           }
         }
       });
@@ -215,55 +220,62 @@ export async function deleteBreakdownRun(input: { runId: string }) {
   await prisma.breakdownRun.delete({ where: { id: input.runId } });
 }
 
-async function maybeRunClaudeBreakdown(input: { sourceText: string; title: string; fileName: string; deterministic: BreakdownSource }): Promise<BreakdownSource> {
+async function runClaudeSkillBreakdown(input: { sourceText: string; title: string; fileName: string }): Promise<BreakdownSource> {
   const settings = await readStoredLlmProviderSettings().catch(() => null);
-  if (!settings?.enabled || settings.provider !== "anthropic" || !settings.allowExternalScriptAnalysis) return input.deterministic;
+  if (!settings?.enabled) throw new Error("Claude production breakdown is disabled in Admin Settings.");
+  if (settings.provider !== "anthropic") throw new Error("Production breakdown requires Claude / Anthropic as the active LLM provider.");
+  if (!settings.allowExternalScriptAnalysis) throw new Error("External script analysis must be enabled before running the Claude production breakdown.");
   const apiKey = await resolveLlmApiKey(settings);
-  if (!apiKey) return { ...input.deterministic, warning: "Claude breakdown skipped because no Anthropic API key is configured." };
+  if (!apiKey) throw new Error("No Anthropic API key is configured for Claude production breakdown.");
 
-  try {
-    const text = input.sourceText.slice(0, settings.maxInputCharacters);
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-      body: JSON.stringify({
-        model: settings.model,
-        max_tokens: 8000,
-        system: "You are GreenLight's film production breakdown assistant. Extract production breakdown items from screenplay text for studio review. Use the provided tool exactly once.",
-        tools: [claudeBreakdownTool()],
-        tool_choice: { type: "tool", name: "submit_breakdown" },
-        messages: [{ role: "user", content: claudeBreakdownPrompt(input.title, input.fileName, text) }]
-      })
-    });
-    const data = await response.json().catch(() => null) as Record<string, unknown> | null;
-    if (!response.ok) throw new Error(anthropicError(data) || `Claude breakdown failed with status ${response.status}.`);
-    const elements = normalizeClaudeElements(extractAnthropicBreakdownPayload(data));
-    if (!elements.length) throw new Error("Claude returned no usable breakdown elements.");
-    return {
-      parserName: "anthropic-claude-production-breakdown",
-      parserVersion: settings.model,
+  const text = input.sourceText.slice(0, settings.maxInputCharacters);
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+    body: JSON.stringify({
       model: settings.model,
-      elements,
-      warning: input.sourceText.length > settings.maxInputCharacters ? `Claude analyzed the first ${settings.maxInputCharacters.toLocaleString()} characters because of the configured Admin limit.` : undefined
-    };
-  } catch (error) {
-    return {
-      ...input.deterministic,
-      warning: `Claude breakdown skipped; deterministic breakdown was saved instead. ${error instanceof Error ? error.message : "Unknown Claude error."}`
-    };
-  }
+      max_tokens: 12000,
+      system: "You are running the Production Breakdown skill for GreenLight. Follow the uploaded production-breakdown skill taxonomy exactly. Use the submit_breakdown tool exactly once.",
+      tools: [claudeBreakdownTool()],
+      tool_choice: { type: "tool", name: "submit_breakdown" },
+      messages: [{ role: "user", content: claudeBreakdownPrompt(input.title, input.fileName, text) }]
+    })
+  });
+  const data = await response.json().catch(() => null) as Record<string, unknown> | null;
+  if (!response.ok) throw new Error(anthropicError(data) || `Claude breakdown failed with status ${response.status}.`);
+  const payload = extractAnthropicBreakdownPayload(data);
+  const elements = normalizeClaudeElements(payload);
+  const scenes = normalizeClaudeScenes(payload);
+  if (!elements.length) throw new Error("Claude returned no usable production-breakdown elements.");
+  return {
+    parserName: "claude-production-breakdown-skill",
+    parserVersion: settings.model,
+    model: settings.model,
+    elements,
+    scenes,
+    warning: input.sourceText.length > settings.maxInputCharacters ? `Claude analyzed the first ${settings.maxInputCharacters.toLocaleString()} characters because of the configured Admin limit.` : undefined
+  };
 }
 
 function claudeBreakdownPrompt(title: string, fileName: string, text: string) {
-  return `Analyze this script and submit the production breakdown with the submit_breakdown tool.
+  return `Analyze this script using the Production Breakdown skill and submit the breakdown with the submit_breakdown tool.
 
 Rules:
-- Use category labels exactly from the allowed list.
-- Treat taxonomy/category values as searchable tags, not IDs.
-- Include characters, locations, props, vehicles, wardrobe, SFX, animals, action/stunts, VFX, and important production notes.
+- Use only the uploaded skill taxonomy categories: char, extras, location, prop, vehicle, wardrobe, sfx, animal.
+- Do not create action, vfx, note, other, set dressing, camera, music, sound, makeup, or department-only categories.
+- Every element belongs to exactly one category.
+- Treat taxonomy/category values as searchable tags, not database IDs.
+- Use stable ids in the skill style: char-kora, prop-holocube, location-dock-seven.
+- Cite verbatim evidence from the script for every element.
 - Prefer useful production items over exhaustive noise.
 - Keep names clean and human-readable.
 - Keep evidence concise; do not paste long paragraphs.
+- Skip generic background nouns unless a department has to source/build/wrangle them.
+- For char vs extras: any speaking role is char; non-speaking background performers are extras.
+- For animal vs char: speaking or anthropomorphized animals are char; production animals are animal.
+- If a scene number or heading is known, include it. Otherwise leave those fields blank.
+- Also submit a complete scenes list in screenplay order, matching the production-breakdown skill scenes.csv intent.
+- Scene rows should include scene number, printed number if visible, page when known, INT/EXT, location, time of day, a one-line synopsis, and element ids present.
 
 Title: ${title}
 File: ${fileName}
@@ -280,14 +292,40 @@ function claudeBreakdownTool() {
       type: "object",
       additionalProperties: false,
       properties: {
-        elements: {
+        scenes: {
           type: "array",
-          maxItems: 500,
+          maxItems: 300,
           items: {
             type: "object",
             additionalProperties: false,
             properties: {
-              category: { type: "string", enum: ["CHARACTER", "EXTRAS", "LOCATION", "PROP", "VEHICLE", "WARDROBE", "SFX", "ANIMAL", "ACTION", "VFX", "NOTE", "OTHER"] },
+              sceneNumber: { type: "string" },
+              printedNumber: { type: "string" },
+              page: { type: "number" },
+              intExt: { type: "string" },
+              location: { type: "string" },
+              timeOfDay: { type: "string" },
+              sceneHeading: { type: "string" },
+              synopsis: { type: "string" },
+              elementIds: {
+                type: "array",
+                maxItems: 100,
+                items: { type: "string" }
+              },
+              evidence: { type: "string" }
+            },
+            required: ["sceneNumber", "sceneHeading", "synopsis"]
+          }
+        },
+        elements: {
+          type: "array",
+          maxItems: 500,
+          items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+              id: { type: "string" },
+              category: { type: "string", enum: ["char", "extras", "location", "prop", "vehicle", "wardrobe", "sfx", "animal"] },
               name: { type: "string" },
               description: { type: "string" },
               evidence: { type: "string" },
@@ -313,7 +351,7 @@ function claudeBreakdownTool() {
           }
         }
       },
-      required: ["elements"]
+      required: ["scenes", "elements"]
     }
   };
 }
@@ -322,16 +360,17 @@ function normalizeClaudeElements(payload: unknown): BreakdownElementDraft[] {
   const parsed = typeof payload === "string" ? parseJsonBlock(payload) : payload;
   const parsedRecord = parsed && typeof parsed === "object" ? parsed as { elements?: unknown[] } : {};
   const elements: unknown[] = Array.isArray(parsedRecord.elements) ? parsedRecord.elements : [];
-  return elements.slice(0, 500).map((item, index) => {
+  const rows = elements.slice(0, 500).map((item, index) => {
     const record = item && typeof item === "object" ? item as Record<string, unknown> : {};
     const category = normalizeCategory(record.category);
     const displayName = stringValue(record.name) || "Untitled Breakdown Item";
     const normalizedName = normalizeName(displayName);
-    const sceneNumber = stringValue(record.sceneNumber) || "Unassigned";
-    const sceneHeading = stringValue(record.sceneHeading) || "Unassigned Scene";
+    const sceneNumber = stringValue(record.sceneNumber);
+    const sceneHeading = stringValue(record.sceneHeading);
     const tags = normalizeTags(record.tags, category);
+    const submittedId = stringValue(record.id);
     return {
-      stableKey: `${category.toLowerCase()}:${slugify(normalizedName || displayName)}:${index}`,
+      stableKey: submittedId ? slugify(submittedId) : `${skillCategoryPrefix(category)}-${slugify(normalizedName || displayName)}-${index}`,
       category,
       displayName,
       normalizedName: normalizedName || displayName.toLowerCase(),
@@ -340,57 +379,67 @@ function normalizeClaudeElements(payload: unknown): BreakdownElementDraft[] {
       sourceText: stringValue(record.evidence),
       confidence: clampConfidence(record.confidence),
       sortOrder: index,
-      metadataJson: { parser: "claude" },
+      metadataJson: { parser: "claude-production-breakdown-skill", skillCategory: skillCategoryPrefix(category) },
       tagKeys: tags,
-      scenes: [{ sceneNumber, sceneHeading, occurrenceCount: 1, evidenceText: stringValue(record.evidence), metadataJson: { parser: "claude" } }]
+      scenes: [{ sceneNumber, sceneHeading, occurrenceCount: 1, evidenceText: stringValue(record.evidence), metadataJson: { parser: "claude-production-breakdown-skill" } }]
     };
   }).filter((element) => element.displayName.trim());
+  return mergeBreakdownElementRows(rows);
 }
 
-function materializeDeterministicElements(scenes: ParsedScriptScene[]) {
+function normalizeClaudeScenes(payload: unknown): BreakdownSceneDraft[] {
+  const parsed = typeof payload === "string" ? parseJsonBlock(payload) : payload;
+  const parsedRecord = parsed && typeof parsed === "object" ? parsed as { scenes?: unknown[] } : {};
+  const scenes = Array.isArray(parsedRecord.scenes) ? parsedRecord.scenes : [];
+  return scenes.slice(0, 300).map((item, index) => {
+    const record = item && typeof item === "object" ? item as Record<string, unknown> : {};
+    const sceneNumber = stringValue(record.sceneNumber) || String(index + 1);
+    const sceneHeading = stringValue(record.sceneHeading) || stringValue(record.slugline) || "Unassigned Scene";
+    const elementIds = Array.isArray(record.elementIds)
+      ? record.elementIds.map(stringValue).filter(Boolean).slice(0, 100)
+      : [];
+    return {
+      sceneNumber,
+      printedNumber: stringValue(record.printedNumber) || undefined,
+      page: numberValue(record.page),
+      intExt: stringValue(record.intExt) || stringValue(record.int_ext) || undefined,
+      location: stringValue(record.location) || undefined,
+      timeOfDay: stringValue(record.timeOfDay) || stringValue(record.time_of_day) || undefined,
+      sceneHeading,
+      synopsis: stringValue(record.synopsis) || undefined,
+      elementIds,
+      evidence: stringValue(record.evidence) || undefined
+    };
+  }).filter((scene) => scene.sceneNumber || scene.sceneHeading);
+}
+
+function mergeBreakdownElementRows(rows: BreakdownElementDraft[]) {
   const byStableKey = new Map<string, BreakdownElementDraft>();
-  let sortOrder = 0;
-  for (const scene of scenes) {
-    for (const name of scene.characters) addElement(byStableKey, { category: "CHARACTER", name, scene, description: "Detected from dialogue cues or character descriptions.", evidence: findEvidence(scene.text, name), confidence: 0.82, sortOrder: sortOrder++ });
-    for (const name of scene.environments) addElement(byStableKey, { category: "LOCATION", name, scene, description: "Detected from scene heading or environment hint.", evidence: scene.slugline, confidence: 0.86, sortOrder: sortOrder++ });
-    for (const name of scene.props) addElement(byStableKey, { category: "PROP", name, scene, description: "Detected from prop keyword matching.", evidence: findEvidence(scene.actionText, name), confidence: 0.7, sortOrder: sortOrder++ });
-    for (const beat of scene.stuntBeats) addElement(byStableKey, { category: "ACTION", name: summarizeBeat(beat), scene, description: "Detected action or stunt moment.", evidence: beat, confidence: 0.64, sortOrder: sortOrder++ });
-    for (const beat of scene.vfxBeats) addElement(byStableKey, { category: "VFX", name: summarizeBeat(beat), scene, description: "Detected VFX or technical moment.", evidence: beat, confidence: 0.62, sortOrder: sortOrder++ });
+  for (const row of rows) {
+    const existing = byStableKey.get(row.stableKey);
+    if (!existing) {
+      byStableKey.set(row.stableKey, row);
+      continue;
+    }
+    existing.description = existing.description || row.description;
+    existing.evidenceText = existing.evidenceText || row.evidenceText;
+    existing.sourceText = existing.sourceText || row.sourceText;
+    existing.firstPageNumber = minDefined(existing.firstPageNumber, row.firstPageNumber);
+    existing.lastPageNumber = maxDefined(existing.lastPageNumber, row.lastPageNumber);
+    existing.confidence = maxDefined(existing.confidence, row.confidence);
+    existing.tagKeys = uniqueTags([...existing.tagKeys, ...row.tagKeys]);
+    for (const scene of row.scenes) {
+      const sceneKey = `${scene.sceneNumber ?? ""}:${scene.sceneHeading ?? ""}`;
+      const existingScene = existing.scenes.find((item) => `${item.sceneNumber ?? ""}:${item.sceneHeading ?? ""}` === sceneKey);
+      if (existingScene) {
+        existingScene.occurrenceCount += scene.occurrenceCount;
+        existingScene.evidenceText = existingScene.evidenceText || scene.evidenceText;
+      } else {
+        existing.scenes.push(scene);
+      }
+    }
   }
-  return Array.from(byStableKey.values());
-}
-
-function addElement(byStableKey: Map<string, BreakdownElementDraft>, input: { category: BreakdownTaxonomyCategory; name: string; scene: ParsedScriptScene; description: string; evidence?: string; confidence: number; sortOrder: number }) {
-  const displayName = input.name.replace(/\s+/g, " ").trim();
-  const normalizedName = normalizeName(displayName);
-  if (!normalizedName) return;
-  const stableKey = `${input.category.toLowerCase()}:${slugify(normalizedName)}`;
-  const pageStart = Math.max(1, Math.round(((input.scene.number - 1) * 0.75 + 1) * 10) / 10);
-  const pageEnd = Math.max(pageStart, Math.round((pageStart + input.scene.pageEstimate) * 10) / 10);
-  const sceneReference = { sceneNumber: String(input.scene.number), sceneHeading: input.scene.slugline, occurrenceCount: 1, firstPageNumber: pageStart, lastPageNumber: pageEnd, evidenceText: input.evidence, metadataJson: { parsedSceneId: input.scene.id, riskLevel: input.scene.riskLevel } };
-  const existing = byStableKey.get(stableKey);
-  if (existing) {
-    existing.lastPageNumber = Math.max(existing.lastPageNumber ?? pageEnd, pageEnd);
-    existing.confidence = Math.max(existing.confidence ?? 0, input.confidence);
-    existing.scenes.push(sceneReference);
-    return;
-  }
-  byStableKey.set(stableKey, {
-    stableKey,
-    category: input.category,
-    displayName,
-    normalizedName,
-    description: input.description,
-    evidenceText: input.evidence,
-    sourceText: input.scene.text,
-    firstPageNumber: pageStart,
-    lastPageNumber: pageEnd,
-    confidence: input.confidence,
-    sortOrder: input.sortOrder,
-    metadataJson: { parser: "deterministic" },
-    tagKeys: normalizeTags(undefined, input.category),
-    scenes: [sceneReference]
-  });
+  return Array.from(byStableKey.values()).map((element, index) => ({ ...element, sortOrder: index }));
 }
 
 function normalizeTags(value: unknown, category: BreakdownTaxonomyCategory) {
@@ -400,7 +449,7 @@ function normalizeTags(value: unknown, category: BreakdownTaxonomyCategory) {
     .map((item) => ({ key: stringValue(item.key).toLowerCase() || "tag", value: stringValue(item.value).toLowerCase() || "unknown", label: stringValue(item.label) || undefined }))
     .filter((tag) => tag.value !== "unknown");
   return uniqueTags([
-    { key: "taxonomy", value: category.toLowerCase(), label: taxonomyLabel(category) },
+    { key: "taxonomy", value: skillCategoryPrefix(category), label: taxonomyLabel(category) },
     { key: "department", value: categoryDepartments[category], label: departmentLabel(categoryDepartments[category]) },
     ...tags
   ]);
@@ -509,9 +558,31 @@ function anthropicError(data: Record<string, unknown> | null) {
 }
 
 function normalizeCategory(value: unknown): BreakdownTaxonomyCategory {
-  const category = stringValue(value).toUpperCase().replace(/[^A-Z]+/g, "_");
-  const allowed = ["CHARACTER", "EXTRAS", "LOCATION", "PROP", "VEHICLE", "WARDROBE", "SFX", "ANIMAL", "ACTION", "VFX", "NOTE", "OTHER"];
-  return allowed.includes(category) ? category as BreakdownTaxonomyCategory : "OTHER";
+  const category = stringValue(value).toLowerCase().replace(/[^a-z0-9]+/g, "_");
+  const allowed: Record<string, BreakdownTaxonomyCategory> = {
+    char: "CHARACTER",
+    character: "CHARACTER",
+    characters: "CHARACTER",
+    extras: "EXTRAS",
+    background: "EXTRAS",
+    background_cast: "EXTRAS",
+    location: "LOCATION",
+    locations: "LOCATION",
+    prop: "PROP",
+    props: "PROP",
+    vehicle: "VEHICLE",
+    vehicles: "VEHICLE",
+    wardrobe: "WARDROBE",
+    costume: "WARDROBE",
+    costumes: "WARDROBE",
+    sfx: "SFX",
+    special_effects: "SFX",
+    animal: "ANIMAL",
+    animals: "ANIMAL"
+  };
+  const normalized = allowed[category];
+  if (normalized) return normalized;
+  throw new Error(`Claude returned unsupported production-breakdown category "${stringValue(value) || "blank"}". Allowed categories: char, extras, location, prop, vehicle, wardrobe, sfx, animal.`);
 }
 
 function stringValue(value: unknown) {
@@ -524,6 +595,23 @@ function clampConfidence(value: unknown) {
   return Math.max(0, Math.min(1, number));
 }
 
+function numberValue(value: unknown) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
+}
+
+function minDefined(left?: number, right?: number) {
+  if (left === undefined) return right;
+  if (right === undefined) return left;
+  return Math.min(left, right);
+}
+
+function maxDefined(left?: number, right?: number) {
+  if (left === undefined) return right;
+  if (right === undefined) return left;
+  return Math.max(left, right);
+}
+
 function normalizeName(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
@@ -532,14 +620,9 @@ function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 96);
 }
 
-function findEvidence(text: string, name: string) {
-  const needle = name.toLowerCase();
-  return text.split(/[.\n]/).map((line) => line.trim()).find((line) => line.toLowerCase().includes(needle))?.slice(0, 500);
-}
-
-function summarizeBeat(value: string) {
-  const trimmed = value.replace(/\s+/g, " ").trim();
-  return trimmed.length <= 80 ? trimmed : `${trimmed.slice(0, 77).trim()}...`;
+function skillCategoryPrefix(category: BreakdownTaxonomyCategory) {
+  if (category === "CHARACTER") return "char";
+  return category.toLowerCase();
 }
 
 function taxonomyLabel(category: BreakdownTaxonomyCategory) {
@@ -563,4 +646,8 @@ export function normalizeClaudeBreakdownElementsForTest(payload: unknown) {
     displayName: element.displayName,
     sceneNumber: element.scenes[0]?.sceneNumber
   }));
+}
+
+export function normalizeClaudeBreakdownScenesForTest(payload: unknown) {
+  return normalizeClaudeScenes(payload);
 }
