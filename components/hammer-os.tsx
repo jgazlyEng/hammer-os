@@ -8347,12 +8347,12 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
 }
 
 function PersistedBreakdownElementPanel({ run, onUpdateStatus, updating }: { run: HammerBreakdownRun; onUpdateStatus: (elementId: string, status: BreakdownElementStatus) => void; updating: boolean }) {
-  const [entityType, setEntityType] = useState("CHARACTER");
+  const [entityType, setEntityType] = useState("SCENES");
   const visibleElements = useMemo(() => run.elements.filter((element) => element.status !== "IGNORED"), [run.elements]);
   const summaryScenes = useMemo(() => breakdownSummaryScenes(run.summary), [run.summary]);
   const categoryTabs = useMemo(() => breakdownCategoryTabs(visibleElements, summaryScenes), [visibleElements, summaryScenes]);
   const categoryTabsKey = categoryTabs.join("|");
-  const activeEntityType = categoryTabs.includes(entityType) ? entityType : categoryTabs[0] ?? "CHARACTER";
+  const activeEntityType = categoryTabs.includes(entityType) ? entityType : categoryTabs[0] ?? "SCENES";
   const sceneRows = useMemo(() => breakdownSceneRows(visibleElements, summaryScenes), [summaryScenes, visibleElements]);
   const filteredElements = activeEntityType === "SCENES" ? [] : visibleElements.filter((element) => element.category === activeEntityType);
   const ignoredCount = run.elements.filter((element) => element.status === "IGNORED").length;
@@ -8484,7 +8484,7 @@ function PersistedBreakdownElementPanel({ run, onUpdateStatus, updating }: { run
 
 function breakdownCategoryTabs(elements: HammerBreakdownElement[], summaryScenes: HammerBreakdownSummaryScene[] = []) {
   const detected = new Set(elements.map((element) => element.category));
-  const preferred = ["CHARACTER", "SCENES", "EXTRAS", "LOCATION", "PROP", "VEHICLE", "WARDROBE", "SFX", "ANIMAL"];
+  const preferred = ["SCENES", "CHARACTER", "EXTRAS", "LOCATION", "PROP", "VEHICLE", "WARDROBE", "SFX", "ANIMAL"];
   return preferred.filter((category) => category === "SCENES" ? Boolean(summaryScenes.length || elements.some((element) => element.scenes.length)) : detected.has(category));
 }
 
