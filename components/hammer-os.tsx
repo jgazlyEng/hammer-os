@@ -8124,17 +8124,57 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
   const [breakdownStatus, setBreakdownStatus] = useState("");
   const latestRun = persistedRuns[0];
   const activeRun = workspaceMode === "database" ? latestRun : undefined;
+  const tableRun = activeRun && activeRun.status !== "RUNNING" ? activeRun : undefined;
 
-  async function loadPersistedBreakdownRuns(versionId: string) {
+  const loadPersistedBreakdownRuns = useCallback(async (versionId: string) => {
     const response = await fetch(`/api/hammer/breakdown?documentVersionId=${encodeURIComponent(versionId)}`, { cache: "no-store" });
     const data = await response.json().catch(() => null) as { runs?: HammerBreakdownRun[]; error?: string } | null;
     if (!response.ok) throw new Error(data?.error || "Breakdown history could not be loaded.");
     return data?.runs ?? [];
-  }
+  }, []);
+
+  const waitForBreakdownCompletion = useCallback(async (versionId: string, runId: string) => {
+    for (let attempt = 0; attempt < 180; attempt += 1) {
+      await delay(2500);
+      const runs = await loadPersistedBreakdownRuns(versionId);
+      setPersistedRuns(runs);
+      const run = runs.find((item) => item.id === runId);
+      if (!run) throw new Error("Breakdown run was removed before it completed.");
+      if (run.status === "FAILED") throw new Error(run.error || "Breakdown failed.");
+      if (run.status !== "RUNNING") return run;
+      setBreakdownStatus(`Claude breakdown is still running${".".repeat((attempt % 3) + 1)}`);
+    }
+    throw new Error("Breakdown is still running. Refresh this page in a few minutes to check the saved result.");
+  }, [loadPersistedBreakdownRuns]);
 
   useEffect(() => {
     setBreakdownStatus("");
   }, [version?.id]);
+
+  useEffect(() => {
+    if (workspaceMode !== "database" || !version?.id || activeRun?.status !== "RUNNING") return;
+    const createdAt = new Date(activeRun.createdAt).getTime();
+    if (Number.isFinite(createdAt) && Date.now() - createdAt > 30 * 60 * 1000) {
+      setBreakdownStatus("This breakdown is still marked as running but appears stale. Remove it and run a new breakdown.");
+      return;
+    }
+    let cancelled = false;
+    setRunningBreakdown(true);
+    setBreakdownStatus("Claude breakdown is still running. Keeping this page updated...");
+    waitForBreakdownCompletion(version.id, activeRun.id)
+      .then((completedRun) => {
+        if (!cancelled) setBreakdownStatus(`Breakdown saved. Detected ${completedRun.elements.length} production item${completedRun.elements.length === 1 ? "" : "s"}.`);
+      })
+      .catch((error) => {
+        if (!cancelled) setBreakdownStatus(error instanceof Error ? error.message : "Breakdown failed.");
+      })
+      .finally(() => {
+        if (!cancelled) setRunningBreakdown(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeRun?.createdAt, activeRun?.id, activeRun?.status, version?.id, waitForBreakdownCompletion, workspaceMode]);
 
   useEffect(() => {
     if (workspaceMode !== "database" || !version?.id) {
@@ -8156,7 +8196,7 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
     return () => {
       cancelled = true;
     };
-  }, [version?.id, workspaceMode]);
+  }, [loadPersistedBreakdownRuns, version?.id, workspaceMode]);
 
   async function runBreakdown() {
     if (workspaceMode === "database") {
@@ -8177,13 +8217,19 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
         if (!response.ok) throw new Error(data?.error || "Breakdown failed.");
         if (data?.run) {
           setPersistedRuns((current) => [data.run!, ...current.filter((run) => run.id !== data.run!.id)]);
-          setBreakdownStatus(data.run.error ? data.run.error : `Breakdown saved. Detected ${data.run.elements.length} production item${data.run.elements.length === 1 ? "" : "s"}.`);
+          if (data.run.status === "RUNNING") {
+            setBreakdownStatus("Claude breakdown started. Keeping this page updated...");
+            const completedRun = await waitForBreakdownCompletion(version.id, data.run.id);
+            setBreakdownStatus(`Breakdown saved. Detected ${completedRun.elements.length} production item${completedRun.elements.length === 1 ? "" : "s"}.`);
+          } else {
+            setBreakdownStatus(data.run.error ? data.run.error : `Breakdown saved. Detected ${data.run.elements.length} production item${data.run.elements.length === 1 ? "" : "s"}.`);
+          }
         }
       } catch (error) {
         try {
           const runs = await loadPersistedBreakdownRuns(version.id);
           setPersistedRuns(runs);
-          const completedRun = runs.find((run) => run.status !== "FAILED" && run.elements.length && new Date(run.createdAt).getTime() >= runStartedAt - 5000);
+          const completedRun = runs.find((run) => run.status !== "FAILED" && run.status !== "RUNNING" && run.elements.length && new Date(run.createdAt).getTime() >= runStartedAt - 5000);
           if (completedRun) {
             setBreakdownStatus(`Breakdown saved. Detected ${completedRun.elements.length} production item${completedRun.elements.length === 1 ? "" : "s"}.`);
           } else {
@@ -8202,7 +8248,7 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
 
   async function approveBreakdown() {
     if (workspaceMode === "database") {
-      if (!activeRun) {
+      if (!tableRun) {
         setBreakdownStatus("Run breakdown before approving.");
         return;
       }
@@ -8211,7 +8257,7 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
         const response = await fetch("/api/hammer/breakdown", {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "updateRunStatus", runId: activeRun.id, status: "APPROVED" })
+          body: JSON.stringify({ action: "updateRunStatus", runId: tableRun.id, status: "APPROVED" })
         });
         const data = await response.json().catch(() => null) as { run?: HammerBreakdownRun; error?: string } | null;
         if (!response.ok) throw new Error(data?.error || "Breakdown could not be approved.");
@@ -8283,7 +8329,7 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
           </div>
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={runBreakdown} disabled={runningBreakdown || updatingBreakdown} className="inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-wait disabled:opacity-60">{runningBreakdown ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Gauge className="h-3.5 w-3.5" />}{runningBreakdown ? "Running..." : "Run Breakdown"}</button>
-            <button type="button" onClick={approveBreakdown} disabled={updatingBreakdown || !activeRun} className="inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-not-allowed disabled:opacity-50"><CheckCircle2 className="h-3.5 w-3.5" />Approve</button>
+            <button type="button" onClick={approveBreakdown} disabled={updatingBreakdown || !tableRun} className="inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-not-allowed disabled:opacity-50"><CheckCircle2 className="h-3.5 w-3.5" />Approve</button>
             {activeRun ? <button type="button" onClick={deleteActiveBreakdown} disabled={updatingBreakdown} className="inline-flex items-center gap-1.5 rounded border border-rose-400/25 bg-rose-500/5 px-2.5 py-1.5 text-xs font-semibold text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200 disabled:cursor-not-allowed disabled:opacity-50"><Trash2 className="h-3.5 w-3.5" />Remove</button> : null}
           </div>
         </div>
@@ -8295,7 +8341,7 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
         {activeRun?.error ? <p className="mt-2 rounded border border-ember/30 bg-ember/10 px-2.5 py-1.5 text-xs text-ember">{activeRun.error}</p> : null}
         {breakdownStatus ? <p className="mt-2 rounded border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-xs text-studio-300">{breakdownStatus}</p> : null}
       </Panel>
-      {activeRun ? <PersistedBreakdownElementPanel run={activeRun} onUpdateStatus={updatePersistedElementStatus} updating={updatingBreakdown} /> : <Panel><SectionHeader eyebrow="Breakdown Table" title="Production Items" /><EmptyState label="Run Claude production breakdown to detect characters, extras, locations, props, vehicles, wardrobe, SFX, and animals." /></Panel>}
+      {tableRun ? <PersistedBreakdownElementPanel run={tableRun} onUpdateStatus={updatePersistedElementStatus} updating={updatingBreakdown} /> : <Panel><SectionHeader eyebrow="Breakdown Table" title="Production Items" /><EmptyState label={activeRun?.status === "RUNNING" ? "Claude breakdown is running. This table will appear when processing completes." : "Run Claude production breakdown to detect characters, extras, locations, props, vehicles, wardrobe, SFX, and animals."} /></Panel>}
     </div>
   );
 }

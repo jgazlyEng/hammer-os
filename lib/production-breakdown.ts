@@ -88,6 +88,22 @@ export const breakdownRunInclude = {
 } satisfies Prisma.BreakdownRunInclude;
 
 export async function runProductionBreakdown(input: { documentVersionId: string; userId?: string }) {
+  const run = await createProductionBreakdownRun(input);
+  return processProductionBreakdownRun(run.id);
+}
+
+export async function startProductionBreakdown(input: { documentVersionId: string; userId?: string }) {
+  const run = await createProductionBreakdownRun(input);
+  setTimeout(() => {
+    void processProductionBreakdownRun(run.id).catch(async (error) => {
+      await markBreakdownRunFailed(run.id, error);
+      console.error("[hammer:breakdown:background]", error);
+    });
+  }, 0);
+  return getBreakdownRun(run.id);
+}
+
+async function createProductionBreakdownRun(input: { documentVersionId: string; userId?: string }) {
   const version = await prisma.documentVersion.findUnique({
     where: { id: input.documentVersionId },
     include: { document: true }
@@ -107,7 +123,17 @@ export async function runProductionBreakdown(input: { documentVersionId: string;
       createdById: input.userId
     }
   });
+  return run;
+}
 
+async function processProductionBreakdownRun(runId: string) {
+  const run = await prisma.breakdownRun.findUnique({
+    where: { id: runId },
+    include: { documentVersion: { include: { document: true } } }
+  });
+  if (!run) throw new Error("Breakdown run not found.");
+  const version = run.documentVersion;
+  const sourceText = version.extractedText?.trim();
   if (!sourceText) {
     return prisma.breakdownRun.update({
       where: { id: run.id },
@@ -121,7 +147,7 @@ export async function runProductionBreakdown(input: { documentVersionId: string;
 
   try {
     const sceneOutline = buildSceneOutline(sourceText, {
-      projectId: version.document.projectId,
+      projectId: run.projectId,
       versionName: `v${version.versionNumber}`,
       fileName: version.fileName
     });
@@ -146,7 +172,7 @@ export async function runProductionBreakdown(input: { documentVersionId: string;
         await tx.breakdownElement.create({
           data: {
             runId: run.id,
-            projectId: version.document.projectId!,
+            projectId: run.projectId,
             documentVersionId: version.id,
             stableKey: element.stableKey,
             category: element.category,
@@ -198,12 +224,20 @@ export async function runProductionBreakdown(input: { documentVersionId: string;
 
     return getBreakdownRun(run.id);
   } catch (error) {
-    return prisma.breakdownRun.update({
-      where: { id: run.id },
-      data: { status: "FAILED", error: error instanceof Error ? error.message : "Breakdown failed unexpectedly." },
-      include: breakdownRunInclude
-    });
+    return markBreakdownRunFailed(run.id, error);
   }
+}
+
+async function markBreakdownRunFailed(runId: string, error: unknown) {
+  return prisma.breakdownRun.update({
+    where: { id: runId },
+    data: {
+      status: "FAILED",
+      error: error instanceof Error ? error.message : "Breakdown failed unexpectedly.",
+      completedAt: new Date()
+    },
+    include: breakdownRunInclude
+  });
 }
 
 export async function listBreakdownRuns(documentVersionId: string) {

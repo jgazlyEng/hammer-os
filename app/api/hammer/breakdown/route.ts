@@ -6,7 +6,7 @@ import {
   deleteBreakdownRun,
   getBreakdownRun,
   listBreakdownRuns,
-  runProductionBreakdown,
+  startProductionBreakdown,
   updateBreakdownElementStatus,
   updateBreakdownRunStatus,
   type ProductionBreakdownRunRecord
@@ -47,7 +47,7 @@ export async function POST(request: Request) {
   if (!canRunBreakdown(auth.user, access.projectId)) return NextResponse.json(forbidden(), { status: 403 });
 
   try {
-    const run = await runProductionBreakdown({ documentVersionId, userId: auth.user.id });
+    const run = await startProductionBreakdown({ documentVersionId, userId: auth.user.id });
     return NextResponse.json({ mode: "database", run: run ? toBreakdownRun(run) : null }, { status: 201 });
   } catch (error) {
     console.error("[hammer:breakdown:run]", error);
