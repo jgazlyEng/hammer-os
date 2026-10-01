@@ -1,7 +1,9 @@
+import { readFile } from "node:fs/promises";
 import type { BreakdownElementStatus, BreakdownRunStatus, BreakdownTaxonomyCategory, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { readStoredLlmProviderSettings, resolveLlmApiKey } from "@/lib/llm-settings";
 import { parseScriptText } from "@/lib/script-parser";
+import { extractPdfTextWithFallback } from "@/lib/server-pdf-text";
 import type { ParsedScriptScene } from "@/lib/types";
 
 export type ProductionBreakdownRunRecord = Prisma.BreakdownRunGetPayload<{
@@ -135,7 +137,8 @@ async function processProductionBreakdownRun(runId: string) {
   });
   if (!run) throw new Error("Breakdown run not found.");
   const version = run.documentVersion;
-  const sourceText = version.extractedText?.trim();
+  const source = await bestBreakdownSourceText(version).catch(() => ({ text: version.extractedText?.trim() ?? "", warning: undefined }));
+  const sourceText = source.text.trim();
   if (!sourceText) {
     return prisma.breakdownRun.update({
       where: { id: run.id },
@@ -203,6 +206,7 @@ async function processProductionBreakdownRun(runId: string) {
           parserName: selected.parserName,
           parserVersion: selected.parserVersion,
           warning: selected.warning,
+          ...(source.warning && !selected.warning ? { warning: source.warning } : {}),
           completedAt: new Date(),
           summaryJson: {
             elementCount: elements.length,
@@ -240,6 +244,94 @@ async function markBreakdownRunFailed(runId: string, error: unknown) {
     },
     include: breakdownRunInclude
   });
+}
+
+async function bestBreakdownSourceText(version: {
+  id: string;
+  fileName: string;
+  fileType: string;
+  storagePath: string;
+  dataUrl?: string | null;
+  extractedText?: string | null;
+}) {
+  const storedText = version.extractedText?.trim() ?? "";
+  const storedSceneCount = countScenesForText(storedText, version.fileName);
+  const recovered = await recoverTextFromStoredOriginal(version);
+  const recoveredText = recovered.text.trim();
+  const recoveredSceneCount = countScenesForText(recoveredText, version.fileName);
+
+  if (recoveredText && recoveredSceneCount > storedSceneCount) {
+    await prisma.documentVersion.update({
+      where: { id: version.id },
+      data: { extractedText: recoveredText }
+    }).catch(() => undefined);
+    return {
+      text: recoveredText,
+      warning: recovered.warning
+        ? `${recovered.warning} GreenLight refreshed the saved readable text before breakdown because the original file produced ${recoveredSceneCount} scenes versus ${storedSceneCount} from the previous extraction.`
+        : `GreenLight refreshed the saved readable text before breakdown because the original file produced ${recoveredSceneCount} scenes versus ${storedSceneCount} from the previous extraction.`
+    };
+  }
+
+  return { text: storedText, warning: undefined };
+}
+
+function countScenesForText(text: string, fileName: string) {
+  if (!text.trim()) return 0;
+  try {
+    return parseScriptText(text, { projectId: "breakdown", versionName: "source", fileName }).scenes.length;
+  } catch {
+    return 0;
+  }
+}
+
+async function recoverTextFromStoredOriginal(version: {
+  fileName: string;
+  fileType: string;
+  storagePath: string;
+  dataUrl?: string | null;
+}) {
+  const bytes = await readStoredVersionBytes(version);
+  const lowerName = version.fileName.toLowerCase();
+  if (lowerName.endsWith(".pdf") || version.fileType === "application/pdf") {
+    const extraction = await extractPdfTextWithFallback(bytes);
+    return { text: extraction.text, warning: extraction.warning };
+  }
+  if (lowerName.endsWith(".txt") || lowerName.endsWith(".md") || lowerName.endsWith(".fdx") || version.fileType.startsWith("text/")) {
+    return { text: bytes.toString("utf8"), warning: undefined };
+  }
+  return { text: "", warning: "Original file type cannot be re-extracted for breakdown yet." };
+}
+
+async function readStoredVersionBytes(version: { storagePath: string; dataUrl?: string | null }) {
+  if (version.dataUrl?.startsWith("data:")) return dataUrlBytes(version.dataUrl);
+  if (version.storagePath.startsWith("gs://")) {
+    const match = /^gs:\/\/([^/]+)\/(.+)$/.exec(version.storagePath);
+    if (!match) throw new Error("Invalid GCS storage path.");
+    const { Storage } = await import("@google-cloud/storage");
+    const [bytes] = await new Storage().bucket(match[1]).file(match[2]).download();
+    return bytes;
+  }
+  if (process.env.UPLOAD_STORAGE_DRIVER === "gcs") {
+    const bucketName = process.env.GCS_BUCKET_NAME;
+    if (!bucketName) throw new Error("GCS_BUCKET_NAME is required for stored file recovery.");
+    const { Storage } = await import("@google-cloud/storage");
+    const storage = new Storage({
+      projectId: process.env.GCS_PROJECT_ID,
+      credentials: process.env.GCS_CLIENT_EMAIL && process.env.GCS_PRIVATE_KEY ? {
+        client_email: process.env.GCS_CLIENT_EMAIL,
+        private_key: process.env.GCS_PRIVATE_KEY.replace(/\\n/g, "\n")
+      } : undefined
+    });
+    const [bytes] = await storage.bucket(bucketName).file(version.storagePath).download();
+    return bytes;
+  }
+  return readFile(version.storagePath);
+}
+
+function dataUrlBytes(dataUrl: string) {
+  const [metadata, payload] = dataUrl.split(",", 2);
+  return Buffer.from(payload ?? "", metadata.includes(";base64") ? "base64" : "utf8");
 }
 
 export async function listBreakdownRuns(documentVersionId: string) {
