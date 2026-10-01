@@ -13799,6 +13799,11 @@ function DownloadFileLink({
   async function downloadFile(watermark: boolean) {
     setMessage("");
     try {
+      if (resourceType && resourceId && (!href || !dataUrl)) {
+        window.location.href = `/api/download?type=${encodeURIComponent(resourceType)}&id=${encodeURIComponent(resourceId)}&watermark=${watermark ? "1" : "0"}&ip=${includeIp ? "1" : "0"}`;
+        setOpen(false);
+        return;
+      }
       if (!watermark && href) {
         triggerBrowserDownload(href, dataUrl ? fileName : textFileName(fileName));
         setOpen(false);

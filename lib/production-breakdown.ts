@@ -38,11 +38,13 @@ type BreakdownSceneDraft = {
   sceneNumber?: string;
   printedNumber?: string;
   page?: number;
+  pageEighths?: number;
   intExt?: string;
   location?: string;
   timeOfDay?: string;
   sceneHeading?: string;
   synopsis?: string;
+  cast?: string[];
   elementIds: string[];
   evidence?: string;
 };
@@ -416,8 +418,8 @@ async function runClaudeSkillBreakdown(input: { sourceText: string; title: strin
     headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
     body: JSON.stringify({
       model: settings.model,
-      max_tokens: 12000,
-      system: "You are running the Production Breakdown skill for GreenLight. Follow the uploaded production-breakdown skill taxonomy exactly. Use the submit_breakdown tool exactly once.",
+      max_tokens: 20000,
+      system: "You are running the Production Breakdown skill for GreenLight. Follow the uploaded production-breakdown skill taxonomy and CSV column intent exactly. Use the submit_breakdown tool exactly once.",
       tools: [claudeBreakdownTool()],
       tool_choice: { type: "tool", name: "submit_breakdown" },
       messages: [{ role: "user", content: claudeBreakdownPrompt(input.title, input.fileName, text, input.sceneOutline) }]
@@ -466,6 +468,15 @@ Rules:
 - Also submit a complete scenes list in screenplay order, matching the production-breakdown skill scenes.csv intent.
 - Scene rows should include scene number, printed number if visible, page when known, INT/EXT, location, time of day, a one-line synopsis, and element ids present.
 - Use the provided scene outline as the canonical scene list. Match elements to these scene numbers/headings whenever the evidence appears in that scene.
+- Match the production-breakdown skill CSV fields as closely as possible:
+  - scenes.csv: scene_number, printed_number, page, int_ext, location, time_of_day, page_eighths, synopsis, cast, element_ids.
+  - characters.csv: speaking, role, first_scene, last_scene, scene_count, scene_numbers, evidence.
+  - locations.csv: int_ext, times_of_day, slugs, scene_count, scene_numbers, page_eighths, sub_locations.
+  - props.csv: category, hero, department, continuity_risk, scene_count, scene_numbers, evidence. Use the same fields for vehicle, wardrobe, and sfx rows.
+  - animals.csv: species, count, named, action, recommendation, wrangler_required, aha_notes, scene_count, scene_numbers, evidence.
+- Populate category-specific fields when the script supports them. Use blank values instead of inventing.
+- Judge across the whole script: if a role speaks anywhere, classify it as char everywhere; non-speaking background performers are extras.
+- Drop rather than guess. If there is no verbatim evidence, leave the item out.
 
 Title: ${title}
 File: ${fileName}
@@ -495,11 +506,17 @@ function claudeBreakdownTool() {
               sceneNumber: { type: "string" },
               printedNumber: { type: "string" },
               page: { type: "number" },
+              pageEighths: { type: "number" },
               intExt: { type: "string" },
               location: { type: "string" },
               timeOfDay: { type: "string" },
               sceneHeading: { type: "string" },
               synopsis: { type: "string" },
+              cast: {
+                type: "array",
+                maxItems: 80,
+                items: { type: "string" }
+              },
               elementIds: {
                 type: "array",
                 maxItems: 100,
@@ -524,6 +541,43 @@ function claudeBreakdownTool() {
               evidence: { type: "string" },
               sceneNumber: { type: "string" },
               sceneHeading: { type: "string" },
+              speaking: { type: "string" },
+              role: { type: "string" },
+              firstScene: { type: "string" },
+              lastScene: { type: "string" },
+              sceneCount: { type: "number" },
+              sceneNumbers: {
+                type: "array",
+                maxItems: 300,
+                items: { type: "string" }
+              },
+              intExt: { type: "string" },
+              timesOfDay: {
+                type: "array",
+                maxItems: 20,
+                items: { type: "string" }
+              },
+              slugs: {
+                type: "array",
+                maxItems: 120,
+                items: { type: "string" }
+              },
+              pageEighths: { type: "number" },
+              subLocations: {
+                type: "array",
+                maxItems: 80,
+                items: { type: "string" }
+              },
+              hero: { type: "string" },
+              department: { type: "string" },
+              continuityRisk: { type: "string" },
+              species: { type: "string" },
+              count: { type: "string" },
+              named: { type: "string" },
+              action: { type: "string" },
+              recommendation: { type: "string" },
+              wranglerRequired: { type: "string" },
+              ahaNotes: { type: "string" },
               confidence: { type: "number", minimum: 0, maximum: 1 },
               tags: {
                 type: "array",
@@ -562,6 +616,7 @@ function normalizeClaudeElements(payload: unknown): BreakdownElementDraft[] {
     const sceneHeading = stringValue(record.sceneHeading);
     const tags = normalizeTags(record.tags, category);
     const submittedId = stringValue(record.id);
+    const skillFields = normalizeSkillCsvFields(record);
     return {
       stableKey: submittedId ? slugify(submittedId) : `${skillCategoryPrefix(category)}-${slugify(normalizedName || displayName)}-${index}`,
       category,
@@ -572,8 +627,8 @@ function normalizeClaudeElements(payload: unknown): BreakdownElementDraft[] {
       sourceText: stringValue(record.evidence),
       confidence: clampConfidence(record.confidence),
       sortOrder: index,
-      metadataJson: { parser: "claude-production-breakdown-skill", skillCategory: skillCategoryPrefix(category) },
-      tagKeys: tags,
+      metadataJson: { parser: "claude-production-breakdown-skill", skillCategory: skillCategoryPrefix(category), skillCsvFields: skillFields },
+      tagKeys: uniqueTags([...tags, ...skillFieldTags(skillFields)]),
       scenes: [{ sceneNumber, sceneHeading, occurrenceCount: 1, evidenceText: stringValue(record.evidence), metadataJson: { parser: "claude-production-breakdown-skill" } }]
     };
   }).filter((element) => element.displayName.trim());
@@ -595,15 +650,64 @@ function normalizeClaudeScenes(payload: unknown): BreakdownSceneDraft[] {
       sceneNumber,
       printedNumber: stringValue(record.printedNumber) || undefined,
       page: numberValue(record.page),
+      pageEighths: numberValue(record.pageEighths) ?? numberValue(record.page_eighths),
       intExt: stringValue(record.intExt) || stringValue(record.int_ext) || undefined,
       location: stringValue(record.location) || undefined,
       timeOfDay: stringValue(record.timeOfDay) || stringValue(record.time_of_day) || undefined,
       sceneHeading,
       synopsis: stringValue(record.synopsis) || undefined,
+      cast: arrayStringValue(record.cast).slice(0, 80),
       elementIds,
       evidence: stringValue(record.evidence) || undefined
     };
   }).filter((scene) => scene.sceneNumber || scene.sceneHeading);
+}
+
+function normalizeSkillCsvFields(record: Record<string, unknown>): Prisma.InputJsonObject {
+  const fields: Record<string, Prisma.InputJsonValue> = {};
+  const stringFields = [
+    "speaking",
+    "role",
+    "firstScene",
+    "lastScene",
+    "intExt",
+    "hero",
+    "department",
+    "continuityRisk",
+    "species",
+    "count",
+    "named",
+    "action",
+    "recommendation",
+    "wranglerRequired",
+    "ahaNotes"
+  ];
+  for (const key of stringFields) {
+    const value = stringValue(record[key]);
+    if (value) fields[key] = value;
+  }
+  const sceneNumbers = arrayStringValue(record.sceneNumbers);
+  if (sceneNumbers.length) fields.sceneNumbers = sceneNumbers;
+  const timesOfDay = arrayStringValue(record.timesOfDay);
+  if (timesOfDay.length) fields.timesOfDay = timesOfDay;
+  const slugs = arrayStringValue(record.slugs);
+  if (slugs.length) fields.slugs = slugs;
+  const subLocations = arrayStringValue(record.subLocations);
+  if (subLocations.length) fields.subLocations = subLocations;
+  const sceneCount = numberValue(record.sceneCount);
+  if (sceneCount !== undefined) fields.sceneCount = sceneCount;
+  const pageEighths = numberValue(record.pageEighths);
+  if (pageEighths !== undefined) fields.pageEighths = pageEighths;
+  return fields as Prisma.InputJsonObject;
+}
+
+function skillFieldTags(fields: Prisma.InputJsonObject) {
+  const tags: Array<{ key: string; value: string; label?: string; color?: string }> = [];
+  for (const key of ["speaking", "role", "hero", "department", "continuityRisk", "species", "recommendation", "wranglerRequired"]) {
+    const value = fields[key];
+    if (typeof value === "string" && value.trim()) tags.push({ key: key.toLowerCase(), value: slugify(value), label: value });
+  }
+  return tags;
 }
 
 function mergeBreakdownElementRows(rows: BreakdownElementDraft[]) {
@@ -780,6 +884,11 @@ function normalizeCategory(value: unknown): BreakdownTaxonomyCategory {
 
 function stringValue(value: unknown) {
   return typeof value === "string" ? value.trim().slice(0, 1200) : "";
+}
+
+function arrayStringValue(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.map(stringValue).filter(Boolean);
 }
 
 function clampConfidence(value: unknown) {
