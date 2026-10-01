@@ -8142,7 +8142,7 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
       if (!run) throw new Error("Breakdown run was removed before it completed.");
       if (run.status === "FAILED") throw new Error(run.error || "Breakdown failed.");
       if (run.status !== "RUNNING") return run;
-      setBreakdownStatus(`Claude breakdown is still running${".".repeat((attempt % 3) + 1)}`);
+      setBreakdownStatus(`Claude breakdown is processing scene batches${".".repeat((attempt % 3) + 1)}`);
     }
     throw new Error("Breakdown is still running. Refresh this page in a few minutes to check the saved result.");
   }, [loadPersistedBreakdownRuns]);
@@ -8160,7 +8160,7 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
     }
     let cancelled = false;
     setRunningBreakdown(true);
-    setBreakdownStatus("Claude breakdown is still running. Keeping this page updated...");
+    setBreakdownStatus("Claude breakdown is processing scene batches. Keeping this page updated...");
     waitForBreakdownCompletion(version.id, activeRun.id)
       .then((completedRun) => {
         if (!cancelled) setBreakdownStatus(`Breakdown saved. Detected ${completedRun.elements.length} production item${completedRun.elements.length === 1 ? "" : "s"}.`);
@@ -8205,7 +8205,7 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
         return;
       }
       setRunningBreakdown(true);
-      setBreakdownStatus("Running server-side breakdown...");
+      setBreakdownStatus("Starting Claude production breakdown...");
       const runStartedAt = Date.now();
       try {
         const response = await fetch("/api/hammer/breakdown", {
@@ -8218,7 +8218,7 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
         if (data?.run) {
           setPersistedRuns((current) => [data.run!, ...current.filter((run) => run.id !== data.run!.id)]);
           if (data.run.status === "RUNNING") {
-            setBreakdownStatus("Claude breakdown started. Keeping this page updated...");
+            setBreakdownStatus("Claude breakdown started. Feature-length scripts may process in scene batches.");
             const completedRun = await waitForBreakdownCompletion(version.id, data.run.id);
             setBreakdownStatus(`Breakdown saved. Detected ${completedRun.elements.length} production item${completedRun.elements.length === 1 ? "" : "s"}.`);
           } else {

@@ -504,22 +504,20 @@ async function runClaudeSkillBreakdown(input: { sourceText: string; title: strin
   const apiKey = await resolveLlmApiKey(settings);
   if (!apiKey) throw new Error("No Anthropic API key is configured for Claude production breakdown.");
 
+  if (input.sceneOutline.length > 40) {
+    return runClaudeSkillBreakdownInBatches(input, settings, apiKey);
+  }
+
   const text = input.sourceText.slice(0, settings.maxInputCharacters);
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-    body: JSON.stringify({
-      model: settings.model,
-      max_tokens: 20000,
-      system: "You are running the Production Breakdown skill for GreenLight. Follow the uploaded production-breakdown skill taxonomy and CSV column intent exactly. Use the submit_breakdown tool exactly once.",
-      tools: [claudeBreakdownTool()],
-      tool_choice: { type: "tool", name: "submit_breakdown" },
-      messages: [{ role: "user", content: claudeBreakdownPrompt(input.title, input.fileName, text, input.sceneOutline) }]
-    })
+  const payload = await requestClaudeBreakdown({
+    apiKey,
+    model: settings.model,
+    title: input.title,
+    fileName: input.fileName,
+    text,
+    sceneOutline: input.sceneOutline,
+    maxTokens: 20000
   });
-  const data = await response.json().catch(() => null) as Record<string, unknown> | null;
-  if (!response.ok) throw new Error(anthropicError(data) || `Claude breakdown failed with status ${response.status}.`);
-  const payload = extractAnthropicBreakdownPayload(data);
   const elements = normalizeClaudeElements(payload);
   const scenes = normalizeClaudeScenes(payload);
   if (!elements.length) throw new Error("Claude returned no usable production-breakdown elements.");
@@ -531,6 +529,60 @@ async function runClaudeSkillBreakdown(input: { sourceText: string; title: strin
     scenes,
     warning: input.sourceText.length > settings.maxInputCharacters ? `Claude analyzed the first ${settings.maxInputCharacters.toLocaleString()} characters because of the configured Admin limit.` : undefined
   };
+}
+
+async function runClaudeSkillBreakdownInBatches(input: { sourceText: string; title: string; fileName: string; sceneOutline: BreakdownSceneReference[] }, settings: { model: string; maxInputCharacters: number }, apiKey: string): Promise<BreakdownSource> {
+  const chunks = chunkScenes(input.sceneOutline, 18);
+  const allElements: BreakdownElementDraft[] = [];
+  const allScenes: BreakdownSceneDraft[] = [];
+  const warnings: string[] = [`Claude processed this feature-length script in ${chunks.length} scene batches to avoid oversized breakdown responses.`];
+
+  for (const [index, scenes] of chunks.entries()) {
+    const text = batchSceneText(scenes).slice(0, settings.maxInputCharacters);
+    const payload = await requestClaudeBreakdown({
+      apiKey,
+      model: settings.model,
+      title: input.title,
+      fileName: `${input.fileName} / batch ${index + 1} of ${chunks.length}`,
+      text,
+      sceneOutline: scenes,
+      maxTokens: 8000
+    });
+    allElements.push(...normalizeClaudeElements(payload));
+    allScenes.push(...normalizeClaudeScenes(payload));
+  }
+
+  const elements = mergeBreakdownElementRows(allElements);
+  if (!elements.length) {
+    throw new Error("Claude returned no usable production-breakdown elements across all scene batches.");
+  }
+
+  return {
+    parserName: "claude-production-breakdown-skill",
+    parserVersion: settings.model,
+    model: settings.model,
+    elements,
+    scenes: mergeBreakdownScenes(allScenes),
+    warning: warnings.join(" ")
+  };
+}
+
+async function requestClaudeBreakdown(input: { apiKey: string; model: string; title: string; fileName: string; text: string; sceneOutline: BreakdownSceneReference[]; maxTokens: number }) {
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-api-key": input.apiKey, "anthropic-version": "2023-06-01" },
+    body: JSON.stringify({
+      model: input.model,
+      max_tokens: input.maxTokens,
+      system: "You are running the Production Breakdown skill for GreenLight. Follow the uploaded production-breakdown skill taxonomy and CSV column intent exactly. Use the submit_breakdown tool exactly once.",
+      tools: [claudeBreakdownTool()],
+      tool_choice: { type: "tool", name: "submit_breakdown" },
+      messages: [{ role: "user", content: claudeBreakdownPrompt(input.title, input.fileName, input.text, input.sceneOutline) }]
+    })
+  });
+  const data = await response.json().catch(() => null) as Record<string, unknown> | null;
+  if (!response.ok) throw new Error(anthropicError(data) || `Claude breakdown failed with status ${response.status}.`);
+  return extractAnthropicBreakdownPayload(data);
 }
 
 function claudeBreakdownPrompt(title: string, fileName: string, text: string, sceneOutline: BreakdownSceneReference[]) {
@@ -578,6 +630,44 @@ ${outline || "No structural scene outline was available."}
 
 SCRIPT:
 ${text}`;
+}
+
+function chunkScenes(scenes: BreakdownSceneReference[], size: number) {
+  const chunks: BreakdownSceneReference[][] = [];
+  for (let index = 0; index < scenes.length; index += size) {
+    chunks.push(scenes.slice(index, index + size));
+  }
+  return chunks;
+}
+
+function batchSceneText(scenes: BreakdownSceneReference[]) {
+  return scenes.map((scene) => [
+    `SCENE ${scene.sceneNumber ?? ""}: ${scene.sceneHeading ?? "Untitled Scene"}`,
+    scene.text ?? ""
+  ].filter(Boolean).join("\n")).join("\n\n");
+}
+
+function mergeBreakdownScenes(scenes: BreakdownSceneDraft[]) {
+  const byKey = new Map<string, BreakdownSceneDraft>();
+  for (const scene of scenes) {
+    const key = sceneKey(scene.sceneNumber, scene.sceneHeading);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, { ...scene, elementIds: [...scene.elementIds] });
+      continue;
+    }
+    existing.printedNumber = existing.printedNumber || scene.printedNumber;
+    existing.page = existing.page ?? scene.page;
+    existing.pageEighths = existing.pageEighths ?? scene.pageEighths;
+    existing.intExt = existing.intExt || scene.intExt;
+    existing.location = existing.location || scene.location;
+    existing.timeOfDay = existing.timeOfDay || scene.timeOfDay;
+    existing.synopsis = existing.synopsis || scene.synopsis;
+    existing.cast = Array.from(new Set([...(existing.cast ?? []), ...(scene.cast ?? [])]));
+    existing.elementIds = Array.from(new Set([...existing.elementIds, ...scene.elementIds]));
+    existing.evidence = existing.evidence || scene.evidence;
+  }
+  return Array.from(byKey.values());
 }
 
 function claudeBreakdownTool() {
