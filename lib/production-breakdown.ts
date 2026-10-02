@@ -64,6 +64,14 @@ type BreakdownSource = {
   model?: string;
 };
 
+type BreakdownTextSource = {
+  text: string;
+  warning?: string;
+  storedSceneCount: number;
+  recoveredSceneCount?: number;
+  source: "stored-text" | "stored-original";
+};
+
 const categoryDepartments: Record<BreakdownTaxonomyCategory, string> = {
   CHARACTER: "cast",
   EXTRAS: "background-casting",
@@ -214,6 +222,12 @@ async function processProductionBreakdownRun(runId: string) {
             aiModel: selected.model
           },
           statsJson: {
+            sourceTextCharacters: sourceText.length,
+            sourceTextType: source.source,
+            storedSceneCount: source.storedSceneCount,
+            recoveredSceneCount: source.recoveredSceneCount ?? null,
+            outlineSceneCount: sceneOutline.length,
+            summarySceneCount: scenes.length,
             characters: elements.filter((element) => element.category === "CHARACTER").length,
             extras: elements.filter((element) => element.category === "EXTRAS").length,
             locations: elements.filter((element) => element.category === "LOCATION").length,
@@ -252,7 +266,7 @@ async function bestBreakdownSourceText(version: {
   storagePath: string;
   dataUrl?: string | null;
   extractedText?: string | null;
-}) {
+}): Promise<BreakdownTextSource> {
   const storedText = version.extractedText?.trim() ?? "";
   const storedSceneCount = countScenesForText(storedText, version.fileName);
   let recovered: { text: string; warning?: string };
@@ -266,7 +280,9 @@ async function bestBreakdownSourceText(version: {
     }
     return {
       text: storedText,
-      warning: `GreenLight could not re-read the original file before breakdown, so it used the existing saved readable text. Storage path: ${version.storagePath}. Details: ${detail}`
+      warning: `GreenLight could not re-read the original file before breakdown, so it used the existing saved readable text. Storage path: ${version.storagePath}. Details: ${detail}`,
+      storedSceneCount,
+      source: "stored-text"
     };
   }
   const recoveredText = recovered.text.trim();
@@ -281,18 +297,30 @@ async function bestBreakdownSourceText(version: {
       text: recoveredText,
       warning: recovered.warning
         ? `${recovered.warning} GreenLight refreshed the saved readable text before breakdown because the original file produced ${recoveredSceneCount} scenes versus ${storedSceneCount} from the previous extraction.`
-        : `GreenLight refreshed the saved readable text before breakdown because the original file produced ${recoveredSceneCount} scenes versus ${storedSceneCount} from the previous extraction.`
+        : `GreenLight refreshed the saved readable text before breakdown because the original file produced ${recoveredSceneCount} scenes versus ${storedSceneCount} from the previous extraction.`,
+      storedSceneCount,
+      recoveredSceneCount,
+      source: "stored-original"
     };
   }
 
   if ((version.fileName.toLowerCase().endsWith(".pdf") || version.fileType === "application/pdf") && storedSceneCount < 80 && recoveredText && recoveredSceneCount <= storedSceneCount) {
     return {
       text: storedText,
-      warning: `GreenLight found only ${storedSceneCount} scenes in this PDF. It re-read the original stored file but did not find a fuller extraction. If this script should have more scenes, re-upload the original PDF or run upload troubleshooting against storage path ${version.storagePath}.`
+      warning: `GreenLight found only ${storedSceneCount} scenes in this PDF. It re-read the original stored file but did not find a fuller extraction. If this script should have more scenes, re-upload the original PDF or run upload troubleshooting against storage path ${version.storagePath}.`,
+      storedSceneCount,
+      recoveredSceneCount,
+      source: "stored-text"
     };
   }
 
-  return { text: storedText, warning: undefined };
+  return {
+    text: storedText,
+    warning: undefined,
+    storedSceneCount,
+    recoveredSceneCount,
+    source: "stored-text"
+  };
 }
 
 function countScenesForText(text: string, fileName: string) {
@@ -323,7 +351,6 @@ async function recoverTextFromStoredOriginal(version: {
 }
 
 async function readStoredVersionBytes(version: { storagePath: string; dataUrl?: string | null }) {
-  if (version.dataUrl?.startsWith("data:")) return dataUrlBytes(version.dataUrl);
   if (version.storagePath.startsWith("gs://")) {
     const match = /^gs:\/\/([^/]+)\/(.+)$/.exec(version.storagePath);
     if (!match) throw new Error("Invalid GCS storage path.");
@@ -345,6 +372,7 @@ async function readStoredVersionBytes(version: { storagePath: string; dataUrl?: 
     const [bytes] = await storage.bucket(bucketName).file(version.storagePath).download();
     return bytes;
   }
+  if (version.dataUrl?.startsWith("data:")) return dataUrlBytes(version.dataUrl);
   return readFile(version.storagePath);
 }
 

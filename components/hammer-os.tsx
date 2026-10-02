@@ -8334,6 +8334,7 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
           </div>
         </div>
         {activeRun ? <p className="mt-2 truncate text-[11px] text-studio-400">Latest: {statusLabel(activeRun.status)} / Claude Production Breakdown / {activeRun.createdAt.slice(0, 10)}{activeRun.createdByName ? ` by ${activeRun.createdByName}` : ""}</p> : null}
+        {activeRun ? <BreakdownSourceDiagnostics run={activeRun} /> : null}
         {activeRun?.warning ? <p className="mt-2 rounded border border-yellow-300/25 bg-yellow-300/10 px-2.5 py-1.5 text-xs text-yellow-100">{activeRun.warning}</p> : null}
         {persistedLoading ? <p className="mt-2 rounded border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-xs text-studio-300">Loading saved breakdown runs...</p> : null}
         {textState.loading ? <p className="mt-2 rounded border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-xs text-studio-300">Loading script text for breakdown...</p> : null}
@@ -8344,6 +8345,26 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
       {tableRun ? <PersistedBreakdownElementPanel run={tableRun} onUpdateStatus={updatePersistedElementStatus} updating={updatingBreakdown} /> : <Panel><SectionHeader eyebrow="Breakdown Table" title="Production Items" /><EmptyState label={activeRun?.status === "RUNNING" ? "Claude breakdown is running. This table will appear when processing completes." : "Run Claude production breakdown to detect characters, extras, locations, props, vehicles, wardrobe, SFX, and animals."} /></Panel>}
     </div>
   );
+}
+
+function BreakdownSourceDiagnostics({ run }: { run: HammerBreakdownRun }) {
+  const stored = breakdownStatNumber(run.stats, "storedSceneCount");
+  const recovered = breakdownStatNumber(run.stats, "recoveredSceneCount");
+  const outline = breakdownStatNumber(run.stats, "outlineSceneCount");
+  const summary = breakdownStatNumber(run.stats, "summarySceneCount");
+  if (stored === undefined && recovered === undefined && outline === undefined && summary === undefined) return null;
+  const parts = [
+    stored !== undefined ? `saved text: ${stored} scenes` : null,
+    recovered !== undefined ? `stored file: ${recovered} scenes` : null,
+    outline !== undefined ? `outline: ${outline} scenes` : null,
+    summary !== undefined ? `table: ${summary} scenes` : null
+  ].filter(Boolean);
+  return <p className="mt-1 text-[11px] text-studio-500">Source check: {parts.join(" / ")}</p>;
+}
+
+function breakdownStatNumber(stats: HammerBreakdownRun["stats"], key: string) {
+  const value = stats?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function PersistedBreakdownElementPanel({ run, onUpdateStatus, updating }: { run: HammerBreakdownRun; onUpdateStatus: (elementId: string, status: BreakdownElementStatus) => void; updating: boolean }) {
