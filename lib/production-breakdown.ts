@@ -137,7 +137,7 @@ async function processProductionBreakdownRun(runId: string) {
   });
   if (!run) throw new Error("Breakdown run not found.");
   const version = run.documentVersion;
-  const source = await bestBreakdownSourceText(version).catch(() => ({ text: version.extractedText?.trim() ?? "", warning: undefined }));
+  const source = await bestBreakdownSourceText(version);
   const sourceText = source.text.trim();
   if (!sourceText) {
     return prisma.breakdownRun.update({
@@ -205,8 +205,7 @@ async function processProductionBreakdownRun(runId: string) {
           status: "READY_FOR_REVIEW",
           parserName: selected.parserName,
           parserVersion: selected.parserVersion,
-          warning: selected.warning,
-          ...(source.warning && !selected.warning ? { warning: source.warning } : {}),
+          warning: [source.warning, selected.warning].filter(Boolean).join(" ") || undefined,
           completedAt: new Date(),
           summaryJson: {
             elementCount: elements.length,
@@ -256,7 +255,20 @@ async function bestBreakdownSourceText(version: {
 }) {
   const storedText = version.extractedText?.trim() ?? "";
   const storedSceneCount = countScenesForText(storedText, version.fileName);
-  const recovered = await recoverTextFromStoredOriginal(version);
+  let recovered: { text: string; warning?: string };
+  try {
+    recovered = await recoverTextFromStoredOriginal(version);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "Unknown storage read error.";
+    const lowerName = version.fileName.toLowerCase();
+    if ((lowerName.endsWith(".pdf") || version.fileType === "application/pdf") && storedSceneCount < 80) {
+      throw new Error(`GreenLight only found ${storedSceneCount} scenes in the saved readable text and could not re-read the original PDF from storage to repair it. Check that the original file exists in GCS/local storage, then rerun breakdown. Storage path: ${version.storagePath}. Details: ${detail}`);
+    }
+    return {
+      text: storedText,
+      warning: `GreenLight could not re-read the original file before breakdown, so it used the existing saved readable text. Storage path: ${version.storagePath}. Details: ${detail}`
+    };
+  }
   const recoveredText = recovered.text.trim();
   const recoveredSceneCount = countScenesForText(recoveredText, version.fileName);
 
@@ -270,6 +282,13 @@ async function bestBreakdownSourceText(version: {
       warning: recovered.warning
         ? `${recovered.warning} GreenLight refreshed the saved readable text before breakdown because the original file produced ${recoveredSceneCount} scenes versus ${storedSceneCount} from the previous extraction.`
         : `GreenLight refreshed the saved readable text before breakdown because the original file produced ${recoveredSceneCount} scenes versus ${storedSceneCount} from the previous extraction.`
+    };
+  }
+
+  if ((version.fileName.toLowerCase().endsWith(".pdf") || version.fileType === "application/pdf") && storedSceneCount < 80 && recoveredText && recoveredSceneCount <= storedSceneCount) {
+    return {
+      text: storedText,
+      warning: `GreenLight found only ${storedSceneCount} scenes in this PDF. It re-read the original stored file but did not find a fuller extraction. If this script should have more scenes, re-upload the original PDF or run upload troubleshooting against storage path ${version.storagePath}.`
     };
   }
 
@@ -312,7 +331,7 @@ async function readStoredVersionBytes(version: { storagePath: string; dataUrl?: 
     const [bytes] = await new Storage().bucket(match[1]).file(match[2]).download();
     return bytes;
   }
-  if (process.env.UPLOAD_STORAGE_DRIVER === "gcs") {
+  if (process.env.UPLOAD_STORAGE_DRIVER === "gcs" || process.env.GCS_BUCKET_NAME) {
     const bucketName = process.env.GCS_BUCKET_NAME;
     if (!bucketName) throw new Error("GCS_BUCKET_NAME is required for stored file recovery.");
     const { Storage } = await import("@google-cloud/storage");
@@ -810,7 +829,7 @@ function normalizeClaudeElements(payload: unknown): BreakdownElementDraft[] {
       confidence: clampConfidence(record.confidence),
       sortOrder: index,
       metadataJson: { parser: "claude-production-breakdown-skill", skillCategory: skillCategoryPrefix(category), skillCsvFields: skillFields },
-      tagKeys: uniqueTags([...tags, ...skillFieldTags(skillFields)]),
+      tagKeys: uniqueTags([...tags, ...skillFieldTags(skillFields, category)]),
       scenes: [{ sceneNumber, sceneHeading, occurrenceCount: 1, evidenceText: stringValue(record.evidence), metadataJson: { parser: "claude-production-breakdown-skill" } }]
     };
   }).filter((element) => element.displayName.trim());
@@ -883,9 +902,16 @@ function normalizeSkillCsvFields(record: Record<string, unknown>): Prisma.InputJ
   return fields as Prisma.InputJsonObject;
 }
 
-function skillFieldTags(fields: Prisma.InputJsonObject) {
+function skillFieldTags(fields: Prisma.InputJsonObject, category: BreakdownTaxonomyCategory) {
   const tags: Array<{ key: string; value: string; label?: string; color?: string }> = [];
-  for (const key of ["speaking", "role", "hero", "department", "continuityRisk", "species", "recommendation", "wranglerRequired"]) {
+  const keys = category === "CHARACTER" || category === "EXTRAS"
+    ? ["speaking", "role"]
+    : category === "ANIMAL"
+      ? ["species", "named", "recommendation", "wranglerRequired"]
+      : category === "PROP" || category === "VEHICLE" || category === "WARDROBE" || category === "SFX"
+        ? ["hero", "department"]
+        : [];
+  for (const key of keys) {
     const value = fields[key];
     if (typeof value === "string" && value.trim()) tags.push({ key: key.toLowerCase(), value: slugify(value), label: value });
   }

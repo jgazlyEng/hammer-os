@@ -8354,7 +8354,7 @@ function PersistedBreakdownElementPanel({ run, onUpdateStatus, updating }: { run
   const categoryTabsKey = categoryTabs.join("|");
   const activeEntityType = categoryTabs.includes(entityType) ? entityType : categoryTabs[0] ?? "SCENES";
   const sceneRows = useMemo(() => breakdownSceneRows(visibleElements, summaryScenes), [summaryScenes, visibleElements]);
-  const filteredElements = activeEntityType === "SCENES" ? [] : visibleElements.filter((element) => element.category === activeEntityType);
+  const filteredElements = activeEntityType === "SCENES" ? [] : visibleElements.filter((element) => activeEntityType === "PROP" ? element.category === "PROP" || element.category === "SFX" : element.category === activeEntityType);
   const ignoredCount = run.elements.filter((element) => element.status === "IGNORED").length;
 
   useEffect(() => {
@@ -8484,8 +8484,12 @@ function PersistedBreakdownElementPanel({ run, onUpdateStatus, updating }: { run
 
 function breakdownCategoryTabs(elements: HammerBreakdownElement[], summaryScenes: HammerBreakdownSummaryScene[] = []) {
   const detected = new Set(elements.map((element) => element.category));
-  const preferred = ["SCENES", "CHARACTER", "EXTRAS", "LOCATION", "PROP", "VEHICLE", "WARDROBE", "SFX", "ANIMAL"];
-  return preferred.filter((category) => category === "SCENES" ? Boolean(summaryScenes.length || elements.some((element) => element.scenes.length)) : detected.has(category));
+  const preferred = ["SCENES", "CHARACTER", "EXTRAS", "LOCATION", "PROP", "VEHICLE", "WARDROBE", "ANIMAL"];
+  return preferred.filter((category) => {
+    if (category === "SCENES") return Boolean(summaryScenes.length || elements.some((element) => element.scenes.length));
+    if (category === "PROP") return detected.has("PROP") || detected.has("SFX");
+    return detected.has(category);
+  });
 }
 
 type BreakdownSceneTableRow = {
