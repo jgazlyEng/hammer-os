@@ -19,49 +19,35 @@ export interface PdfTextExtractionResult {
 }
 
 export async function extractPdfTextWithFallback(bytes: Buffer): Promise<PdfTextExtractionResult> {
+  const poppler = await extractPdfTextWithPopplerText(bytes);
+  if (poppler.text.length >= MIN_SELECTABLE_TEXT_CHARS) return poppler;
+
   let selectable: PdfTextExtractionResult;
   try {
     selectable = await extractSelectablePdfText(bytes);
   } catch (error) {
-    const poppler = await extractPdfTextWithPopplerText(bytes);
-    if (poppler.text.length >= MIN_SELECTABLE_TEXT_CHARS) {
-      return {
-        ...poppler,
-        warning: `${poppler.warning} PDF.js extraction failed first, so GreenLight used Poppler text extraction. Details: ${errorMessage(error)}`
-      };
-    }
-
     const ocr = await extractPdfTextWithOcr(bytes);
     return ocr.text
       ? {
           ...ocr,
-          warning: `${ocr.warning} Selectable text extraction failed first, so GreenLight used OCR. Details: ${errorMessage(error)}`
+          warning: `${ocr.warning} Poppler text extraction returned too little text and PDF.js extraction failed, so GreenLight used OCR. Details: ${errorMessage(error)}`
         }
       : {
-          text: "",
+          text: poppler.text,
+          pageCount: poppler.pageCount,
           usedOcr: true,
-          warning: `Uploaded successfully, but readable script text could not be extracted. Selectable text extraction failed and OCR did not return text. Details: ${errorMessage(error)}`
+          warning: `Uploaded successfully, but readable script text could not be fully extracted. Poppler returned too little text, PDF.js extraction failed, and OCR did not return text. Details: ${errorMessage(error)}`
         };
   }
 
   if (selectable.text.length >= MIN_SELECTABLE_TEXT_CHARS) return selectable;
 
-  const poppler = await extractPdfTextWithPopplerText(bytes, selectable.pageCount);
-  if (poppler.text.length >= MIN_SELECTABLE_TEXT_CHARS) {
-    return {
-      ...poppler,
-      warning: selectable.warning
-        ? `${poppler.warning} ${selectable.warning}`
-        : poppler.warning
-    };
-  }
-
   const shouldAttemptOcr = canAttemptInlineOcr(bytes, selectable.pageCount);
   if (!shouldAttemptOcr.allowed) {
     return {
-      text: selectable.text,
+      text: selectable.text || poppler.text,
       pageCount: selectable.pageCount,
-      warning: `${selectable.warning ? `${selectable.warning} ` : ""}Uploaded successfully, but GreenLight skipped inline OCR to keep the upload responsive. ${shouldAttemptOcr.reason}`
+      warning: `${selectable.warning ? `${selectable.warning} ` : ""}${poppler.warning ? `${poppler.warning} ` : ""}Uploaded successfully, but GreenLight skipped inline OCR to keep the upload responsive. ${shouldAttemptOcr.reason}`
     };
   }
 
@@ -76,9 +62,9 @@ export async function extractPdfTextWithFallback(bytes: Buffer): Promise<PdfText
   }
 
   return {
-    text: selectable.text,
+    text: selectable.text || poppler.text,
     pageCount: selectable.pageCount,
-    warning: ocr.warning ?? selectable.warning ?? "Uploaded successfully, but no readable script text could be extracted. This PDF may be scanned or image-only; OCR is needed before breakdown or diff can run."
+    warning: ocr.warning ?? selectable.warning ?? poppler.warning ?? "Uploaded successfully, but no readable script text could be extracted. This PDF may be scanned or image-only; OCR is needed before breakdown or diff can run."
   };
 }
 
