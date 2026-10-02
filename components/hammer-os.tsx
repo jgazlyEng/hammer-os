@@ -3899,32 +3899,24 @@ function ProjectWorkspace({
       {activeTab === "overview" ? (
         <div className="space-y-4">
             <Panel>
-              <SectionHeader eyebrow="Artist Start Here" title="Assignments and Working Brief" action={<div className="flex flex-wrap gap-1.5">{onCreateTask ? <NewAssignmentButton project={project} firstScript={firstScript} users={users} onCreateTask={onCreateTask} /> : null}<TableLink href="/tasks">Open tasks</TableLink></div>} />
+              <SectionHeader eyebrow="Start Here" title="Working Brief" action={<div className="flex flex-wrap gap-1.5">{onCreateTask ? <NewAssignmentButton project={project} firstScript={firstScript} users={users} onCreateTask={onCreateTask} /> : null}<TableLink href="/tasks">Open tasks</TableLink></div>} />
               <div className="grid gap-3 xl:grid-cols-[0.9fr_1.1fr]">
                 <div className="rounded-md border border-white/10 bg-white/[0.03] p-2.5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-[13px] font-semibold text-studio-100">Creative source</p>
+                    <p className="text-[13px] font-semibold text-studio-100">Source packet</p>
                     {latestVersion ? <Badge value={latestVersion.status} /> : null}
                   </div>
                   <p className="mt-1 text-xs leading-5 text-studio-300">{firstScript ? `${firstScript.title} / v${latestVersion?.versionNumber ?? 1}` : "No script has been attached yet."}</p>
                   <p className="mt-1 line-clamp-2 text-xs leading-5 text-studio-400">{project.logline}</p>
-                  {firstScript ? <div className="mt-2 flex flex-wrap gap-1.5"><TableLink href={`/scripts/${firstScript.id}`}>Open script</TableLink><TableLink href={`/projects/${project.id}/documents`}>Open Scripts & Docs</TableLink></div> : null}
+                  <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-studio-400">
+                    <span className="rounded border border-white/10 bg-white/[0.025] px-1.5 py-1">{scriptDocs.length} script/treatment</span>
+                    <span className="rounded border border-white/10 bg-white/[0.025] px-1.5 py-1">{projectSupportingDocs.length} context doc</span>
+                    <span className="rounded border border-white/10 bg-white/[0.025] px-1.5 py-1">{projectReferenceImages.length + projectAssets.length} reference</span>
+                  </div>
+                  {firstScript ? <div className="mt-2 flex flex-wrap gap-1.5"><TableLink href={`/scripts/${firstScript.id}`}>Open script</TableLink><TableLink href={`/projects/${project.id}/documents`}>Manage files</TableLink></div> : <div className="mt-2"><TableLink href={`/projects/${project.id}/documents`}>Add source files</TableLink></div>}
                 </div>
                 <div>
                   {visibleOpenTasks.length ? <CompactTaskRows tasks={visibleOpenTasks.slice(0, 4)} /> : <EmptyState label={canViewAllProjectAssignments ? `No open tasks for ${project.title}.` : `No tasks assigned to you for ${project.title}.`} />}
-                </div>
-              </div>
-            </Panel>
-            <Panel>
-              <SectionHeader eyebrow="Creative Packet" title="Scripts and Supporting Docs" action={<TableLink href={`/projects/${project.id}/documents`}>Manage files</TableLink>} />
-              <div className="grid gap-3 xl:grid-cols-2">
-                <div>
-                  <h3 className="mb-2 text-sm font-semibold text-studio-100">Associated Scripts</h3>
-                  <ProjectScriptFileList docs={scriptDocs.slice(0, 4)} versions={versions} canDownload={canDownload} currentUser={currentUser} />
-                </div>
-                <div>
-                  <h3 className="mb-2 text-sm font-semibold text-studio-100">Supporting Documentation</h3>
-                  <ProjectSupportingDocs docs={docs} versions={versions} supportingDocuments={projectSupportingDocs} canDownload={canDownload} currentUser={currentUser} />
                 </div>
               </div>
             </Panel>
@@ -4002,77 +3994,6 @@ function ProjectLoglineEditor({ project, onUpdateProject }: { project: HammerPro
         </div>
       </div>
       {message ? <p className="mt-2 text-xs text-studio-300">{message}</p> : null}
-    </div>
-  );
-}
-
-function ProjectSupportingDocs({ docs, versions, supportingDocuments, canDownload, currentUser }: { docs: HammerDocument[]; versions: HammerDocumentVersion[]; supportingDocuments: SupportingDocument[]; canDownload: boolean; currentUser: HammerUser }) {
-  const directDocs = docs.filter((doc) => ["NOTES", "COVERAGE", "BUSINESS_DOCUMENT"].includes(doc.type));
-  const items = [
-    ...directDocs.map((doc) => {
-      const version = currentVersionFor(doc.id, docs, versions);
-      return {
-        id: doc.id,
-        title: doc.title,
-        detail: version?.fileName ?? statusLabel(doc.type),
-        href: `/scripts/${doc.id}`,
-        fileName: version?.fileName ?? `${doc.title}.txt`,
-        dataUrl: version?.dataUrl,
-        fallbackText: version?.extractedText,
-        resourceType: version ? "documentVersion" as const : undefined,
-        resourceId: version?.id
-      };
-    }),
-    ...supportingDocuments.map((doc) => ({
-      id: doc.id,
-      title: doc.title,
-      detail: doc.source ? `${doc.fileName} / ${doc.source}` : doc.fileName,
-      href: undefined,
-      fileName: doc.fileName,
-      dataUrl: doc.dataUrl,
-      fallbackText: doc.extractedText,
-      source: doc.source,
-      resourceType: "supportingDocument" as const,
-      resourceId: doc.id
-    }))
-  ];
-  if (!items.length) return <EmptyState label="No context docs yet. Add coverage, notes, deck pages, or correspondence from a script's Files tab." />;
-  return (
-    <div className="grid gap-2">
-      {items.slice(0, 5).map((item) => {
-        const text = (
-          <div className="min-w-0">
-              <p className="truncate text-[13px] font-semibold text-studio-100">{item.title}</p>
-              <p className="mt-0.5 truncate text-xs text-studio-400">{item.detail}</p>
-          </div>
-        );
-        return (
-          <div key={item.id} className="flex items-start justify-between gap-2 rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-2 transition hover:border-amberline/30 hover:bg-white/[0.05]">
-            {item.href ? <Link href={item.href} className="min-w-0">{text}</Link> : text}
-            {canDownload ? <DownloadFileLink fileName={item.fileName} dataUrl={item.dataUrl} fallbackText={item.fallbackText} resourceType={item.resourceType} resourceId={item.resourceId} currentUser={currentUser} /> : null}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function ProjectScriptFileList({ docs, versions, canDownload, currentUser }: { docs: HammerDocument[]; versions: HammerDocumentVersion[]; canDownload: boolean; currentUser: HammerUser }) {
-  if (!docs.length) return <EmptyState label="No scripts, treatments, or outlines attached yet." />;
-  return (
-    <div className="grid gap-2">
-      {docs.map((doc) => {
-        const version = currentVersionFor(doc.id, docs, versions);
-        return (
-          <div key={doc.id} className="flex items-start justify-between gap-2 rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-2 transition hover:border-amberline/30 hover:bg-white/[0.05]">
-            <Link href={`/scripts/${doc.id}`} className="min-w-0">
-              <p className="truncate text-[13px] font-semibold text-studio-100">{doc.title}</p>
-              <p className="mt-0.5 truncate text-xs text-studio-400">{version?.fileName ?? statusLabel(doc.type)}</p>
-            </Link>
-            {canDownload && version ? <DownloadFileLink fileName={version.fileName} dataUrl={version.dataUrl} fallbackText={version.extractedText} resourceType="documentVersion" resourceId={version.id} currentUser={currentUser} /> : null}
-          </div>
-        );
-      })}
     </div>
   );
 }
@@ -6460,7 +6381,7 @@ function ScriptDetail({
   const textState = useDocumentVersionsWithText(doc.id, versions);
   const versionsWithText = textState.versionsWithText;
   const version = currentVersionFor(doc.id, documents, versionsWithText);
-  const [tab, setTab] = useState<"overview" | "coverage" | "notes" | "files" | "compare">("overview");
+  const [tab, setTab] = useState<"overview" | "coverage" | "notes" | "compare">("overview");
   const [metadataDraft, setMetadataDraft] = useState({
     title: doc.title,
     type: doc.type,
@@ -6653,7 +6574,6 @@ function ScriptDetail({
             ["overview", "Overview"],
             ["coverage", "Coverage"],
             ["notes", `Notes${visibleNotesCount ? ` (${visibleNotesCount})` : ""}`],
-            ["files", "Files"],
             ["compare", "Compare"]
           ].map(([id, label]) => (
             <button
@@ -6795,6 +6715,52 @@ function ScriptDetail({
                 ) : null}
               </div>
             </Panel>
+            <Panel className="xl:col-span-2">
+              <SectionHeader
+                eyebrow="Context"
+                title="Attached Materials"
+                action={<div className="flex flex-wrap gap-1.5">{onSupportingUpload ? <SupportingDocumentUpload documentId={doc.id} onUpload={onSupportingUpload} /> : null}{canDownload && version ? <DownloadFileLink fileName={version.fileName} dataUrl={version.dataUrl} fallbackText={version.extractedText} resourceType="documentVersion" resourceId={version.id} currentUser={currentUser} compact /> : null}</div>}
+              />
+              <div className="grid gap-2">
+                <div className="rounded-lg border border-emerald-300/20 bg-emerald-400/10 p-3">
+                  <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-[13px] font-semibold text-studio-100">{doc.title}</p>
+                        <Badge value="Primary Document" subtle />
+                        {version ? <Badge value={`v${version.versionNumber}`} /> : null}
+                      </div>
+                      <p className="mt-1 truncate text-xs text-studio-400">{version?.fileName ?? doc.title} / {version?.fileType ?? doc.type} / {version ? formatBytes(version.fileSize) : "Unknown size"}</p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {version ? <span className="text-[11px] text-studio-500">{version.createdAt}</span> : null}
+                    </div>
+                  </div>
+                </div>
+                {attachedSupportingDocuments.length ? attachedSupportingDocuments.map((item) => (
+                  <div key={item.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-3 transition hover:border-amberline/30 hover:bg-white/[0.05]">
+                    <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-[13px] font-semibold text-studio-100">{item.title}</p>
+                          <Badge value={item.type} />
+                        </div>
+                        <p className="mt-1 truncate text-xs text-studio-400">{item.fileName} / {item.fileType} / {formatBytes(item.fileSize)}</p>
+                        {item.source ? <p className="mt-1 text-xs text-studio-400">Source: {item.source}</p> : null}
+                        {item.notes ? <p className="mt-2 text-[13px] leading-5 text-studio-300">{item.notes}</p> : null}
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        <span className="text-[11px] text-studio-500">{item.uploadedAt}</span>
+                        {canDownload ? <DownloadFileLink fileName={item.fileName} dataUrl={item.dataUrl} fallbackText={item.extractedText} resourceType="supportingDocument" resourceId={item.id} currentUser={currentUser} compact /> : null}
+                        {onSupportingDelete ? <DangerButton label="Delete" onClick={() => onSupportingDelete(item.id)} /> : null}
+                      </div>
+                    </div>
+                  </div>
+                )) : (
+                  <EmptyState label="No context documents attached yet. Add coverage, emails, writer notes, decks, or reference material here." />
+                )}
+              </div>
+            </Panel>
         </div>
       ) : null}
 
@@ -6820,62 +6786,6 @@ function ScriptDetail({
           onUpdateComment={onUpdateComment}
           onDeleteComment={onDeleteComment}
         />
-      ) : null}
-
-      {tab === "files" ? (
-        <Panel>
-          <SectionHeader eyebrow="Files" title="Script Packet" action={<div className="flex flex-wrap gap-1.5">{onSupportingUpload ? <SupportingDocumentUpload documentId={doc.id} onUpload={onSupportingUpload} /> : null}{onUpload ? <PrimaryButton icon={Plus} label="Compare Versions" onClick={() => setTab("compare")} /> : null}</div>} />
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <h3 className="text-sm font-semibold text-studio-100">Context Files</h3>
-                <span className="rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-[11px] text-studio-300">{attachedSupportingDocuments.length + (version ? 1 : 0)}</span>
-              </div>
-              <div className="grid gap-2">
-                <div className="rounded-lg border border-emerald-300/20 bg-emerald-400/10 p-3">
-                  <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="text-[13px] font-semibold text-studio-100">{doc.title}</p>
-                        <Badge value="Primary Script" subtle />
-                        {version ? <Badge value={`v${version.versionNumber}`} /> : null}
-                      </div>
-                      <p className="mt-1 truncate text-xs text-studio-400">{version?.fileName ?? doc.title} / {version?.fileType ?? doc.type} / {version ? formatBytes(version.fileSize) : "Unknown size"}</p>
-                      {version?.storagePath ? <p className="mt-2 break-all text-xs text-studio-400">{version.storagePath}</p> : null}
-                    </div>
-                    <div className="flex shrink-0 items-center gap-1.5">
-                      {version ? <span className="text-[11px] text-studio-500">{version.createdAt}</span> : null}
-                      {canDownload && version ? <DownloadFileLink fileName={version.fileName} dataUrl={version.dataUrl} fallbackText={version.extractedText} resourceType="documentVersion" resourceId={version.id} currentUser={currentUser} compact /> : null}
-                    </div>
-                  </div>
-                </div>
-                {attachedSupportingDocuments.length ? attachedSupportingDocuments.map((item) => (
-                  <div key={item.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-3 transition hover:border-amberline/30 hover:bg-white/[0.05]">
-                    <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-[13px] font-semibold text-studio-100">{item.title}</p>
-                          <Badge value={item.type} />
-                        </div>
-                        <p className="mt-1 truncate text-xs text-studio-400">{item.fileName} / {item.fileType} / {formatBytes(item.fileSize)}</p>
-                        {item.source ? <p className="mt-1 text-xs text-studio-400">Source: {item.source}</p> : null}
-                        {item.notes ? <p className="mt-2 text-[13px] leading-5 text-studio-300">{item.notes}</p> : null}
-                        {item.extractedText ? <p className="mt-2 line-clamp-2 text-xs leading-5 text-studio-400">{item.extractedText}</p> : null}
-                      </div>
-                      <div className="flex shrink-0 items-center gap-1.5">
-                        <span className="text-[11px] text-studio-500">{item.uploadedAt}</span>
-                        {canDownload ? <DownloadFileLink fileName={item.fileName} dataUrl={item.dataUrl} fallbackText={item.extractedText} resourceType="supportingDocument" resourceId={item.id} currentUser={currentUser} compact /> : null}
-                        {onSupportingDelete ? <DangerButton label="Delete" onClick={() => onSupportingDelete(item.id)} /> : null}
-                      </div>
-                    </div>
-                  </div>
-                )) : (
-                  <EmptyState label="Add context documents, coverage, emails, writer notes, or other reference material connected to this script." />
-                )}
-              </div>
-            </div>
-          </div>
-        </Panel>
       ) : null}
 
       {tab === "compare" ? (
