@@ -2760,7 +2760,7 @@ function SlateCreateModal({ users, onClose, onCreate }: { users: HammerUser[]; o
   }
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[140] flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm">
       <form onSubmit={submit} className="modal-card w-full max-w-4xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl">
         <div className="flex items-start justify-between gap-3">
           <SectionHeader eyebrow="Prospects" title="Add Prospect" />
@@ -3184,7 +3184,7 @@ function ProspectNoteDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-[110] flex items-start justify-center overflow-y-auto bg-studio-950/80 px-4 py-8 backdrop-blur-sm" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-[150] flex items-start justify-center overflow-y-auto bg-studio-950/80 px-4 py-8 backdrop-blur-sm" onMouseDown={onClose}>
       <div className="modal-card w-full max-w-5xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -3584,7 +3584,7 @@ function ProjectCreateModal({ users, currentUser, onClose, onCreate }: { users: 
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[140] flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
       <form onSubmit={submit} className="modal-card my-6 w-full max-w-3xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-glow">
         <div className="flex items-start justify-between gap-3">
           <SectionHeader eyebrow="Development Slate" title="Create Slate Item" />
@@ -4575,7 +4575,12 @@ function DocumentUploadPanel({
   const [progressSteps, setProgressSteps] = useState<UploadProgressStep[]>(uploadProgressSteps());
   const [recentUploadJobs, setRecentUploadJobs] = useState<UploadJobSnapshot[]>([]);
   const [busy, setBusy] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const selectedDocument = documents.find((document) => document.id === documentId);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     if (selectedDocument) {
@@ -4714,8 +4719,8 @@ function DocumentUploadPanel({
     }
   }
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
+  const modal = (
+    <div className="fixed inset-0 z-[140] flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
       <form onSubmit={submit} className="mt-8 grid max-h-[90vh] w-full max-w-3xl gap-3 overflow-y-auto rounded-xl border border-amberline/25 bg-studio-950 p-4 shadow-2xl md:grid-cols-[1fr_170px]">
         <div className="md:col-span-2 flex items-start justify-between gap-3">
           <div>
@@ -4797,6 +4802,8 @@ function DocumentUploadPanel({
       </form>
     </div>
   );
+
+  return mounted ? createPortal(modal, document.body) : null;
 }
 
 function UploadProgressPanel({ steps }: { steps: UploadProgressStep[] }) {
@@ -5006,7 +5013,7 @@ function SupportingDocumentUpload({
         Attach Context
       </button>
       {open ? (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
+        <div className="fixed inset-0 z-[140] flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
           <form onSubmit={submit} className="mt-8 grid max-h-[90vh] w-full max-w-2xl gap-3 overflow-y-auto rounded-xl border border-amberline/25 bg-studio-950 p-4 shadow-2xl">
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -5857,7 +5864,7 @@ function CollectionSlateItemAddModal({
   const visibleSelectedCount = visibleItems.filter((item) => selectedIdSet.has(item.id)).length;
   const allVisibleSelected = Boolean(visibleItems.length) && visibleSelectedCount === visibleItems.length;
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[140] flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
       <form onSubmit={onSubmit} className="modal-card mt-10 flex max-h-[88vh] w-full max-w-3xl flex-col rounded-xl border border-white/10 bg-studio-950 p-4 shadow-2xl">
         <div className="mb-4 flex items-start justify-between gap-3">
           <SectionHeader eyebrow="Review List" title="Add Items" />
@@ -5971,7 +5978,7 @@ function CollectionCreateModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[140] flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
       <form onSubmit={submit} className="modal-card mt-16 w-full max-w-lg rounded-xl border border-white/10 bg-studio-950 p-4 shadow-2xl">
         <div className="mb-4 flex items-start justify-between gap-3">
           <SectionHeader eyebrow="Collections" title={title} />
@@ -6347,7 +6354,7 @@ function CollectionDocumentAddModal({
   onNotesChange: (notes: string) => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[140] flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
       <form onSubmit={onSubmit} className="modal-card mt-10 flex max-h-[88vh] w-full max-w-3xl flex-col rounded-xl border border-white/10 bg-studio-950 p-4 shadow-2xl">
         <div className="mb-4 flex items-start justify-between gap-3">
           <SectionHeader eyebrow="Review List" title="Add Documents" />
@@ -7473,7 +7480,7 @@ function GlobalNoteDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-studio-950/80 px-4 py-8 backdrop-blur-sm" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-[140] flex items-start justify-center overflow-y-auto bg-studio-950/80 px-4 py-8 backdrop-blur-sm" onMouseDown={onClose}>
       <div className="modal-card w-full max-w-5xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -7892,7 +7899,7 @@ function ScriptNoteDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-start justify-center overflow-y-auto bg-studio-950/80 px-4 py-8 backdrop-blur-sm" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-[140] flex items-start justify-center overflow-y-auto bg-studio-950/80 px-4 py-8 backdrop-blur-sm" onMouseDown={onClose}>
       <div className="modal-card w-full max-w-5xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -8847,7 +8854,7 @@ function NewTaskDialog({
     <div className="relative">
       <PrimaryButton icon={Plus} label="New Task" onClick={() => setOpen((current) => !current)} />
       {open ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/45 p-4">
+        <div className="fixed inset-0 z-[140] flex items-center justify-center bg-black/45 p-4">
           <form onSubmit={submit} className="w-full max-w-xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-glow">
             <SectionHeader eyebrow="Task" title="New Task" />
             <div className="grid gap-3">
@@ -9522,7 +9529,7 @@ function Contacts({
       </div>
 
       {selectedContact ? (
-        <div className="hidden fixed inset-0 z-[90] items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm" onMouseDown={() => setSelectedContactId("")}>
+        <div className="hidden fixed inset-0 z-[140] items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm" onMouseDown={() => setSelectedContactId("")}>
           <div className="w-full max-w-6xl" onMouseDown={(event) => event.stopPropagation()}>
             <Panel className="max-h-[calc(100vh-4rem)] overflow-hidden shadow-2xl">
               <div className="mb-3 flex flex-col gap-3 border-b border-white/10 pb-3 lg:flex-row lg:items-start lg:justify-between">
@@ -9669,7 +9676,7 @@ function OutreachContactEditModal({
   onSave: () => Promise<void>;
 }) {
   return (
-    <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-[140] flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm" onMouseDown={onClose}>
       <form
         onSubmit={(event) => {
           event.preventDefault();
@@ -9747,7 +9754,7 @@ function OutreachEngagementCreateModal({
   onDelete?: (engagementId: string) => void;
 }) {
   return (
-    <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-[140] flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm" onMouseDown={onClose}>
       <form onSubmit={onSubmit} className="modal-card w-full max-w-5xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
         <div className="flex items-start justify-between gap-3">
           <SectionHeader eyebrow="Outreach Timeline" title={`Engagement / ${contact.name}`} />
@@ -9856,7 +9863,7 @@ function OutreachEngagementEditModal({
   }, [engagement]);
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-[140] flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm" onMouseDown={onClose}>
       <form
         onSubmit={(event) => {
           event.preventDefault();
@@ -9935,7 +9942,7 @@ function ContactNotesPreview({ notes, onReadMore }: { notes?: string; onReadMore
 
 function ContactNoteModal({ contact, onClose }: { contact: HammerContact; onClose: () => void }) {
   return (
-    <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-[140] flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm" onMouseDown={onClose}>
       <div className="w-full max-w-2xl" onMouseDown={(event) => event.stopPropagation()}>
         <Panel className="shadow-2xl">
           <div className="flex items-start justify-between gap-3">
@@ -10043,7 +10050,7 @@ function ContactCreateModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[140] flex items-start justify-center overflow-y-auto bg-black/55 p-4 backdrop-blur-sm">
       <form onSubmit={submit} className="my-6 w-full max-w-3xl rounded-lg border border-white/10 bg-studio-950 p-4 shadow-glow">
         <div className="flex items-start justify-between gap-3">
           <SectionHeader eyebrow="Outreach Directory" title="Add Contact" />
@@ -10573,7 +10580,7 @@ function ReportPreviewModal({
   onDownload: () => void;
 }) {
   return createPortal(
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-studio-950/75 p-4 backdrop-blur-sm" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-[140] flex items-center justify-center bg-studio-950/75 p-4 backdrop-blur-sm" onMouseDown={onClose}>
       <div className="flex max-h-[88vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-white/12 bg-studio-950 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
         <div className="flex shrink-0 items-start justify-between gap-4 border-b border-white/10 p-4">
           <div className="min-w-0">
@@ -12570,7 +12577,7 @@ function AdminUserAccessModal({
   }
 
   return (
-    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-studio-950/75 p-4 backdrop-blur-sm" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-[140] flex items-center justify-center bg-studio-950/75 p-4 backdrop-blur-sm" onMouseDown={onClose}>
       <div className="modal-card flex max-h-[calc(100vh-3rem)] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-white/10 bg-studio-950 p-4 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
         <div className="flex items-start justify-between gap-3 border-b border-white/10 pb-3">
           <div>
@@ -12741,7 +12748,7 @@ function CreateUserModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+    <div className="fixed inset-0 z-[140] flex items-center justify-center bg-black/50 p-4">
       <form onSubmit={submit} className="w-full max-w-lg rounded-lg border border-white/10 bg-studio-950 p-4 shadow-glow">
         <SectionHeader eyebrow="Admin" title="Create User" />
         <div className="grid gap-3">
@@ -12798,7 +12805,7 @@ function AssignRoleModal({ user, onClose, onAssign }: { user: HammerUser; onClos
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+    <div className="fixed inset-0 z-[140] flex items-center justify-center bg-black/50 p-4">
       <form onSubmit={submit} className="w-full max-w-md rounded-lg border border-white/10 bg-studio-950 p-4 shadow-glow">
         <SectionHeader eyebrow="Admin" title="Assign Role" />
         <p className="mb-3 text-sm text-studio-300">{user.name}<br /><span className="text-xs text-studio-500">{user.email}</span></p>

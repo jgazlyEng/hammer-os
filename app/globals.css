@@ -130,7 +130,7 @@ a {
   }
 
   .modal-overlay {
-    @apply fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm;
+    @apply fixed inset-0 z-[140] flex items-start justify-center overflow-y-auto bg-studio-950/75 px-4 py-8 backdrop-blur-sm;
   }
 
   .modal-panel {

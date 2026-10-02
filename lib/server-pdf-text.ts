@@ -1,13 +1,10 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { createRequire } from "node:module";
-import { pathToFileURL } from "node:url";
 
 const execFileAsync = promisify(execFile);
-const requireFromHere = createRequire(import.meta.url);
 
 const DEFAULT_OCR_MAX_PAGES = 60;
 const DEFAULT_OCR_DPI = 160;
@@ -26,6 +23,14 @@ export async function extractPdfTextWithFallback(bytes: Buffer): Promise<PdfText
   try {
     selectable = await extractSelectablePdfText(bytes);
   } catch (error) {
+    const poppler = await extractPdfTextWithPopplerText(bytes);
+    if (poppler.text.length >= MIN_SELECTABLE_TEXT_CHARS) {
+      return {
+        ...poppler,
+        warning: `${poppler.warning} PDF.js extraction failed first, so GreenLight used Poppler text extraction. Details: ${errorMessage(error)}`
+      };
+    }
+
     const ocr = await extractPdfTextWithOcr(bytes);
     return ocr.text
       ? {
@@ -40,6 +45,16 @@ export async function extractPdfTextWithFallback(bytes: Buffer): Promise<PdfText
   }
 
   if (selectable.text.length >= MIN_SELECTABLE_TEXT_CHARS) return selectable;
+
+  const poppler = await extractPdfTextWithPopplerText(bytes, selectable.pageCount);
+  if (poppler.text.length >= MIN_SELECTABLE_TEXT_CHARS) {
+    return {
+      ...poppler,
+      warning: selectable.warning
+        ? `${poppler.warning} ${selectable.warning}`
+        : poppler.warning
+    };
+  }
 
   const shouldAttemptOcr = canAttemptInlineOcr(bytes, selectable.pageCount);
   if (!shouldAttemptOcr.allowed) {
@@ -69,25 +84,63 @@ export async function extractPdfTextWithFallback(bytes: Buffer): Promise<PdfText
 
 async function extractSelectablePdfText(bytes: Buffer): Promise<PdfTextExtractionResult> {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  pdfjs.GlobalWorkerOptions.workerSrc = pathToFileURL(requireFromHere.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs")).href;
   const pdf = await pdfjs.getDocument({ data: new Uint8Array(bytes), disableWorker: true } as Parameters<typeof pdfjs.getDocument>[0]).promise;
   const pages: string[] = [];
   let imageOnlyPageCount = 0;
+  let failedPageCount = 0;
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-    const page = await pdf.getPage(pageNumber);
-    const content = await page.getTextContent();
-    const pageText = content.items.map((item) => ("str" in item ? item.str : "")).filter(Boolean).join("\n").trim();
-    if (!pageText) imageOnlyPageCount += 1;
-    pages.push(pageText);
+    try {
+      const page = await pdf.getPage(pageNumber);
+      const content = await page.getTextContent();
+      const pageText = content.items.map((item) => ("str" in item ? item.str : "")).filter(Boolean).join("\n").trim();
+      if (!pageText) imageOnlyPageCount += 1;
+      pages.push(pageText);
+    } catch {
+      failedPageCount += 1;
+      pages.push("");
+    }
   }
 
   const text = pages.join("\n\n").trim();
-  const warning = imageOnlyPageCount
-    ? `${imageOnlyPageCount} of ${pdf.numPages} page${imageOnlyPageCount === 1 ? "" : "s"} had no selectable text and may be scanned or image-only.`
-    : undefined;
+  const warnings = [
+    imageOnlyPageCount
+      ? `${imageOnlyPageCount} of ${pdf.numPages} page${imageOnlyPageCount === 1 ? "" : "s"} had no selectable text and may be scanned or image-only.`
+      : "",
+    failedPageCount
+      ? `${failedPageCount} of ${pdf.numPages} page${failedPageCount === 1 ? "" : "s"} could not be read by PDF.js and were skipped.`
+      : ""
+  ].filter(Boolean);
 
-  return { text, warning, pageCount: pdf.numPages };
+  return { text, warning: warnings.join(" ") || undefined, pageCount: pdf.numPages };
+}
+
+async function extractPdfTextWithPopplerText(bytes: Buffer, pageCount?: number): Promise<PdfTextExtractionResult> {
+  const tempDir = await mkdtemp(path.join(tmpdir(), "greenlight-pdftotext-"));
+  const inputPath = path.join(tempDir, "input.pdf");
+  try {
+    await writeFile(inputPath, bytes);
+    const { stdout } = await execFileAsync("pdftotext", ["-layout", inputPath, "-"], {
+      timeout: positiveIntFromEnv("PDF_TEXT_TIMEOUT_MS", 120_000),
+      maxBuffer: 24 * 1024 * 1024
+    });
+    const text = stdout.trim();
+    return {
+      text,
+      pageCount,
+      warning: text
+        ? "Uploaded successfully. GreenLight used Poppler text extraction for this PDF."
+        : "Poppler text extraction did not find readable text in this PDF."
+    };
+  } catch (error) {
+    return {
+      text: "",
+      pageCount,
+      warning: `Poppler text extraction could not run on this server. Details: ${errorMessage(error)}`
+    };
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 }
 
 async function extractPdfTextWithOcr(bytes: Buffer, pageCount?: number): Promise<PdfTextExtractionResult> {
