@@ -265,7 +265,7 @@ function getFreshCachedWorkspace(userEmail?: string | null) {
 async function fetchDatabaseWorkspace(userEmail?: string | null, options: { force?: boolean } = {}) {
   const cached = options.force ? null : getFreshCachedWorkspace(userEmail);
   if (cached) return cached.data;
-  if (hammerWorkspaceRequest) return hammerWorkspaceRequest;
+  if (hammerWorkspaceRequest && !options.force) return hammerWorkspaceRequest;
 
   hammerWorkspaceRequest = fetch("/api/hammer/workspace", { cache: "no-store" })
     .then(async (response) => {
@@ -1995,7 +1995,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     if (view === "scripts") return <LegacyRedirect title="Scripts now live inside the slate" detail="Script tracking is most useful in context. Open a Development Slate item for active project scripts and supporting documents, or use Prospects for materials the team may want to pursue." href="/projects" label="Open Development Slate" />;
     if (["script-detail", "script-versions", "script-diff", "script-breakdown"].includes(view) && !documents.some((item) => item.id === document.id)) return <EmptyScriptState />;
     if (view === "script-detail") return <ScriptDetail documentId={document.id} documents={documents} projects={projects} users={users} versions={versions} comments={comments} currentUser={currentUser} supportingDocuments={supportingDocuments} onUpload={uploadDocumentVersion} onSupportingUpload={uploadSupportingDocument} onSupportingDelete={deleteSupportingDocument} onStatusChange={updateDocumentStatus} onUpdateVersionNotes={canManageScriptLibrary(currentUser.role) ? updateDocumentVersionNotes : undefined} onUpdateVersionMarkdown={canAccessScriptDocument(currentUser, document) ? updateDocumentVersionMarkdown : undefined} onGenerateCoverage={canAccessScriptDocument(currentUser, document) ? generateScriptCoverage : undefined} onUpdateCoverage={canAccessScriptDocument(currentUser, document) ? updateScriptCoverage : undefined} onCreateComment={createComment} onUpdateComment={updateComment} onDeleteComment={deleteComment} onUpdateMetadata={canAccessScriptDocument(currentUser, document) ? updateDocumentMetadata : undefined} onUpdateTags={canAccessScriptDocument(currentUser, document) ? updateDocumentTags : undefined} onDelete={canManageScriptLibrary(currentUser.role) ? deleteUploadedDocument : undefined} />;
-    if (view === "script-versions") return <ScriptVersions documentId={document.id} versions={versions} document={document} currentUser={currentUser} onUpload={uploadDocumentVersion} />;
+    if (view === "script-versions") return <ScriptVersions documentId={document.id} versions={versions} document={document} currentUser={currentUser} onUpload={uploadDocumentVersion} onUploadComplete={refreshWorkspaceAfterParse} />;
     if (view === "script-diff") return <ScriptDiff documentId={document.id} versions={versions} />;
     if (view === "script-breakdown") return <ScriptBreakdown documentId={document.id} documents={documents} versions={versions} workspaceMode={workspaceMode} />;
     if (view === "assets") return <Assets projectId={projects.length ? activeProject.id : ""} assets={assets} currentUser={currentUser} />;
@@ -3816,10 +3816,22 @@ type UploadJobSnapshot = {
   warning?: string;
   error?: string;
   characterCount?: number;
+  pageCount?: number;
+  sceneCount?: number;
+  wordCount?: number;
   versionNotes?: string;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+};
+
+type UploadParseSummary = {
+  fileName?: string;
+  pageCount?: number;
+  characterCount?: number;
+  wordCount?: number;
+  sceneCount?: number;
+  warning?: string;
 };
 
 type UploadProgressStepId = "selected" | "uploading" | "stored" | "parsing" | "complete";
@@ -4358,7 +4370,7 @@ function Scripts({
           title={compact ? "Documents" : "Scripts and Treatments"}
           action={onUpload ? <PrimaryButton icon={Plus} label="Add Document" onClick={() => setUploadOpen(true)} /> : undefined}
         />
-        {uploadOpen && onUpload ? <DocumentUploadPanel projectId={scopedProjectId} documents={docs} onUpload={onUpload} onDone={() => setUploadOpen(false)} onCancel={() => setUploadOpen(false)} /> : null}
+        {uploadOpen && onUpload ? <DocumentUploadPanel projectId={scopedProjectId} documents={docs} onUpload={onUpload} onUploadComplete={onRetryParseComplete} onDone={() => setUploadOpen(false)} onCancel={() => setUploadOpen(false)} /> : null}
         <DocumentRows docs={docs} versions={versions} projects={projects} currentUser={currentUser} canDownload={canDownload} omitProject={Boolean(projectId)} onDelete={onDelete} onRetryParse={onRetryParse} onRetryParseComplete={onRetryParseComplete} assignableProjects={projects} defaultProjectId={scopedProjectId} emptyLabel={projectName ? `No documents for ${projectName} yet. Upload a script, treatment, outline, or coverage document.` : "No documents match this view."} />
       </Panel>
     );
@@ -4403,6 +4415,7 @@ function Scripts({
               projectId={uploadTarget === "INBOX" ? undefined : scopedProjectId}
               documents={uploadTarget === "INBOX" ? incomingDocs : activeProjectDocs}
               onUpload={onUpload}
+              onUploadComplete={onRetryParseComplete}
               onDone={() => setUploadOpen(false)}
               onCancel={() => setUploadOpen(false)}
             />
@@ -4514,12 +4527,14 @@ function DocumentUploadPanel({
   projectId,
   documents,
   onUpload,
+  onUploadComplete,
   onDone,
   onCancel
 }: {
   projectId?: string;
   documents: HammerDocument[];
   onUpload: (input: DocumentUploadInput) => Promise<DocumentUploadResult | void>;
+  onUploadComplete?: () => Promise<void> | void;
   onDone: () => void;
   onCancel: () => void;
 }) {
@@ -4535,9 +4550,12 @@ function DocumentUploadPanel({
   const [status, setStatus] = useState("");
   const [statusTone, setStatusTone] = useState<"idle" | "working" | "success" | "warning" | "error">("idle");
   const [progressSteps, setProgressSteps] = useState<UploadProgressStep[]>(uploadProgressSteps());
+  const [parseSummary, setParseSummary] = useState<UploadParseSummary | null>(null);
   const [recentUploadJobs, setRecentUploadJobs] = useState<UploadJobSnapshot[]>([]);
   const [busy, setBusy] = useState(false);
+  const [finished, setFinished] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const completedRefreshRef = useRef(false);
   const selectedDocument = documents.find((document) => document.id === documentId);
 
   useEffect(() => {
@@ -4590,6 +4608,9 @@ function DocumentUploadPanel({
       return;
     }
     setBusy(true);
+    setFinished(false);
+    completedRefreshRef.current = false;
+    setParseSummary(null);
     setStatusTone("working");
     setStatus(`Uploading ${file.name} (${formatBytes(file.size)}). Keep this window open until GreenLight confirms the file is saved.`);
     setProgressSteps(uploadProgressSteps("uploading", `Sending ${file.name} to GreenLight...`));
@@ -4611,17 +4632,22 @@ function DocumentUploadPanel({
         updateProgress("parsing", "active", "Parsing readable text in the background...");
         setStatus("File saved. GreenLight is parsing text now; scanned PDFs may finish with an OCR warning.");
         const uploadJob = await waitForUploadJob(result.uploadJob.id);
+        setParseSummary(uploadJobSummary(uploadJob));
         if (uploadJob.status === "COMPLETE") {
-          updateProgress("parsing", "done", `Parsed ${(uploadJob.characterCount ?? 0).toLocaleString()} characters.`);
+          updateProgress("parsing", "done", parseSummaryLine(uploadJob));
           updateProgress("complete", "done", "Document is ready for breakdown and diff tools.");
-          setStatus("Upload complete. Text parsed and workspace refreshed.");
+          setStatus("Upload complete. Text parsed successfully.");
           setStatusTone("success");
+          await refreshAfterUploadComplete();
+          setFinished(true);
         } else if (uploadJob.status === "WARNING") {
           const message = uploadJob.warning || uploadJob.versionNotes || "Document is saved, but parsing finished with a warning.";
           updateProgress("parsing", "warning", message);
           updateProgress("complete", "warning", uploadJob.characterCount ? "Document is saved, but parsing needs attention." : "Original file is stored, but this document will stay hidden until readable text is available.");
           setStatus(uploadJob.characterCount ? `Uploaded with warning: ${message}` : `Stored but not ready: ${message} Upload a text-readable copy to make this document visible for review, diff, and breakdown.`);
           setStatusTone("warning");
+          if (uploadJob.characterCount) await refreshAfterUploadComplete();
+          setFinished(Boolean(uploadJob.characterCount));
         } else {
           const message = uploadJob.error || "Upload failed while GreenLight was processing the file.";
           updateProgress("parsing", "error", message);
@@ -4633,7 +4659,6 @@ function DocumentUploadPanel({
         void refreshRecentUploads();
         if (uploadJob.status === "COMPLETE" || (uploadJob.status === "WARNING" && Boolean(uploadJob.characterCount))) {
           setFile(null);
-          window.setTimeout(onDone, 900);
         }
         return;
       }
@@ -4645,18 +4670,23 @@ function DocumentUploadPanel({
         if (extraction.state === "done") {
           updateProgress("parsing", "done", `Parsed ${extraction.characterCount.toLocaleString()} characters.`);
           updateProgress("complete", "done", "Document is ready for breakdown and diff tools.");
-          setStatus("Upload complete. Text parsed and workspace refreshed.");
+          setParseSummary({ fileName: result.version.fileName, characterCount: extraction.characterCount });
+          setStatus("Upload complete. Text parsed successfully.");
           setStatusTone("success");
+          await refreshAfterUploadComplete();
+          setFinished(true);
         } else {
           updateProgress("parsing", "warning", extraction.message);
           updateProgress("complete", "warning", extraction.characterCount ? "Document is saved, but parsing needs attention." : "Original file is stored, but this document will stay hidden until readable text is available.");
+          setParseSummary({ fileName: result.version.fileName, characterCount: extraction.characterCount, warning: extraction.message });
           setStatus(extraction.characterCount ? `Uploaded with warning: ${extraction.message}` : `Stored but not ready: ${extraction.message} Upload a text-readable copy to make this document visible for review, diff, and breakdown.`);
           setStatusTone("warning");
+          if (extraction.characterCount > 0) await refreshAfterUploadComplete();
+          setFinished(extraction.characterCount > 0);
         }
         void refreshRecentUploads();
         if (extraction.state === "done" || extraction.characterCount > 0) {
           setFile(null);
-          window.setTimeout(onDone, 900);
         }
         return;
       }
@@ -4672,9 +4702,10 @@ function DocumentUploadPanel({
       updateProgress("complete", "done", "Document is ready.");
       setStatus("Uploaded. Refreshing the script list...");
       setStatusTone("success");
+      await refreshAfterUploadComplete();
+      setFinished(true);
       setFile(null);
       void refreshRecentUploads();
-      window.setTimeout(onDone, 700);
     } catch (error) {
       updateProgress("uploading", "error", uploadFailureMessage(error));
       updateProgress("complete", "error", "Upload did not complete.");
@@ -4683,6 +4714,12 @@ function DocumentUploadPanel({
     } finally {
       setBusy(false);
     }
+  }
+
+  async function refreshAfterUploadComplete() {
+    if (completedRefreshRef.current) return;
+    completedRefreshRef.current = true;
+    await onUploadComplete?.();
   }
 
   const modal = (
@@ -4695,7 +4732,7 @@ function DocumentUploadPanel({
               {selectedDocument ? `Attach a new file version to ${selectedDocument.title}.` : "Choose a file first, then add the document details before uploading."}
             </p>
           </div>
-          <button type="button" onClick={onCancel} disabled={busy} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100 disabled:cursor-not-allowed disabled:opacity-50" aria-label="Close upload window">
+          <button type="button" onClick={finished ? onDone : onCancel} disabled={busy} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100 disabled:cursor-not-allowed disabled:opacity-50" aria-label="Close upload window">
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -4748,6 +4785,7 @@ function DocumentUploadPanel({
         <PrimaryButton icon={busy ? Loader2 : UploadCloud} label={busy ? "Uploading..." : documentId ? "Upload Version" : "Upload Document"} disabled={busy} />
       </div>
       <UploadProgressPanel steps={progressSteps} />
+      <ParseSummaryPanel summary={parseSummary} />
       <RecentUploadJobsPanel jobs={recentUploadJobs} />
       {status ? (
         <div className={cn(
@@ -4763,7 +4801,7 @@ function DocumentUploadPanel({
         </div>
       ) : null}
         <div className="md:col-span-2 flex justify-end gap-2 border-t border-white/10 pt-3">
-          <button type="button" onClick={onCancel} disabled={busy} className="rounded-md border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 transition hover:border-white/20 hover:text-studio-100 disabled:cursor-not-allowed disabled:opacity-50">Cancel</button>
+          <button type="button" onClick={finished ? onDone : onCancel} disabled={busy} className="rounded-md border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 transition hover:border-white/20 hover:text-studio-100 disabled:cursor-not-allowed disabled:opacity-50">{finished ? "Done" : "Cancel"}</button>
         </div>
       </form>
     </div>
@@ -4775,11 +4813,15 @@ function DocumentUploadPanel({
 function UploadProgressPanel({ steps }: { steps: UploadProgressStep[] }) {
   const hasStarted = steps.some((step) => step.state !== "pending");
   if (!hasStarted) return null;
+  const progress = uploadProgressPercent(steps);
   return (
     <div className="md:col-span-2 rounded-lg border border-white/10 bg-studio-950/45 p-3">
       <div className="mb-2 flex items-center justify-between gap-3">
         <p className="text-xs font-semibold uppercase tracking-[0.14em] text-studio-300">Upload Progress</p>
-        <span className="text-[11px] text-studio-400">Keep this window open</span>
+        <span className="text-[11px] text-studio-400">{progress}%</span>
+      </div>
+      <div className="mb-3 h-1.5 overflow-hidden rounded-full bg-white/10">
+        <div className="h-full rounded-full bg-emerald-400 transition-all duration-500" style={{ width: `${progress}%` }} />
       </div>
       <div className="grid gap-2 md:grid-cols-5">
         {steps.map((step) => (
@@ -4802,6 +4844,38 @@ function UploadProgressPanel({ steps }: { steps: UploadProgressStep[] }) {
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function ParseSummaryPanel({ summary }: { summary: UploadParseSummary | null }) {
+  if (!summary) return null;
+  const stats = [
+    { label: "Pages", value: summary.pageCount },
+    { label: "Characters", value: summary.characterCount },
+    { label: "Words", value: summary.wordCount },
+    { label: "Scenes", value: summary.sceneCount }
+  ].filter((item) => typeof item.value === "number");
+  return (
+    <div className="md:col-span-2 rounded-lg border border-emerald-300/20 bg-emerald-400/5 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-200">Parse Summary</p>
+          {summary.fileName ? <p className="mt-1 max-w-xl truncate text-[12px] text-studio-300">{summary.fileName}</p> : null}
+        </div>
+        {summary.warning ? <span className="rounded border border-yellow-300/30 bg-yellow-300/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-yellow-100">Warning</span> : <span className="rounded border border-emerald-300/30 bg-emerald-400/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-emerald-100">Parsed</span>}
+      </div>
+      {stats.length ? (
+        <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
+          {stats.map((item) => (
+            <div key={item.label} className="rounded-md border border-white/10 bg-studio-950/35 px-3 py-2">
+              <p className="text-[10px] uppercase tracking-[0.12em] text-studio-500">{item.label}</p>
+              <p className="mt-1 text-sm font-semibold text-studio-100">{item.value?.toLocaleString()}</p>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {summary.warning ? <p className="mt-3 text-xs leading-5 text-yellow-100">{summary.warning}</p> : null}
     </div>
   );
 }
@@ -4837,6 +4911,36 @@ function uploadJobDisplayDetail(job: UploadJobSnapshot) {
   if (job.status === "WARNING" && job.characterCount) return `Stored with warning / ${job.characterCount.toLocaleString()} chars parsed`;
   if (job.status === "FAILED") return "Upload failed before it was ready";
   return `${job.stage}${job.characterCount ? ` / ${job.characterCount.toLocaleString()} chars` : ""}`;
+}
+
+function uploadJobSummary(job: UploadJobSnapshot): UploadParseSummary {
+  return {
+    fileName: job.fileName,
+    pageCount: job.pageCount,
+    characterCount: job.characterCount,
+    wordCount: job.wordCount,
+    sceneCount: job.sceneCount,
+    warning: job.warning || job.error
+  };
+}
+
+function parseSummaryLine(job: UploadJobSnapshot) {
+  const parts = [
+    job.pageCount ? `${job.pageCount.toLocaleString()} pages` : "",
+    job.characterCount ? `${job.characterCount.toLocaleString()} characters` : "",
+    job.sceneCount ? `${job.sceneCount.toLocaleString()} scenes` : ""
+  ].filter(Boolean);
+  return parts.length ? `Parsed ${parts.join(", ")}.` : "Parsed readable text.";
+}
+
+function uploadProgressPercent(steps: UploadProgressStep[]) {
+  const units: number[] = steps.map((step) => {
+    if (step.state === "done") return 1;
+    if (step.state === "warning" || step.state === "error") return 1;
+    if (step.state === "active") return 0.55;
+    return 0;
+  });
+  return Math.max(5, Math.min(100, Math.round((units.reduce((sum, value) => sum + value, 0) / steps.length) * 100)));
 }
 
 function uploadJobTone(status: UploadJobSnapshot["status"]) {
@@ -4881,6 +4985,7 @@ function ParseProgressModal({
 }) {
   const [statusTone, setStatusTone] = useState<"working" | "success" | "warning" | "error">(initialError ? "error" : "working");
   const [message, setMessage] = useState(initialError || "Starting parser against the stored original file...");
+  const [parseSummary, setParseSummary] = useState<UploadParseSummary | null>(null);
   const onCompleteRef = useRef(onComplete);
   const completedRefreshRef = useRef(false);
   const [steps, setSteps] = useState<UploadProgressStep[]>([
@@ -4904,15 +5009,17 @@ function ParseProgressModal({
       .then(async (job) => {
         if (cancelled) return;
         if (job.status === "COMPLETE") {
+          setParseSummary(uploadJobSummary(job));
           setStatusTone("success");
-          setMessage(`Parse complete. GreenLight extracted ${(job.characterCount ?? 0).toLocaleString()} readable characters.`);
-          setSteps((current) => current.map((step) => step.id === "parsing" ? { ...step, state: "done", detail: `Parsed ${(job.characterCount ?? 0).toLocaleString()} characters.` } : step.id === "complete" ? { ...step, state: "done", detail: "Document is ready for breakdown and diff tools." } : step));
+          setMessage(`Parse complete. ${parseSummaryLine(job)}`);
+          setSteps((current) => current.map((step) => step.id === "parsing" ? { ...step, state: "done", detail: parseSummaryLine(job) } : step.id === "complete" ? { ...step, state: "done", detail: "Document is ready for breakdown and diff tools." } : step));
           if (!completedRefreshRef.current) {
             completedRefreshRef.current = true;
             await onCompleteRef.current?.();
           }
         } else if (job.status === "WARNING") {
           const warning = job.warning || job.versionNotes || "Parsing finished with a warning.";
+          setParseSummary(uploadJobSummary(job));
           setStatusTone("warning");
           setMessage(job.characterCount ? `Parsed with warning: ${warning}` : `Parse issue: ${warning}`);
           setSteps((current) => current.map((step) => step.id === "parsing" ? { ...step, state: "warning", detail: warning } : step.id === "complete" ? { ...step, state: "warning", detail: job.characterCount ? "Document has text but needs review." : "Readable text was not extracted." } : step));
@@ -4961,6 +5068,9 @@ function ParseProgressModal({
         </div>
         <div className="mt-4">
           <UploadProgressPanel steps={steps} />
+        </div>
+        <div className="mt-3">
+          <ParseSummaryPanel summary={parseSummary} />
         </div>
         <div className={cn(
           "mt-3 flex items-start gap-2 rounded-md border px-3 py-2 text-xs leading-5",
@@ -7333,13 +7443,15 @@ function ScriptVersions({
   document,
   versions = hammerVersions,
   currentUser,
-  onUpload
+  onUpload,
+  onUploadComplete
 }: {
   documentId: string;
   document: HammerDocument;
   versions?: HammerDocumentVersion[];
   currentUser?: HammerUser;
   onUpload?: (input: DocumentUploadInput) => Promise<DocumentUploadResult | void>;
+  onUploadComplete?: () => Promise<void> | void;
 }) {
   const [uploadOpen, setUploadOpen] = useState(false);
   const textState = useDocumentVersionsWithText(documentId, versions);
@@ -7367,7 +7479,7 @@ function ScriptVersions({
     <div className="space-y-4">
       <Panel>
         <SectionHeader eyebrow="History" title="Document Versions" action={onUpload ? <PrimaryButton icon={UploadCloud} label="Upload New Version" onClick={() => setUploadOpen(true)} /> : undefined} />
-        {uploadOpen && onUpload ? <DocumentUploadPanel projectId={document.projectId} documents={[document]} onUpload={onUpload} onDone={() => setUploadOpen(false)} onCancel={() => setUploadOpen(false)} /> : null}
+        {uploadOpen && onUpload ? <DocumentUploadPanel projectId={document.projectId} documents={[document]} onUpload={onUpload} onUploadComplete={onUploadComplete} onDone={() => setUploadOpen(false)} onCancel={() => setUploadOpen(false)} /> : null}
         <div className="grid gap-3">
           {documentVersions.map((version) => <div key={version.id} className="rounded-lg border border-white/10 bg-white/[0.03] p-3"><div className="flex items-center justify-between gap-3"><p className="text-[13px] font-semibold text-studio-100">Version {version.versionNumber}: {version.fileName}</p><div className="flex shrink-0 items-center gap-1.5">{canDownload ? <DownloadFileLink fileName={version.fileName} dataUrl={version.dataUrl} fallbackText={version.extractedText} resourceType="documentVersion" resourceId={version.id} currentUser={currentUser} compact /> : null}<Badge value={version.status} /></div></div><p className="mt-1.5 text-xs text-studio-300">{version.notes}</p>{version.markdownNotes ? <p className="mt-1 text-xs font-semibold text-amberline">Markdown notes attached</p> : null}<p className="mt-1 text-[11px] text-studio-500">{version.fileType} / {formatBytes(version.fileSize)} / {version.createdAt}</p></div>)}
         </div>

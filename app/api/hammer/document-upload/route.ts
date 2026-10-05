@@ -4,6 +4,7 @@ import { forbidden, isDatabaseConfigured, requireUser, type AuthenticatedUser } 
 import { prisma } from "@/lib/db";
 import { readStoredUpload, storeUpload } from "@/lib/server-file-storage";
 import { extractPdfTextWithFallback } from "@/lib/server-pdf-text";
+import { parseScriptText } from "@/lib/script-parser";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -366,6 +367,7 @@ async function extractAndPersistUploadText(input: {
 }) {
   try {
     const extraction = await extractUploadText(input.fileName, input.fileType, input.bytes, input.warnOnEmptyText);
+    const summary = buildExtractionSummary(extraction.text, input.fileName, extraction.pageCount);
     const uploadStatus = extraction.warning ? "WARNING" : "COMPLETE";
     await prisma.$transaction(async (tx) => {
       await tx.documentVersion.update({
@@ -383,7 +385,7 @@ async function extractAndPersistUploadText(input: {
           warning: extraction.warning,
           error: null,
           completedAt: new Date(),
-          detailJson: { documentId: input.documentId, versionId: input.versionId, fileName: input.fileName, extractedChars: extraction.text.length, extractionWarning: extraction.warning ?? null } as Prisma.InputJsonValue
+          detailJson: { documentId: input.documentId, versionId: input.versionId, fileName: input.fileName, extractedChars: extraction.text.length, pageCount: summary.pageCount, sceneCount: summary.sceneCount, wordCount: summary.wordCount, extractionWarning: extraction.warning ?? null } as Prisma.InputJsonValue
         }
       });
       await tx.auditLog.create({
@@ -429,6 +431,24 @@ async function extractAndPersistUploadText(input: {
 async function updateUploadJob(id: string, data: Parameters<typeof prisma.uploadJob.update>[0]["data"]) {
   if (!id) return null;
   return prisma.uploadJob.update({ where: { id }, data });
+}
+
+function buildExtractionSummary(text: string, fileName: string, pageCount?: number) {
+  const trimmed = text.trim();
+  const wordCount = trimmed ? trimmed.split(/\s+/).filter(Boolean).length : 0;
+  let sceneCount = 0;
+  if (trimmed) {
+    try {
+      sceneCount = parseScriptText(trimmed, { projectId: "upload", versionName: "parse-summary", fileName }).scenes.length;
+    } catch {
+      sceneCount = 0;
+    }
+  }
+  return {
+    pageCount: pageCount ?? null,
+    sceneCount,
+    wordCount
+  };
 }
 
 async function extractUploadText(fileName: string, fileType: string, bytes: Buffer, warnOnEmptyText = true) {
@@ -568,8 +588,10 @@ function toVersion(version: { id: string; documentId: string; versionNumber: num
   return { id: version.id, documentId: version.documentId, versionNumber: version.versionNumber, status: version.status, fileName: version.fileName, fileType: version.fileType, fileSize: version.fileSize, storagePath: version.storagePath, dataUrl: version.dataUrl ?? undefined, uploadedById: version.uploadedById ?? "", createdAt: dateString(version.createdAt), notes: version.notes ?? "", markdownNotes: version.markdownNotes ?? undefined, extractedText: version.extractedText ?? "" };
 }
 
-function toUploadJob(job: ({ id: string; requestId: string; status: string; stage: string; fileName: string; fileType: string; fileSize: number; storagePath: string | null; projectId: string | null; documentId: string | null; documentVersionId: string | null; warning: string | null; error: string | null; createdAt: Date; updatedAt: Date; completedAt: Date | null; documentVersion?: { id: string; documentId: string; extractedText: string | null; notes: string | null } | null } | null)) {
+function toUploadJob(job: ({ id: string; requestId: string; status: string; stage: string; fileName: string; fileType: string; fileSize: number; storagePath: string | null; projectId: string | null; documentId: string | null; documentVersionId: string | null; warning: string | null; error: string | null; detailJson?: Prisma.JsonValue | null; createdAt: Date; updatedAt: Date; completedAt: Date | null; documentVersion?: { id: string; documentId: string; extractedText: string | null; notes: string | null } | null } | null)) {
   if (!job) return undefined;
+  const detail = job.detailJson && typeof job.detailJson === "object" && !Array.isArray(job.detailJson) ? job.detailJson as Record<string, unknown> : {};
+  const fallbackSummary = buildExtractionSummary(job.documentVersion?.extractedText ?? "", job.fileName);
   return {
     id: job.id,
     requestId: job.requestId,
@@ -585,11 +607,18 @@ function toUploadJob(job: ({ id: string; requestId: string; status: string; stag
     warning: job.warning ?? undefined,
     error: job.error ?? undefined,
     characterCount: job.documentVersion?.extractedText?.length ?? 0,
+    pageCount: numberDetail(detail.pageCount) ?? undefined,
+    sceneCount: numberDetail(detail.sceneCount) ?? fallbackSummary.sceneCount,
+    wordCount: numberDetail(detail.wordCount) ?? fallbackSummary.wordCount,
     versionNotes: job.documentVersion?.notes ?? undefined,
     createdAt: job.createdAt.toISOString(),
     updatedAt: job.updatedAt.toISOString(),
     completedAt: job.completedAt?.toISOString()
   };
+}
+
+function numberDetail(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function documentTypeField(value: FormDataEntryValue | null): DocumentType {
