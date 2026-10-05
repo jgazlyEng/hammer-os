@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Archive, ArrowLeft, ArrowUpDown, CalendarClock, CheckCircle2, ChevronDown, ContactRound, Download, FileDiff, FileText, Gauge, GripVertical, ImagePlus, Loader2, MessageSquare, PackageCheck, Pencil, Plus, Search, Share2, ShieldCheck, Trash2, UploadCloud, UsersRound, X } from "lucide-react";
+import { Archive, ArrowLeft, ArrowUpDown, CalendarClock, CheckCircle2, ChevronDown, Circle, ContactRound, Download, FileDiff, FileText, Gauge, GripVertical, ImagePlus, Loader2, MessageSquare, PackageCheck, Pencil, Plus, Search, Share2, ShieldCheck, Trash2, UploadCloud, UsersRound, X } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { EmptyState, Panel, SectionHeader } from "@/components/ui";
 import {
@@ -8541,9 +8541,9 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
       if (!run) throw new Error("Breakdown run was removed before it completed.");
       if (run.status === "FAILED") throw new Error(run.error || "Breakdown failed.");
       if (run.status !== "RUNNING") return run;
-      const message = `Claude breakdown is processing scene batches${".".repeat((attempt % 3) + 1)}`;
-      setBreakdownStatus(message);
-      setBreakdownModal((current) => current?.tone === "working" ? { ...current, message, run } : current);
+      const progressCopy = breakdownRunningCopy(attempt, run);
+      setBreakdownStatus(progressCopy.message);
+      setBreakdownModal((current) => current?.tone === "working" ? { ...current, ...progressCopy, run, pollCount: attempt + 1 } : current);
     }
     throw new Error("Breakdown is still running. Refresh this page in a few minutes to check the saved result.");
   }, [loadPersistedBreakdownRuns]);
@@ -8561,11 +8561,12 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
     }
     let cancelled = false;
     setRunningBreakdown(true);
-    setBreakdownStatus("Claude breakdown is processing scene batches. Keeping this page updated...");
+    const progressCopy = breakdownRunningCopy(0, activeRun);
+    setBreakdownStatus(progressCopy.message);
     setBreakdownModal({
       open: true,
       tone: "working",
-      message: "Claude breakdown is processing scene batches. Keeping this page updated...",
+      ...progressCopy,
       run: activeRun,
       startedAt: Date.now()
     });
@@ -8574,14 +8575,14 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
         if (!cancelled) {
           const message = breakdownCompleteMessage(completedRun);
           setBreakdownStatus(message);
-          setBreakdownModal((current) => current ? { ...current, tone: "success", message, run: completedRun } : current);
+          setBreakdownModal((current) => current ? { ...current, tone: "success", phase: "Breakdown saved", message, detail: "GreenLight has refreshed the saved breakdown rows for this script version.", run: completedRun } : current);
         }
       })
       .catch((error) => {
         if (!cancelled) {
           const message = error instanceof Error ? error.message : "Breakdown failed.";
           setBreakdownStatus(message);
-          setBreakdownModal((current) => current ? { ...current, tone: "error", message } : current);
+          setBreakdownModal((current) => current ? { ...current, tone: "error", phase: "Breakdown failed", message, detail: "The run stopped before GreenLight could save a usable breakdown. Check the error, then remove or retry the run." } : current);
         }
       })
       .finally(() => {
@@ -8590,7 +8591,7 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
     return () => {
       cancelled = true;
     };
-  }, [activeRun?.createdAt, activeRun?.id, activeRun?.status, version?.id, waitForBreakdownCompletion, workspaceMode]);
+  }, [activeRun, version?.id, waitForBreakdownCompletion, workspaceMode]);
 
   useEffect(() => {
     if (workspaceMode !== "database" || !version?.id) {
@@ -8625,7 +8626,9 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
       setBreakdownModal({
         open: true,
         tone: "working",
-        message: "Starting Claude production breakdown...",
+        phase: "Starting breakdown",
+        message: "GreenLight is creating a breakdown run for the selected script version.",
+        detail: "This confirms the selected document version and prepares the saved script text for Claude.",
         startedAt: Date.now()
       });
       const runStartedAt = Date.now();
@@ -8639,17 +8642,20 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
         if (!response.ok) throw new Error(data?.error || "Breakdown failed.");
         if (data?.run) {
           setPersistedRuns((current) => [data.run!, ...current.filter((run) => run.id !== data.run!.id)]);
-          setBreakdownModal((current) => current ? { ...current, run: data.run, message: data.run?.status === "RUNNING" ? "Claude breakdown started. Feature-length scripts may process in scene batches." : "Breakdown run returned." } : current);
+          const progressCopy = data.run?.status === "RUNNING"
+            ? breakdownRunningCopy(0, data.run)
+            : { phase: "Breakdown returned", message: "GreenLight received a completed breakdown response.", detail: "The returned rows are being loaded into the table." };
+          setBreakdownModal((current) => current ? { ...current, ...progressCopy, run: data.run } : current);
           if (data.run.status === "RUNNING") {
-            setBreakdownStatus("Claude breakdown started. Feature-length scripts may process in scene batches.");
+            setBreakdownStatus(progressCopy.message);
             const completedRun = await waitForBreakdownCompletion(version.id, data.run.id);
             const message = breakdownCompleteMessage(completedRun);
             setBreakdownStatus(message);
-            setBreakdownModal((current) => current ? { ...current, tone: "success", message, run: completedRun } : current);
+            setBreakdownModal((current) => current ? { ...current, tone: "success", phase: "Breakdown saved", message, detail: "GreenLight has refreshed the saved breakdown rows for this script version.", run: completedRun } : current);
           } else {
             const message = data.run.error ? data.run.error : breakdownCompleteMessage(data.run);
             setBreakdownStatus(message);
-            setBreakdownModal((current) => current ? { ...current, tone: data.run?.status === "FAILED" ? "error" : "success", message, run: data.run } : current);
+            setBreakdownModal((current) => current ? { ...current, tone: data.run?.status === "FAILED" ? "error" : "success", phase: data.run?.status === "FAILED" ? "Breakdown failed" : "Breakdown saved", message, detail: data.run?.status === "FAILED" ? "Claude or GreenLight returned an error before a usable table could be saved." : "GreenLight loaded the saved breakdown table.", run: data.run } : current);
           }
         }
       } catch (error) {
@@ -8660,16 +8666,16 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
           if (completedRun) {
             const message = breakdownCompleteMessage(completedRun);
             setBreakdownStatus(message);
-            setBreakdownModal((current) => current ? { ...current, tone: "success", message, run: completedRun } : current);
+            setBreakdownModal((current) => current ? { ...current, tone: "success", phase: "Breakdown saved", message, detail: "The request looked interrupted, but GreenLight found the completed saved breakdown.", run: completedRun } : current);
           } else {
             const message = error instanceof Error ? error.message : "Breakdown failed.";
             setBreakdownStatus(message);
-            setBreakdownModal((current) => current ? { ...current, tone: "error", message } : current);
+            setBreakdownModal((current) => current ? { ...current, tone: "error", phase: "Breakdown failed", message, detail: "GreenLight checked for a saved result but could not find one for this run." } : current);
           }
         } catch {
           const message = error instanceof Error ? error.message : "Breakdown failed.";
           setBreakdownStatus(message);
-          setBreakdownModal((current) => current ? { ...current, tone: "error", message } : current);
+          setBreakdownModal((current) => current ? { ...current, tone: "error", phase: "Breakdown failed", message, detail: "GreenLight could not confirm a saved result after the request failed." } : current);
         }
       } finally {
         setRunningBreakdown(false);
@@ -8806,9 +8812,12 @@ function BreakdownSourceDiagnostics({ run }: { run: HammerBreakdownRun }) {
 type BreakdownProgressModalState = {
   open: boolean;
   tone: "working" | "success" | "error";
+  phase: string;
   message: string;
+  detail?: string;
   run?: HammerBreakdownRun;
   startedAt: number;
+  pollCount?: number;
 };
 
 function BreakdownProgressModal({
@@ -8833,8 +8842,20 @@ function BreakdownProgressModal({
 
   const elapsedSeconds = Math.max(0, Math.round((now - state.startedAt) / 1000));
   const progress = state.tone === "success" ? 100 : state.tone === "error" ? 100 : Math.min(88, Math.max(12, 12 + Math.floor(elapsedSeconds / 3) * 4));
-  const sceneCount = breakdownStatNumber(state.run?.stats, "summarySceneCount") ?? breakdownStatNumber(state.run?.stats, "outlineSceneCount");
+  const processedSceneCount = breakdownStatNumber(state.run?.stats, "processedSceneCount");
+  const totalSceneCount = breakdownStatNumber(state.run?.stats, "totalSceneCount") ?? breakdownStatNumber(state.run?.stats, "outlineSceneCount");
+  const sceneCount = breakdownStatNumber(state.run?.stats, "summarySceneCount") ?? totalSceneCount;
+  const completedBatchCount = breakdownStatNumber(state.run?.stats, "completedBatchCount");
+  const totalBatchCount = breakdownStatNumber(state.run?.stats, "totalBatchCount");
+  const partialElementCount = breakdownStatNumber(state.run?.stats, "partialElementCount");
   const sourceCharacters = breakdownStatNumber(state.run?.stats, "sourceTextCharacters");
+  const steps = breakdownProgressSteps(state, elapsedSeconds);
+  const sceneProgress = processedSceneCount !== undefined && totalSceneCount
+    ? `${Math.min(processedSceneCount, totalSceneCount).toLocaleString()} / ${totalSceneCount.toLocaleString()}`
+    : sceneCount !== undefined ? sceneCount.toLocaleString() : "Pending";
+  const batchProgress = completedBatchCount !== undefined && totalBatchCount
+    ? `${Math.min(completedBatchCount, totalBatchCount).toLocaleString()} / ${totalBatchCount.toLocaleString()}`
+    : state.pollCount ? state.pollCount.toLocaleString() : isWorking ? "Starting" : "Done";
   const categories = state.run?.summary?.categories && typeof state.run.summary.categories === "object" && !Array.isArray(state.run.summary.categories)
     ? state.run.summary.categories as Record<string, unknown>
     : {};
@@ -8863,7 +8884,7 @@ function BreakdownProgressModal({
               {state.tone === "working" ? <Loader2 className="h-4 w-4 animate-spin text-sky-200" /> : null}
               {state.tone === "success" ? <CheckCircle2 className="h-4 w-4 text-emerald-300" /> : null}
               {state.tone === "error" ? <X className="h-4 w-4 text-rose-300" /> : null}
-              <p className="text-sm font-semibold text-studio-100">{breakdownModalTitle(state.tone)}</p>
+              <p className="text-sm font-semibold text-studio-100">{state.phase || breakdownModalTitle(state.tone)}</p>
             </div>
             <span className="text-[11px] text-studio-500">{formatElapsed(elapsedSeconds)}</span>
           </div>
@@ -8879,13 +8900,43 @@ function BreakdownProgressModal({
             state.tone === "success" && "border-emerald-300/30 bg-emerald-400/12 text-emerald-100",
             state.tone === "error" && "border-rose-300/35 bg-rose-500/10 text-rose-100"
           )}>{state.message}</p>
+          {state.detail ? <p className="mt-2 text-xs leading-5 text-studio-400">{state.detail}</p> : null}
         </div>
 
         <div className="mt-3 grid gap-2 md:grid-cols-4">
           <BreakdownProgressStat label="Run" value={state.run ? statusLabel(state.run.status) : "Queued"} />
-          <BreakdownProgressStat label="Items" value={state.run ? state.run.elements.length.toLocaleString() : "Pending"} />
-          <BreakdownProgressStat label="Scenes" value={sceneCount !== undefined ? sceneCount.toLocaleString() : "Pending"} />
+          <BreakdownProgressStat label={totalBatchCount ? "Batches" : "Checks"} value={batchProgress} />
+          <BreakdownProgressStat label="Scenes" value={sceneProgress} />
           <BreakdownProgressStat label="Text" value={sourceCharacters !== undefined ? `${sourceCharacters.toLocaleString()} chars` : "Pending"} />
+        </div>
+        {partialElementCount !== undefined ? (
+          <p className="mt-2 text-[11px] text-studio-500">
+            Claude has returned {partialElementCount.toLocaleString()} production item{partialElementCount === 1 ? "" : "s"} so far. GreenLight will save the final review table when all batches finish.
+          </p>
+        ) : null}
+
+        <div className="mt-3 rounded-lg border border-white/10 bg-white/[0.025] p-3">
+          <p className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">What GreenLight Is Doing</p>
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            {steps.map((step) => (
+              <div key={step.label} className={cn(
+                "rounded-md border px-3 py-2",
+                step.state === "done" && "border-emerald-300/25 bg-emerald-400/10",
+                step.state === "active" && "border-sky-300/30 bg-sky-400/10",
+                step.state === "error" && "border-rose-300/30 bg-rose-500/10",
+                step.state === "waiting" && "border-white/10 bg-black/10"
+              )}>
+                <div className="flex items-center gap-2">
+                  {step.state === "active" ? <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-200" /> : null}
+                  {step.state === "done" ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-300" /> : null}
+                  {step.state === "error" ? <X className="h-3.5 w-3.5 text-rose-300" /> : null}
+                  {step.state === "waiting" ? <Circle className="h-3.5 w-3.5 text-studio-500" /> : null}
+                  <p className="text-xs font-semibold text-studio-100">{step.label}</p>
+                </div>
+                <p className="mt-1 text-[11px] leading-4 text-studio-400">{step.description}</p>
+              </div>
+            ))}
+          </div>
         </div>
 
         {topCategories.length ? (
@@ -8921,6 +8972,77 @@ function BreakdownProgressStat({ label, value }: { label: string; value: string 
       <p className="mt-1 truncate text-sm font-semibold text-studio-100">{value}</p>
     </div>
   );
+}
+
+function breakdownRunningCopy(attempt: number, run?: HammerBreakdownRun) {
+  const processedSceneCount = breakdownStatNumber(run?.stats, "processedSceneCount");
+  const totalSceneCount = breakdownStatNumber(run?.stats, "totalSceneCount") ?? breakdownStatNumber(run?.stats, "outlineSceneCount");
+  const completedBatchCount = breakdownStatNumber(run?.stats, "completedBatchCount");
+  const totalBatchCount = breakdownStatNumber(run?.stats, "totalBatchCount");
+  const partialElementCount = breakdownStatNumber(run?.stats, "partialElementCount");
+  if (processedSceneCount !== undefined && totalSceneCount) {
+    const sceneText = `${Math.min(processedSceneCount, totalSceneCount).toLocaleString()} of ${totalSceneCount.toLocaleString()} scenes`;
+    const batchText = completedBatchCount !== undefined && totalBatchCount ? ` Batch ${Math.min(completedBatchCount, totalBatchCount).toLocaleString()} of ${totalBatchCount.toLocaleString()} is complete.` : "";
+    const itemText = partialElementCount !== undefined ? ` Claude has returned ${partialElementCount.toLocaleString()} production item${partialElementCount === 1 ? "" : "s"} so far.` : "";
+    return {
+      phase: processedSceneCount >= totalSceneCount ? "Claude response received" : "Claude scene batches running",
+      message: `GreenLight has processed ${sceneText}.${batchText}`,
+      detail: `${itemText} The final table appears after GreenLight normalizes and saves all returned rows.`.trim()
+    };
+  }
+  if (attempt < 2) {
+    return {
+      phase: "Preparing script text",
+      message: "GreenLight is reading the saved script text and confirming this version is ready for breakdown.",
+      detail: "If the script has not parsed successfully, the run will stop before Claude is called."
+    };
+  }
+  if (attempt < 16) {
+    return {
+      phase: "Sending scene batches to Claude",
+      message: "Claude is reading the screenplay in batches and returning production-breakdown rows.",
+      detail: "Feature-length scripts can take several minutes. GreenLight will keep checking for the saved result."
+    };
+  }
+  if (attempt < 60) {
+    return {
+      phase: "Normalizing returned rows",
+      message: "GreenLight is waiting for Claude's response and preparing the rows for the review table.",
+      detail: "This step maps categories, scene references, evidence, and tags into the GreenLight breakdown format."
+    };
+  }
+  return {
+    phase: "Still processing",
+    message: "This breakdown is taking longer than usual, but GreenLight is still checking the saved run.",
+    detail: "Large PDFs or long feature scripts may need extra time. You can hide this window and refresh later if needed."
+  };
+}
+
+function breakdownProgressSteps(state: BreakdownProgressModalState, elapsedSeconds: number) {
+  const activeIndex = state.tone === "working"
+    ? elapsedSeconds < 8 ? 0 : elapsedSeconds < 45 ? 1 : elapsedSeconds < 120 ? 2 : 3
+    : state.tone === "success" ? 4 : 2;
+  return [
+    {
+      label: "Validate script text",
+      description: "Confirm the selected version has readable text from the uploaded file."
+    },
+    {
+      label: "Analyze with Claude",
+      description: "Send the screenplay to the production-breakdown prompt in scene-aware batches."
+    },
+    {
+      label: "Normalize rows",
+      description: "Convert Claude’s response into categories, scene links, evidence, and searchable tags."
+    },
+    {
+      label: "Save review table",
+      description: "Write the finished breakdown rows back to GreenLight so the table can refresh."
+    }
+  ].map((step, index) => ({
+    ...step,
+    state: state.tone === "success" ? "done" : state.tone === "error" && index === activeIndex ? "error" : index < activeIndex ? "done" : index === activeIndex ? "active" : "waiting"
+  }));
 }
 
 function breakdownModalTitle(tone: BreakdownProgressModalState["tone"]) {
