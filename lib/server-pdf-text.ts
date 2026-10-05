@@ -114,9 +114,7 @@ async function extractPdfTextWithPopplerText(bytes: Buffer, pageCount?: number):
     return {
       text,
       pageCount,
-      warning: text
-        ? "Uploaded successfully. GreenLight used Poppler text extraction for this PDF."
-        : "Poppler text extraction did not find readable text in this PDF."
+      warning: text ? undefined : "Poppler text extraction did not find readable text in this PDF."
     };
   } catch (error) {
     return {

@@ -4578,8 +4578,8 @@ function DocumentUploadPanel({
         } else if (uploadJob.status === "WARNING") {
           const message = uploadJob.warning || uploadJob.versionNotes || "Document is saved, but parsing finished with a warning.";
           updateProgress("parsing", "warning", message);
-          updateProgress("complete", "warning", "Document is saved, but parsing needs attention.");
-          setStatus(`Uploaded with warning: ${message}`);
+          updateProgress("complete", "warning", uploadJob.characterCount ? "Document is saved, but parsing needs attention." : "Original file is stored, but this document will stay hidden until readable text is available.");
+          setStatus(uploadJob.characterCount ? `Uploaded with warning: ${message}` : `Stored but not ready: ${message} Upload a text-readable copy to make this document visible for review, diff, and breakdown.`);
           setStatusTone("warning");
         } else {
           const message = uploadJob.error || "Upload failed while GreenLight was processing the file.";
@@ -4590,8 +4590,10 @@ function DocumentUploadPanel({
           return;
         }
         void refreshRecentUploads();
-        setFile(null);
-        window.setTimeout(onDone, 900);
+        if (uploadJob.status === "COMPLETE" || (uploadJob.status === "WARNING" && Boolean(uploadJob.characterCount))) {
+          setFile(null);
+          window.setTimeout(onDone, 900);
+        }
         return;
       }
 
@@ -4606,13 +4608,15 @@ function DocumentUploadPanel({
           setStatusTone("success");
         } else {
           updateProgress("parsing", "warning", extraction.message);
-          updateProgress("complete", "warning", "Document is saved, but parsing needs attention.");
-          setStatus(`Uploaded with warning: ${extraction.message}`);
+          updateProgress("complete", "warning", extraction.characterCount ? "Document is saved, but parsing needs attention." : "Original file is stored, but this document will stay hidden until readable text is available.");
+          setStatus(extraction.characterCount ? `Uploaded with warning: ${extraction.message}` : `Stored but not ready: ${extraction.message} Upload a text-readable copy to make this document visible for review, diff, and breakdown.`);
           setStatusTone("warning");
         }
-        setFile(null);
         void refreshRecentUploads();
-        window.setTimeout(onDone, 900);
+        if (extraction.state === "done" || extraction.characterCount > 0) {
+          setFile(null);
+          window.setTimeout(onDone, 900);
+        }
         return;
       }
 
@@ -4767,14 +4771,14 @@ function RecentUploadJobsPanel({ jobs }: { jobs: UploadJobSnapshot[] }) {
     <div className="md:col-span-2 rounded-lg border border-white/10 bg-white/[0.025] p-3">
       <div className="mb-2 flex items-center justify-between gap-3">
         <p className="text-xs font-semibold uppercase tracking-[0.14em] text-studio-300">Recent Uploads</p>
-        <span className="text-[11px] text-studio-500">Saved in database</span>
+        <span className="text-[11px] text-studio-500">Storage and parsing status</span>
       </div>
       <div className="grid gap-1.5">
         {jobs.slice(0, 4).map((job) => (
           <div key={job.id} className="grid gap-2 rounded-md border border-white/10 bg-studio-950/35 px-2.5 py-2 text-[12px] md:grid-cols-[minmax(0,1fr)_92px_120px] md:items-center">
             <div className="min-w-0">
               <p className="truncate font-semibold text-studio-100">{job.fileName}</p>
-              <p className="mt-0.5 truncate text-[11px] text-studio-500">{job.stage}{job.characterCount ? ` / ${job.characterCount.toLocaleString()} chars` : ""}</p>
+              <p className="mt-0.5 truncate text-[11px] text-studio-500">{uploadJobDisplayDetail(job)}</p>
             </div>
             <span className={cn("rounded border px-2 py-1 text-center font-display text-[10px] uppercase", uploadJobTone(job.status))}>{statusLabel(job.status)}</span>
             <p className="truncate text-right text-[11px] text-studio-500">{formatShortDateTime(job.createdAt)}</p>
@@ -4784,6 +4788,14 @@ function RecentUploadJobsPanel({ jobs }: { jobs: UploadJobSnapshot[] }) {
       </div>
     </div>
   );
+}
+
+function uploadJobDisplayDetail(job: UploadJobSnapshot) {
+  if (job.status === "COMPLETE" && job.characterCount) return `Ready / ${job.characterCount.toLocaleString()} chars parsed`;
+  if (job.status === "WARNING" && !job.characterCount) return "Stored only / parsing did not produce readable text";
+  if (job.status === "WARNING" && job.characterCount) return `Stored with warning / ${job.characterCount.toLocaleString()} chars parsed`;
+  if (job.status === "FAILED") return "Upload failed before it was ready";
+  return `${job.stage}${job.characterCount ? ` / ${job.characterCount.toLocaleString()} chars` : ""}`;
 }
 
 function uploadJobTone(status: UploadJobSnapshot["status"]) {
@@ -5079,13 +5091,19 @@ function DocumentRows({
   const [deletingDocumentId, setDeletingDocumentId] = useState("");
   const [page, setPage] = useState(1);
   const pageSize = useResponsiveTablePageSize({ max: 16, reservedHeight: 360 });
-  const totalPages = Math.max(1, Math.ceil(docs.length / pageSize));
+  const rowModels = docs.map((doc) => {
+    const version = currentParseReadyVersionFor(doc.id, docs, versions);
+    return { doc, version, hiddenReason: version ? "" : storedOnlyDocumentReason(doc, versions) };
+  });
+  const visibleRows = rowModels.filter((row) => row.version || !row.hiddenReason);
+  const hiddenStoredOnlyCount = rowModels.length - visibleRows.length;
+  const totalPages = Math.max(1, Math.ceil(visibleRows.length / pageSize));
   const normalizedPage = Math.min(page, totalPages);
-  const pagedDocs = docs.slice((normalizedPage - 1) * pageSize, normalizedPage * pageSize);
+  const pagedRows = visibleRows.slice((normalizedPage - 1) * pageSize, normalizedPage * pageSize);
 
   useEffect(() => {
     setPage(1);
-  }, [docs.length, pageSize]);
+  }, [docs.length, pageSize, hiddenStoredOnlyCount]);
 
   async function deleteDocumentFromSlate(document: HammerDocument) {
     if (!onDelete || deletingDocumentId) return;
@@ -5098,9 +5116,17 @@ function DocumentRows({
       setDeletingDocumentId("");
     }
   }
-  if (!docs.length) return <EmptyState label={emptyLabel} />;
+  if (!visibleRows.length) {
+    return (
+      <div className="grid gap-2">
+        <EmptyState label={hiddenStoredOnlyCount ? "No parse-ready documents are available yet. Stored-only uploads are hidden until readable text is extracted." : emptyLabel} />
+        {hiddenStoredOnlyCount ? <StoredOnlyUploadNotice count={hiddenStoredOnlyCount} /> : null}
+      </div>
+    );
+  }
   return (
     <div className="table-workspace">
+      {hiddenStoredOnlyCount ? <StoredOnlyUploadNotice count={hiddenStoredOnlyCount} /> : null}
       <div className="data-scroll table-workspace-scroll">
         <table className={cn("data-table", omitProject ? "min-w-[760px]" : "min-w-[860px]")}>
           <thead className="text-[11px] uppercase tracking-[0.12em] text-studio-400">
@@ -5116,11 +5142,11 @@ function DocumentRows({
             </tr>
           </thead>
           <tbody className="divide-y divide-white/10">
-            {pagedDocs.map((doc) => {
-            const version = currentVersionFor(doc.id, docs, versions);
+            {pagedRows.map(({ doc, version }) => {
             const selectedProjectId = assignmentDrafts[doc.id] ?? "";
             const canAssignIncomingDocument = Boolean(onAssignToProject && assignableProjects.length && !doc.projectId);
             const canRunDocumentBreakdown = canBreakdownDocumentType(doc.type);
+            const isParseReady = Boolean(version && isDocumentVersionParseReady(doc, version));
             return (
               <tr key={doc.id} className="text-studio-200">
                 <td className="py-2.5 font-semibold"><Link href={`/scripts/${doc.id}`}>{doc.title}</Link></td>
@@ -5131,7 +5157,7 @@ function DocumentRows({
                 <td>{doc.writerName ?? userName(doc.createdById)}</td>
                 <td>{doc.updatedAt}</td>
                 <td className="space-x-1.5">
-                  {canRunDocumentBreakdown ? (
+                  {canRunDocumentBreakdown && isParseReady ? (
                     <Link
                       href={`/scripts/${doc.id}/breakdown`}
                       className="inline-flex items-center gap-1 rounded border border-emerald-400/25 bg-emerald-400/5 px-1.5 py-1 text-[11px] font-semibold text-emerald-300 transition hover:border-emerald-300/50 hover:text-emerald-200"
@@ -5140,6 +5166,10 @@ function DocumentRows({
                       <Gauge className="h-3 w-3" />
                       Breakdown
                     </Link>
+                  ) : canRunDocumentBreakdown ? (
+                    <span className="inline-flex rounded border border-yellow-300/30 bg-yellow-300/10 px-1.5 py-1 text-[11px] font-semibold text-yellow-100" title="Readable script text is required before breakdown can run.">
+                      Needs parse
+                    </span>
                   ) : null}
                   {canDownload && currentUser && version ? (
                     <DownloadFileLink fileName={version.fileName} dataUrl={version.dataUrl} fallbackText={version.extractedText} resourceType="documentVersion" resourceId={version.id} currentUser={currentUser} compact />
@@ -5181,13 +5211,48 @@ function DocumentRows({
           </tbody>
         </table>
       </div>
-      <PaginationFooter page={normalizedPage} pageSize={pageSize} total={docs.length} onPageChange={setPage} />
+      <PaginationFooter page={normalizedPage} pageSize={pageSize} total={visibleRows.length} onPageChange={setPage} />
+    </div>
+  );
+}
+
+function StoredOnlyUploadNotice({ count }: { count: number }) {
+  return (
+    <div className="rounded-md border border-yellow-300/25 bg-yellow-300/10 px-3 py-2 text-xs leading-5 text-yellow-100">
+      {count} stored-only upload{count === 1 ? "" : "s"} hidden from this list because readable text was not extracted. Upload a text-readable PDF/FDX/TXT/MD copy to enable review, diff, and breakdown.
     </div>
   );
 }
 
 function canBreakdownDocumentType(type: DocumentType) {
   return type === "SCRIPT" || type === "TREATMENT" || type === "OUTLINE";
+}
+
+function currentParseReadyVersionFor(documentId: string, documents: HammerDocument[], versions: HammerDocumentVersion[]) {
+  const doc = documents.find((item) => item.id === documentId);
+  if (!doc) return undefined;
+  const currentVersion = currentVersionFor(documentId, documents, versions);
+  if (currentVersion && isDocumentVersionParseReady(doc, currentVersion)) return currentVersion;
+  return versions
+    .filter((version) => version.documentId === documentId)
+    .sort((a, b) => b.versionNumber - a.versionNumber)
+    .find((version) => isDocumentVersionParseReady(doc, version));
+}
+
+function storedOnlyDocumentReason(doc: HammerDocument, versions: HammerDocumentVersion[]) {
+  const documentVersions = versions.filter((version) => version.documentId === doc.id);
+  if (!documentVersions.length) return "";
+  return documentVersions.some((version) => !isDocumentVersionParseReady(doc, version)) ? "stored-only" : "";
+}
+
+function isDocumentVersionParseReady(doc: HammerDocument, version?: HammerDocumentVersion) {
+  if (!version) return false;
+  if (!documentRequiresReadableText(doc.type)) return true;
+  return Boolean(version.extractedText?.trim());
+}
+
+function documentRequiresReadableText(type: DocumentType) {
+  return type !== "BUSINESS_DOCUMENT";
 }
 
 function Collections({
