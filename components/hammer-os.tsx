@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Archive, ArrowLeft, ArrowUpDown, CalendarClock, CheckCircle2, ChevronDown, ContactRound, Download, FileDiff, FileText, Gauge, GripVertical, ImagePlus, Loader2, MessageSquare, PackageCheck, Pencil, Plus, Search, Share2, ShieldCheck, Trash2, UploadCloud, UsersRound, X } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
@@ -1014,7 +1014,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     setLocalVersions((current) => current.map((version) => version.id === versionId ? {
       ...version,
       extractedText: "",
-      notes: combineVersionNotes(stripUploadSystemNotesClient(version.notes), "Text extraction is queued. GreenLight is re-running parsing against the original stored file.")
+      notes: appendVersionSystemNote(stripUploadSystemNotesClient(version.notes), "Text extraction is queued. GreenLight is re-running parsing against the original stored file.")
     } : version));
     return data.uploadJob;
   }
@@ -2030,7 +2030,7 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
             </div>
           </div>
         </div>
-        <div className={cn("hammer-page-body min-h-0 flex-1 pr-0.5", view === "tasks" || view === "notes" ? "overflow-hidden pb-0" : "overflow-y-auto pb-5")}>
+        <div className={cn("hammer-page-body min-h-0 flex-1 pr-0.5", view === "tasks" || view === "notes" || view === "projects" || view === "prospects" ? "overflow-hidden pb-0" : "overflow-y-auto pb-5")}>
           {content}
         </div>
       </div>
@@ -2491,7 +2491,7 @@ function Projects({
   }
 
   return (
-    <div className={cn(section === "active" ? "space-y-4" : "flex h-full min-h-0 flex-col gap-3")}>
+    <div className="flex h-full min-h-0 flex-col gap-3">
       {section === "active" ? (
         <Panel className="shrink-0">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -2501,7 +2501,7 @@ function Projects({
       ) : null}
 
       {section === "active" ? (
-        <Panel>
+        <Panel className="flex min-h-0 flex-1 flex-col">
           <ProjectTable projects={projects} canEditStatus={Boolean(onUpdateProject)} onStatusChange={onUpdateProject} />
         </Panel>
       ) : (
@@ -4881,6 +4881,8 @@ function ParseProgressModal({
 }) {
   const [statusTone, setStatusTone] = useState<"working" | "success" | "warning" | "error">(initialError ? "error" : "working");
   const [message, setMessage] = useState(initialError || "Starting parser against the stored original file...");
+  const onCompleteRef = useRef(onComplete);
+  const completedRefreshRef = useRef(false);
   const [steps, setSteps] = useState<UploadProgressStep[]>([
     { id: "selected", label: "Original", detail: version.fileName, state: "done" },
     { id: "uploading", label: "Stored", detail: "Using the existing uploaded file.", state: "done" },
@@ -4888,6 +4890,10 @@ function ParseProgressModal({
     { id: "parsing", label: "Parsing", detail: "Extracting readable script text.", state: uploadJob ? "active" : "pending" },
     { id: "complete", label: "Complete", detail: "Ready for review, diff, and breakdown.", state: "pending" }
   ]);
+
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+  }, [onComplete]);
 
   useEffect(() => {
     if (!uploadJob?.id || initialError) return;
@@ -4901,19 +4907,28 @@ function ParseProgressModal({
           setStatusTone("success");
           setMessage(`Parse complete. GreenLight extracted ${(job.characterCount ?? 0).toLocaleString()} readable characters.`);
           setSteps((current) => current.map((step) => step.id === "parsing" ? { ...step, state: "done", detail: `Parsed ${(job.characterCount ?? 0).toLocaleString()} characters.` } : step.id === "complete" ? { ...step, state: "done", detail: "Document is ready for breakdown and diff tools." } : step));
-          await onComplete?.();
+          if (!completedRefreshRef.current) {
+            completedRefreshRef.current = true;
+            await onCompleteRef.current?.();
+          }
         } else if (job.status === "WARNING") {
           const warning = job.warning || job.versionNotes || "Parsing finished with a warning.";
           setStatusTone("warning");
           setMessage(job.characterCount ? `Parsed with warning: ${warning}` : `Parse issue: ${warning}`);
           setSteps((current) => current.map((step) => step.id === "parsing" ? { ...step, state: "warning", detail: warning } : step.id === "complete" ? { ...step, state: "warning", detail: job.characterCount ? "Document has text but needs review." : "Readable text was not extracted." } : step));
-          await onComplete?.();
+          if (!completedRefreshRef.current) {
+            completedRefreshRef.current = true;
+            await onCompleteRef.current?.();
+          }
         } else {
           const error = job.error || "Parsing failed.";
           setStatusTone("error");
           setMessage(error);
           setSteps((current) => current.map((step) => step.id === "parsing" ? { ...step, state: "error", detail: error } : step.id === "complete" ? { ...step, state: "error", detail: "Parser did not complete." } : step));
-          await onComplete?.();
+          if (!completedRefreshRef.current) {
+            completedRefreshRef.current = true;
+            await onCompleteRef.current?.();
+          }
         }
       })
       .catch(async (error) => {
@@ -4921,12 +4936,15 @@ function ParseProgressModal({
         setStatusTone("error");
         setMessage(error instanceof Error ? error.message : "Parser status could not be checked.");
         setSteps((current) => current.map((step) => step.id === "parsing" ? { ...step, state: "error", detail: "Parser status could not be checked." } : step.id === "complete" ? { ...step, state: "error", detail: "Check upload troubleshooting." } : step));
-        await onComplete?.();
+        if (!completedRefreshRef.current) {
+          completedRefreshRef.current = true;
+          await onCompleteRef.current?.();
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [initialError, onComplete, uploadJob?.id]);
+  }, [initialError, uploadJob?.id]);
 
   return createPortal(
     <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm">
@@ -14714,6 +14732,10 @@ function combineVersionNotes(notes: string, warning?: string) {
   if (!warning) return notes;
   const warningNote = `Upload warning: ${warning}`;
   return notes.trim() ? `${notes.trim()}\n\n${warningNote}` : warningNote;
+}
+
+function appendVersionSystemNote(notes: string, note: string) {
+  return notes.trim() ? `${notes.trim()}\n\n${note}` : note;
 }
 
 function stripUploadSystemNotesClient(notes?: string) {

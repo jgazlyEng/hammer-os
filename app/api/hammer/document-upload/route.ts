@@ -254,7 +254,7 @@ async function retryDocumentVersionParse(input: { auth: { user: AuthenticatedUse
       where: { id: version.id },
       data: {
         extractedText: "",
-        notes: combineUploadNotes(baseNotes, queuedNote)
+        notes: appendUploadSystemNote(baseNotes, queuedNote)
       }
     });
     return tx.uploadJob.create({
@@ -514,6 +514,10 @@ function combineUploadNotes(notes: string | undefined, warning: string | undefin
   if (!warning) return notes;
   const warningNote = `Upload warning: ${warning}`;
   return notes ? `${notes}\n\n${warningNote}` : warningNote;
+}
+
+function appendUploadSystemNote(notes: string | undefined, note: string) {
+  return notes ? `${notes}\n\n${note}` : note;
 }
 
 function stripUploadSystemNotes(notes: string) {
