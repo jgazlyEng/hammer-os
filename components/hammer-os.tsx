@@ -1019,10 +1019,25 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     return data.uploadJob;
   }
 
-  async function refreshWorkspaceAfterParse() {
+  async function refreshWorkspaceAfterParse(uploadJob?: UploadJobSnapshot) {
     if (workspaceMode !== "database") return;
     hammerWorkspaceCache = null;
+    if (uploadJob?.documentId) {
+      await refreshDocumentVersions(uploadJob.documentId).catch(() => null);
+    }
     await loadDatabaseWorkspace({ force: true });
+    if (uploadJob?.documentId) {
+      await refreshDocumentVersions(uploadJob.documentId).catch(() => null);
+    }
+  }
+
+  async function refreshDocumentVersions(documentId: string) {
+    const response = await fetch(`/api/hammer/document-versions?documentId=${encodeURIComponent(documentId)}`, { cache: "no-store" });
+    if (!response.ok) return;
+    const data = await response.json().catch(() => null) as { versions?: HammerDocumentVersion[] } | null;
+    if (!data?.versions?.length) return;
+    const versionIds = new Set(data.versions.map((version) => version.id));
+    setLocalVersions((current) => [...data.versions!, ...current.filter((version) => !versionIds.has(version.id))]);
   }
 
   async function updateDocumentStatus(versionId: string, status: ScriptStatus) {
@@ -3874,7 +3889,7 @@ function ProjectWorkspace({
   approvals?: HammerApproval[];
   onUpload?: (input: DocumentUploadInput) => Promise<DocumentUploadResult | void>;
   onRetryParse?: (versionId: string) => Promise<UploadJobSnapshot>;
-  onRetryParseComplete?: () => Promise<void> | void;
+  onRetryParseComplete?: (uploadJob?: UploadJobSnapshot) => Promise<void> | void;
   onDelete?: (documentId: string) => Promise<void> | void;
   onAssignToProject?: (documentId: string, projectId: string) => void;
   onReferenceUpload?: (input: { projectId: string; title: string; description: string; source: string; category: AssetType; file: File }) => Promise<void>;
@@ -4312,7 +4327,7 @@ function Scripts({
   versions?: HammerDocumentVersion[];
   onUpload?: (input: DocumentUploadInput) => Promise<DocumentUploadResult | void>;
   onRetryParse?: (versionId: string) => Promise<UploadJobSnapshot>;
-  onRetryParseComplete?: () => Promise<void> | void;
+  onRetryParseComplete?: (uploadJob?: UploadJobSnapshot) => Promise<void> | void;
   onDelete?: (documentId: string) => Promise<void> | void;
   onAssignToProject?: (documentId: string, projectId: string) => void;
   selectedSection?: ScriptLibrarySection;
@@ -4487,7 +4502,7 @@ function GroupedProjectDocuments({
   canManageLibrary: boolean;
   onDelete?: (documentId: string) => void;
   onRetryParse?: (versionId: string) => Promise<UploadJobSnapshot>;
-  onRetryParseComplete?: () => Promise<void> | void;
+  onRetryParseComplete?: (uploadJob?: UploadJobSnapshot) => Promise<void> | void;
 }) {
   if (!groups.length) return <EmptyState label="No project scripts match these filters." />;
   return (
@@ -4534,7 +4549,7 @@ function DocumentUploadPanel({
   projectId?: string;
   documents: HammerDocument[];
   onUpload: (input: DocumentUploadInput) => Promise<DocumentUploadResult | void>;
-  onUploadComplete?: () => Promise<void> | void;
+  onUploadComplete?: (uploadJob?: UploadJobSnapshot) => Promise<void> | void;
   onDone: () => void;
   onCancel: () => void;
 }) {
@@ -4638,7 +4653,7 @@ function DocumentUploadPanel({
           updateProgress("complete", "done", "Document is ready for breakdown and diff tools.");
           setStatus("Upload complete. Text parsed successfully.");
           setStatusTone("success");
-          await refreshAfterUploadComplete();
+          await refreshAfterUploadComplete(uploadJob);
           setFinished(true);
         } else if (uploadJob.status === "WARNING") {
           const message = uploadJob.warning || uploadJob.versionNotes || "Document is saved, but parsing finished with a warning.";
@@ -4646,7 +4661,7 @@ function DocumentUploadPanel({
           updateProgress("complete", "warning", uploadJob.characterCount ? "Document is saved, but parsing needs attention." : "Original file is stored, but this document will stay hidden until readable text is available.");
           setStatus(uploadJob.characterCount ? `Uploaded with warning: ${message}` : `Stored but not ready: ${message} Upload a text-readable copy to make this document visible for review, diff, and breakdown.`);
           setStatusTone("warning");
-          if (uploadJob.characterCount) await refreshAfterUploadComplete();
+          if (uploadJob.characterCount) await refreshAfterUploadComplete(uploadJob);
           setFinished(Boolean(uploadJob.characterCount));
         } else {
           const message = uploadJob.error || "Upload failed while GreenLight was processing the file.";
@@ -4673,7 +4688,7 @@ function DocumentUploadPanel({
           setParseSummary({ fileName: result.version.fileName, characterCount: extraction.characterCount });
           setStatus("Upload complete. Text parsed successfully.");
           setStatusTone("success");
-          await refreshAfterUploadComplete();
+          await refreshAfterUploadComplete(result.uploadJob);
           setFinished(true);
         } else {
           updateProgress("parsing", "warning", extraction.message);
@@ -4681,7 +4696,7 @@ function DocumentUploadPanel({
           setParseSummary({ fileName: result.version.fileName, characterCount: extraction.characterCount, warning: extraction.message });
           setStatus(extraction.characterCount ? `Uploaded with warning: ${extraction.message}` : `Stored but not ready: ${extraction.message} Upload a text-readable copy to make this document visible for review, diff, and breakdown.`);
           setStatusTone("warning");
-          if (extraction.characterCount > 0) await refreshAfterUploadComplete();
+          if (extraction.characterCount > 0) await refreshAfterUploadComplete(result.uploadJob);
           setFinished(extraction.characterCount > 0);
         }
         void refreshRecentUploads();
@@ -4702,7 +4717,7 @@ function DocumentUploadPanel({
       updateProgress("complete", "done", "Document is ready.");
       setStatus("Uploaded. Refreshing the script list...");
       setStatusTone("success");
-      await refreshAfterUploadComplete();
+      await refreshAfterUploadComplete(result?.uploadJob);
       setFinished(true);
       setFile(null);
       void refreshRecentUploads();
@@ -4716,10 +4731,10 @@ function DocumentUploadPanel({
     }
   }
 
-  async function refreshAfterUploadComplete() {
+  async function refreshAfterUploadComplete(uploadJob?: UploadJobSnapshot) {
     if (completedRefreshRef.current) return;
     completedRefreshRef.current = true;
-    await onUploadComplete?.();
+    await onUploadComplete?.(uploadJob);
   }
 
   const modal = (
@@ -4981,7 +4996,7 @@ function ParseProgressModal({
   uploadJob?: UploadJobSnapshot;
   initialError?: string;
   onClose: () => void;
-  onComplete?: () => Promise<void> | void;
+  onComplete?: (uploadJob?: UploadJobSnapshot) => Promise<void> | void;
 }) {
   const [statusTone, setStatusTone] = useState<"working" | "success" | "warning" | "error">(initialError ? "error" : "working");
   const [message, setMessage] = useState(initialError || "Starting parser against the stored original file...");
@@ -5015,7 +5030,7 @@ function ParseProgressModal({
           setSteps((current) => current.map((step) => step.id === "parsing" ? { ...step, state: "done", detail: parseSummaryLine(job) } : step.id === "complete" ? { ...step, state: "done", detail: "Document is ready for breakdown and diff tools." } : step));
           if (!completedRefreshRef.current) {
             completedRefreshRef.current = true;
-            await onCompleteRef.current?.();
+            await onCompleteRef.current?.(job);
           }
         } else if (job.status === "WARNING") {
           const warning = job.warning || job.versionNotes || "Parsing finished with a warning.";
@@ -5025,7 +5040,7 @@ function ParseProgressModal({
           setSteps((current) => current.map((step) => step.id === "parsing" ? { ...step, state: "warning", detail: warning } : step.id === "complete" ? { ...step, state: "warning", detail: job.characterCount ? "Document has text but needs review." : "Readable text was not extracted." } : step));
           if (!completedRefreshRef.current) {
             completedRefreshRef.current = true;
-            await onCompleteRef.current?.();
+            await onCompleteRef.current?.(job);
           }
         } else {
           const error = job.error || "Parsing failed.";
@@ -5034,7 +5049,7 @@ function ParseProgressModal({
           setSteps((current) => current.map((step) => step.id === "parsing" ? { ...step, state: "error", detail: error } : step.id === "complete" ? { ...step, state: "error", detail: "Parser did not complete." } : step));
           if (!completedRefreshRef.current) {
             completedRefreshRef.current = true;
-            await onCompleteRef.current?.();
+            await onCompleteRef.current?.(job);
           }
         }
       })
@@ -5355,7 +5370,7 @@ function DocumentRows({
   showInboxMeta?: boolean;
   onDelete?: (documentId: string) => Promise<void> | void;
   onRetryParse?: (versionId: string) => Promise<UploadJobSnapshot>;
-  onRetryParseComplete?: () => Promise<void> | void;
+  onRetryParseComplete?: (uploadJob?: UploadJobSnapshot) => Promise<void> | void;
   onAssignToProject?: (documentId: string, projectId: string) => void;
   assignableProjects?: HammerProject[];
   defaultProjectId?: string;
@@ -7451,7 +7466,7 @@ function ScriptVersions({
   versions?: HammerDocumentVersion[];
   currentUser?: HammerUser;
   onUpload?: (input: DocumentUploadInput) => Promise<DocumentUploadResult | void>;
-  onUploadComplete?: () => Promise<void> | void;
+  onUploadComplete?: (uploadJob?: UploadJobSnapshot) => Promise<void> | void;
 }) {
   const [uploadOpen, setUploadOpen] = useState(false);
   const textState = useDocumentVersionsWithText(documentId, versions);
