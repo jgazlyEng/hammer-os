@@ -354,6 +354,47 @@ function useDocumentVersionsWithText(documentId: string, versions: HammerDocumen
   };
 }
 
+function useDocumentRowsWithText(docs: HammerDocument[], versions: HammerDocumentVersion[]) {
+  const [hydratedVersions, setHydratedVersions] = useState<HammerDocumentVersion[]>([]);
+  const [loading, setLoading] = useState(false);
+  const docIdsNeedingText = useMemo(() => {
+    return docs
+      .filter((doc) => {
+        const version = currentVersionFor(doc.id, docs, versions);
+        return Boolean(version && documentRequiresReadableText(doc.type) && !version.extractedText);
+      })
+      .map((doc) => doc.id);
+  }, [docs, versions]);
+  const hydrationKey = docIdsNeedingText.join("|");
+
+  useEffect(() => {
+    if (!docIdsNeedingText.length) {
+      setHydratedVersions([]);
+      setLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
+    Promise.all(docIdsNeedingText.map((documentId) => fetchDocumentVersionsWithText(documentId).catch(() => [])))
+      .then((groups) => {
+        if (!cancelled) setHydratedVersions(groups.flat());
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [docIdsNeedingText, hydrationKey]);
+
+  return {
+    versionsWithText: mergeHydratedVersions(versions, hydratedVersions),
+    loading
+  };
+}
+
 interface ProjectDraft {
   title: string;
   logline: string;
@@ -5381,8 +5422,10 @@ function DocumentRows({
   const [parseWindow, setParseWindow] = useState<{ doc: HammerDocument; version: HammerDocumentVersion; job?: UploadJobSnapshot; error?: string } | null>(null);
   const [page, setPage] = useState(1);
   const pageSize = useResponsiveTablePageSize({ max: 16, reservedHeight: 360 });
+  const textState = useDocumentRowsWithText(docs, versions);
+  const versionsWithText = textState.versionsWithText;
   const rowModels = docs.map((doc) => {
-    const version = currentVersionFor(doc.id, docs, versions);
+    const version = currentVersionFor(doc.id, docs, versionsWithText);
     return { doc, version, parseState: documentVersionParseState(doc, version) };
   });
   const totalPages = Math.max(1, Math.ceil(rowModels.length / pageSize));
@@ -5430,6 +5473,7 @@ function DocumentRows({
         />
       ) : null}
       <div className="data-scroll table-workspace-scroll">
+        {textState.loading ? <p className="mb-2 rounded border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-xs text-studio-300">Checking parse status...</p> : null}
         <table className={cn("data-table", omitProject ? "min-w-[760px]" : "min-w-[860px]")}>
           <thead className="text-[11px] uppercase tracking-[0.12em] text-studio-400">
             <tr>
@@ -8476,6 +8520,7 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
   const [runningBreakdown, setRunningBreakdown] = useState(false);
   const [updatingBreakdown, setUpdatingBreakdown] = useState(false);
   const [breakdownStatus, setBreakdownStatus] = useState("");
+  const [breakdownModal, setBreakdownModal] = useState<BreakdownProgressModalState | null>(null);
   const latestRun = persistedRuns[0];
   const activeRun = workspaceMode === "database" ? latestRun : undefined;
   const tableRun = activeRun && activeRun.status !== "RUNNING" ? activeRun : undefined;
@@ -8496,7 +8541,9 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
       if (!run) throw new Error("Breakdown run was removed before it completed.");
       if (run.status === "FAILED") throw new Error(run.error || "Breakdown failed.");
       if (run.status !== "RUNNING") return run;
-      setBreakdownStatus(`Claude breakdown is processing scene batches${".".repeat((attempt % 3) + 1)}`);
+      const message = `Claude breakdown is processing scene batches${".".repeat((attempt % 3) + 1)}`;
+      setBreakdownStatus(message);
+      setBreakdownModal((current) => current?.tone === "working" ? { ...current, message, run } : current);
     }
     throw new Error("Breakdown is still running. Refresh this page in a few minutes to check the saved result.");
   }, [loadPersistedBreakdownRuns]);
@@ -8515,12 +8562,27 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
     let cancelled = false;
     setRunningBreakdown(true);
     setBreakdownStatus("Claude breakdown is processing scene batches. Keeping this page updated...");
+    setBreakdownModal({
+      open: true,
+      tone: "working",
+      message: "Claude breakdown is processing scene batches. Keeping this page updated...",
+      run: activeRun,
+      startedAt: Date.now()
+    });
     waitForBreakdownCompletion(version.id, activeRun.id)
       .then((completedRun) => {
-        if (!cancelled) setBreakdownStatus(`Breakdown saved. Detected ${completedRun.elements.length} production item${completedRun.elements.length === 1 ? "" : "s"}.`);
+        if (!cancelled) {
+          const message = breakdownCompleteMessage(completedRun);
+          setBreakdownStatus(message);
+          setBreakdownModal((current) => current ? { ...current, tone: "success", message, run: completedRun } : current);
+        }
       })
       .catch((error) => {
-        if (!cancelled) setBreakdownStatus(error instanceof Error ? error.message : "Breakdown failed.");
+        if (!cancelled) {
+          const message = error instanceof Error ? error.message : "Breakdown failed.";
+          setBreakdownStatus(message);
+          setBreakdownModal((current) => current ? { ...current, tone: "error", message } : current);
+        }
       })
       .finally(() => {
         if (!cancelled) setRunningBreakdown(false);
@@ -8560,6 +8622,12 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
       }
       setRunningBreakdown(true);
       setBreakdownStatus("Starting Claude production breakdown...");
+      setBreakdownModal({
+        open: true,
+        tone: "working",
+        message: "Starting Claude production breakdown...",
+        startedAt: Date.now()
+      });
       const runStartedAt = Date.now();
       try {
         const response = await fetch("/api/hammer/breakdown", {
@@ -8571,12 +8639,17 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
         if (!response.ok) throw new Error(data?.error || "Breakdown failed.");
         if (data?.run) {
           setPersistedRuns((current) => [data.run!, ...current.filter((run) => run.id !== data.run!.id)]);
+          setBreakdownModal((current) => current ? { ...current, run: data.run, message: data.run?.status === "RUNNING" ? "Claude breakdown started. Feature-length scripts may process in scene batches." : "Breakdown run returned." } : current);
           if (data.run.status === "RUNNING") {
             setBreakdownStatus("Claude breakdown started. Feature-length scripts may process in scene batches.");
             const completedRun = await waitForBreakdownCompletion(version.id, data.run.id);
-            setBreakdownStatus(`Breakdown saved. Detected ${completedRun.elements.length} production item${completedRun.elements.length === 1 ? "" : "s"}.`);
+            const message = breakdownCompleteMessage(completedRun);
+            setBreakdownStatus(message);
+            setBreakdownModal((current) => current ? { ...current, tone: "success", message, run: completedRun } : current);
           } else {
-            setBreakdownStatus(data.run.error ? data.run.error : `Breakdown saved. Detected ${data.run.elements.length} production item${data.run.elements.length === 1 ? "" : "s"}.`);
+            const message = data.run.error ? data.run.error : breakdownCompleteMessage(data.run);
+            setBreakdownStatus(message);
+            setBreakdownModal((current) => current ? { ...current, tone: data.run?.status === "FAILED" ? "error" : "success", message, run: data.run } : current);
           }
         }
       } catch (error) {
@@ -8585,12 +8658,18 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
           setPersistedRuns(runs);
           const completedRun = runs.find((run) => run.status !== "FAILED" && run.status !== "RUNNING" && run.elements.length && new Date(run.createdAt).getTime() >= runStartedAt - 5000);
           if (completedRun) {
-            setBreakdownStatus(`Breakdown saved. Detected ${completedRun.elements.length} production item${completedRun.elements.length === 1 ? "" : "s"}.`);
+            const message = breakdownCompleteMessage(completedRun);
+            setBreakdownStatus(message);
+            setBreakdownModal((current) => current ? { ...current, tone: "success", message, run: completedRun } : current);
           } else {
-            setBreakdownStatus(error instanceof Error ? error.message : "Breakdown failed.");
+            const message = error instanceof Error ? error.message : "Breakdown failed.";
+            setBreakdownStatus(message);
+            setBreakdownModal((current) => current ? { ...current, tone: "error", message } : current);
           }
         } catch {
-          setBreakdownStatus(error instanceof Error ? error.message : "Breakdown failed.");
+          const message = error instanceof Error ? error.message : "Breakdown failed.";
+          setBreakdownStatus(message);
+          setBreakdownModal((current) => current ? { ...current, tone: "error", message } : current);
         }
       } finally {
         setRunningBreakdown(false);
@@ -8670,6 +8749,14 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
 
   return (
     <div className="space-y-4">
+      {breakdownModal?.open ? (
+        <BreakdownProgressModal
+          documentTitle={doc.title}
+          version={version}
+          state={breakdownModal}
+          onClose={() => setBreakdownModal(null)}
+        />
+      ) : null}
       <Panel className="p-3">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div className="min-w-0 flex-1">
@@ -8714,6 +8801,145 @@ function BreakdownSourceDiagnostics({ run }: { run: HammerBreakdownRun }) {
     summary !== undefined ? `table: ${summary} scenes` : null
   ].filter(Boolean);
   return <p className="mt-1 text-[11px] text-studio-500">Source check: {parts.join(" / ")}</p>;
+}
+
+type BreakdownProgressModalState = {
+  open: boolean;
+  tone: "working" | "success" | "error";
+  message: string;
+  run?: HammerBreakdownRun;
+  startedAt: number;
+};
+
+function BreakdownProgressModal({
+  documentTitle,
+  version,
+  state,
+  onClose
+}: {
+  documentTitle: string;
+  version?: HammerDocumentVersion;
+  state: BreakdownProgressModalState;
+  onClose: () => void;
+}) {
+  const [now, setNow] = useState(Date.now());
+  const isWorking = state.tone === "working";
+
+  useEffect(() => {
+    if (!isWorking) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [isWorking]);
+
+  const elapsedSeconds = Math.max(0, Math.round((now - state.startedAt) / 1000));
+  const progress = state.tone === "success" ? 100 : state.tone === "error" ? 100 : Math.min(88, Math.max(12, 12 + Math.floor(elapsedSeconds / 3) * 4));
+  const sceneCount = breakdownStatNumber(state.run?.stats, "summarySceneCount") ?? breakdownStatNumber(state.run?.stats, "outlineSceneCount");
+  const sourceCharacters = breakdownStatNumber(state.run?.stats, "sourceTextCharacters");
+  const categories = state.run?.summary?.categories && typeof state.run.summary.categories === "object" && !Array.isArray(state.run.summary.categories)
+    ? state.run.summary.categories as Record<string, unknown>
+    : {};
+  const topCategories = Object.entries(categories)
+    .filter((entry): entry is [string, number] => typeof entry[1] === "number")
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4);
+
+  return createPortal(
+    <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm">
+      <div className="w-full max-w-3xl rounded-xl border border-amberline/25 bg-studio-950 p-4 shadow-2xl">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="font-display text-[10px] uppercase tracking-[0.16em] text-amberline">Breakdown Status</p>
+            <h3 className="mt-1 truncate text-lg font-semibold text-studio-100">{documentTitle}</h3>
+            <p className="mt-1 truncate text-xs text-studio-400">{version ? `v${version.versionNumber} / ${version.fileName}` : "No version selected"}</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close breakdown status">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="mt-4 rounded-lg border border-white/10 bg-white/[0.025] p-3">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              {state.tone === "working" ? <Loader2 className="h-4 w-4 animate-spin text-sky-200" /> : null}
+              {state.tone === "success" ? <CheckCircle2 className="h-4 w-4 text-emerald-300" /> : null}
+              {state.tone === "error" ? <X className="h-4 w-4 text-rose-300" /> : null}
+              <p className="text-sm font-semibold text-studio-100">{breakdownModalTitle(state.tone)}</p>
+            </div>
+            <span className="text-[11px] text-studio-500">{formatElapsed(elapsedSeconds)}</span>
+          </div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-white/10">
+            <div className={cn(
+              "h-full rounded-full transition-all duration-500",
+              state.tone === "error" ? "bg-rose-400" : "bg-emerald-400"
+            )} style={{ width: `${progress}%` }} />
+          </div>
+          <p className={cn(
+            "mt-3 rounded-md border px-3 py-2 text-xs leading-5",
+            state.tone === "working" && "border-sky-300/25 bg-sky-400/10 text-sky-100",
+            state.tone === "success" && "border-emerald-300/30 bg-emerald-400/12 text-emerald-100",
+            state.tone === "error" && "border-rose-300/35 bg-rose-500/10 text-rose-100"
+          )}>{state.message}</p>
+        </div>
+
+        <div className="mt-3 grid gap-2 md:grid-cols-4">
+          <BreakdownProgressStat label="Run" value={state.run ? statusLabel(state.run.status) : "Queued"} />
+          <BreakdownProgressStat label="Items" value={state.run ? state.run.elements.length.toLocaleString() : "Pending"} />
+          <BreakdownProgressStat label="Scenes" value={sceneCount !== undefined ? sceneCount.toLocaleString() : "Pending"} />
+          <BreakdownProgressStat label="Text" value={sourceCharacters !== undefined ? `${sourceCharacters.toLocaleString()} chars` : "Pending"} />
+        </div>
+
+        {topCategories.length ? (
+          <div className="mt-3 rounded-lg border border-white/10 bg-white/[0.025] p-3">
+            <p className="font-display text-[10px] uppercase tracking-[0.14em] text-studio-400">Detected Categories</p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {topCategories.map(([category, count]) => (
+                <span key={category} className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-1 text-xs font-semibold text-studio-200">
+                  {statusLabel(category)}: {count}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {state.run?.warning ? <p className="mt-3 rounded border border-yellow-300/25 bg-yellow-300/10 px-2.5 py-1.5 text-xs text-yellow-100">{state.run.warning}</p> : null}
+
+        <div className="mt-4 flex justify-end">
+          <button type="button" onClick={onClose} className="rounded-md border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 transition hover:border-white/20 hover:text-studio-100">
+            {isWorking ? "Hide Window" : "Close"}
+          </button>
+        </div>
+      </div>
+    </div>,
+    globalThis.document.body
+  );
+}
+
+function BreakdownProgressStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-white/10 bg-white/[0.025] px-3 py-2">
+      <p className="text-[10px] uppercase tracking-[0.12em] text-studio-500">{label}</p>
+      <p className="mt-1 truncate text-sm font-semibold text-studio-100">{value}</p>
+    </div>
+  );
+}
+
+function breakdownModalTitle(tone: BreakdownProgressModalState["tone"]) {
+  if (tone === "success") return "Breakdown saved";
+  if (tone === "error") return "Breakdown failed";
+  return "Breakdown running";
+}
+
+function breakdownCompleteMessage(run: HammerBreakdownRun) {
+  const sceneCount = breakdownStatNumber(run.stats, "summarySceneCount") ?? breakdownStatNumber(run.stats, "outlineSceneCount");
+  const items = `${run.elements.length} production item${run.elements.length === 1 ? "" : "s"}`;
+  return sceneCount ? `Breakdown saved. Detected ${items} across ${sceneCount} scene${sceneCount === 1 ? "" : "s"}.` : `Breakdown saved. Detected ${items}.`;
+}
+
+function formatElapsed(seconds: number) {
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remaining = seconds % 60;
+  return `${minutes}m ${remaining.toString().padStart(2, "0")}s`;
 }
 
 function breakdownStatNumber(stats: HammerBreakdownRun["stats"], key: string) {
