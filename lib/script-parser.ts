@@ -279,8 +279,15 @@ function splitIntoScenes(text: string) {
   const scenes: Array<{ slugline: string; body: string }> = [];
   let current: { slugline: string; body: string[] } | null = null;
 
-  for (const line of lines) {
-    const trimmed = line.trim();
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    let trimmed = line.trim();
+    const wrappedSlugline = resolveWrappedSlugline(lines, index, trimmed);
+    if (wrappedSlugline) {
+      trimmed = wrappedSlugline.slugline;
+      index = wrappedSlugline.index;
+    }
+
     if (isSlugline(trimmed)) {
       if (current) scenes.push({ slugline: current.slugline, body: current.body.join("\n") });
       current = { slugline: trimmed.toUpperCase(), body: [] };
@@ -331,8 +338,8 @@ function parseScene(slugline: string, body: string, number: number): ParsedScrip
 }
 
 function parseSlugline(slugline: string) {
-  const interiorExterior = slugline.match(/^(INT\.\/EXT\.|INT\.|EXT\.)/)?.[0] ?? "UNK.";
-  const withoutPrefix = slugline.replace(/^(INT\.\/EXT\.|INT\.|EXT\.)\s*/, "");
+  const interiorExterior = slugline.match(sluglinePrefixPattern)?.[0] ?? "UNK.";
+  const withoutPrefix = slugline.replace(sluglinePrefixPattern, "").trim();
   const parts = withoutPrefix.split(" - ");
   const maybeTime = parts[parts.length - 1];
   const timeOfDay = timeTokens.includes(maybeTime) ? maybeTime : "UNSPECIFIED";
@@ -410,8 +417,32 @@ function calculateSceneRisk(input: { props: string[]; stuntBeats: string[]; vfxB
   return "low";
 }
 
+const sluglinePrefixPattern = /^(INT\.\/EXT\.|EXT\.\/INT\.|INT\.|EXT\.)/;
+const bareSluglinePrefixPattern = /^(INT\.\/EXT\.|EXT\.\/INT\.|INT\.|EXT\.)$/;
+const fullSluglinePattern = /^(INT\.\/EXT\.|EXT\.\/INT\.|INT\.|EXT\.)\s+.+/;
+
 function isSlugline(line: string) {
-  return /^(INT\.|EXT\.|INT\.\/EXT\.)\s+.+/.test(line.toUpperCase());
+  return fullSluglinePattern.test(line.toUpperCase());
+}
+
+function resolveWrappedSlugline(lines: string[], index: number, trimmed: string) {
+  if (!bareSluglinePrefixPattern.test(trimmed.toUpperCase())) return null;
+  const next = nextNonEmptyLine(lines, index + 1);
+  if (!next || !looksLikeSluglineContinuation(next.text)) return null;
+  return { slugline: `${trimmed} ${next.text}`, index: next.index };
+}
+
+function nextNonEmptyLine(lines: string[], startIndex: number) {
+  for (let index = startIndex; index < lines.length; index += 1) {
+    const text = lines[index].trim();
+    if (text) return { text, index };
+  }
+  return null;
+}
+
+function looksLikeSluglineContinuation(value: string) {
+  const upper = value.toUpperCase();
+  return upper.includes(" - ") || timeTokens.some((token) => upper.endsWith(` ${token}`) || upper.endsWith(` - ${token}`));
 }
 
 function isCharacterCue(line: string) {
