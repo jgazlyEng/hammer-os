@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export interface StoredUpload {
@@ -14,6 +14,14 @@ export async function storeUpload(projectId: string, fileName: string, bytes: Bu
   }
 
   return storeUploadLocally(projectId, fileName, bytes);
+}
+
+export async function readStoredUpload(storagePath: string): Promise<Buffer> {
+  if (storagePath.startsWith("gs://")) {
+    return readStoredUploadFromGcs(storagePath);
+  }
+
+  return readFile(storagePath);
 }
 
 async function storeUploadLocally(projectId: string, fileName: string, bytes: Buffer): Promise<StoredUpload> {
@@ -70,6 +78,22 @@ async function storeUploadInGcs(projectId: string, fileName: string, bytes: Buff
     checksum,
     sizeBytes: bytes.byteLength
   };
+}
+
+async function readStoredUploadFromGcs(storagePath: string): Promise<Buffer> {
+  const match = storagePath.match(/^gs:\/\/([^/]+)\/(.+)$/);
+  if (!match) throw new Error("Invalid GCS storage path.");
+  const [, bucketName, objectName] = match;
+  const { Storage } = await import("@google-cloud/storage");
+  const storage = new Storage({
+    projectId: process.env.GCS_PROJECT_ID,
+    credentials: process.env.GCS_CLIENT_EMAIL && process.env.GCS_PRIVATE_KEY ? {
+      client_email: process.env.GCS_CLIENT_EMAIL,
+      private_key: process.env.GCS_PRIVATE_KEY.replace(/\\n/g, "\n")
+    } : undefined
+  });
+  const [bytes] = await storage.bucket(bucketName).file(objectName).download();
+  return bytes;
 }
 
 function sanitizePathSegment(value: string) {

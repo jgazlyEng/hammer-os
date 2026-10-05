@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import type { DocumentType, Prisma } from "@prisma/client";
-import { forbidden, isDatabaseConfigured, requireUser } from "@/lib/auth";
+import { forbidden, isDatabaseConfigured, requireUser, type AuthenticatedUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { storeUpload } from "@/lib/server-file-storage";
+import { readStoredUpload, storeUpload } from "@/lib/server-file-storage";
 import { extractPdfTextWithFallback } from "@/lib/server-pdf-text";
 
 export const runtime = "nodejs";
@@ -29,6 +29,13 @@ export async function POST(request: Request) {
 
   let uploadStage = "preparing upload";
   try {
+    const contentType = request.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      const body = await request.json().catch(() => null) as { action?: string; versionId?: string } | null;
+      if (body?.action === "retryParse") return retryDocumentVersionParse({ auth, requestId, versionId: body.versionId });
+      return NextResponse.json({ error: "Unsupported upload action." }, { status: 400 });
+    }
+
     uploadStage = "reading form data";
     const formData = await request.formData();
     const file = formData.get("file");
@@ -213,6 +220,76 @@ export async function POST(request: Request) {
       requestId
     }, { status });
   }
+}
+
+async function retryDocumentVersionParse(input: { auth: { user: AuthenticatedUser }; requestId: string; versionId?: string }) {
+  const versionId = input.versionId?.trim();
+  if (!versionId) return NextResponse.json({ error: "Document version id is required." }, { status: 400 });
+
+  const uploadPolicy = await getUploadPolicy();
+  if (!uploadPolicy.parseOnUpload) return NextResponse.json({ error: "Text extraction is disabled by the current upload policy." }, { status: 409 });
+
+  const version = await prisma.documentVersion.findUnique({
+    where: { id: versionId },
+    include: { document: { select: { id: true, projectId: true, deletedAt: true } } }
+  });
+
+  if (!version || version.document.deletedAt) return NextResponse.json({ error: "Document version was not found." }, { status: 404 });
+  if (!canUploadDocument(input.auth.user.appRole, input.auth.user.projectRoles, version.document.projectId ?? undefined)) {
+    return NextResponse.json(forbidden(), { status: 403 });
+  }
+
+  let bytes: Buffer;
+  try {
+    bytes = await readStoredUpload(version.storagePath);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "Original stored file could not be read.";
+    return NextResponse.json({ error: "Re-run parse failed before it could start.", detail, hint: "Confirm the original file still exists in GCS/local storage and the app service account has read permissions." }, { status: 503 });
+  }
+
+  const baseNotes = stripUploadSystemNotes(version.notes ?? "");
+  const queuedNote = "Text extraction is queued. GreenLight is re-running parsing against the original stored file.";
+  const uploadJob = await prisma.$transaction(async (tx) => {
+    await tx.documentVersion.update({
+      where: { id: version.id },
+      data: {
+        extractedText: "",
+        notes: combineUploadNotes(baseNotes, queuedNote)
+      }
+    });
+    return tx.uploadJob.create({
+      data: {
+        requestId: input.requestId,
+        status: "PARSING",
+        stage: "parsing",
+        fileName: version.fileName,
+        fileType: version.fileType,
+        fileSize: version.fileSize,
+        storagePath: version.storagePath,
+        projectId: version.document.projectId,
+        documentId: version.documentId,
+        documentVersionId: version.id,
+        createdById: input.auth.user.id,
+        detailJson: { action: "retryParse", documentId: version.documentId, versionId: version.id, fileName: version.fileName } as Prisma.InputJsonValue
+      }
+    });
+  });
+
+  void extractAndPersistUploadText({
+    requestId: input.requestId,
+    versionId: version.id,
+    documentId: version.documentId,
+    uploadJobId: uploadJob.id,
+    fileName: version.fileName,
+    fileType: version.fileType,
+    bytes,
+    initialNotes: baseNotes,
+    warnOnEmptyText: uploadPolicy.warnOnEmptyText,
+    actorUserId: input.auth.user.id,
+    actor: input.auth.user.email
+  });
+
+  return NextResponse.json({ uploadJob: toUploadJob(uploadJob), extractionQueued: true }, { status: 202 });
 }
 
 export async function GET(request: Request) {
@@ -437,6 +514,14 @@ function combineUploadNotes(notes: string | undefined, warning: string | undefin
   if (!warning) return notes;
   const warningNote = `Upload warning: ${warning}`;
   return notes ? `${notes}\n\n${warningNote}` : warningNote;
+}
+
+function stripUploadSystemNotes(notes: string) {
+  return notes
+    .split(/\n{2,}/)
+    .map((part) => part.trim())
+    .filter((part) => part && !/^Upload warning:/i.test(part) && !part.includes("Text extraction is queued"))
+    .join("\n\n") || undefined;
 }
 
 function uploadErrorMessage(error: unknown) {

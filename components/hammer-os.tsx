@@ -996,6 +996,35 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     return { warning: extractionWarning };
   }
 
+  async function retryDocumentVersionParse(versionId: string) {
+    if (workspaceMode !== "database") {
+      throw new Error("Re-run parse is only available in database mode because it uses the stored original file.");
+    }
+    const response = await fetch("/api/hammer/document-upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "retryParse", versionId })
+    });
+    if (!response.ok) {
+      const data = await readUploadErrorResponse(response);
+      throw new Error(formatUploadError(data, response.status));
+    }
+    const data = await response.json().catch(() => null) as { uploadJob?: UploadJobSnapshot; error?: string } | null;
+    if (!data?.uploadJob) throw new Error(data?.error || "GreenLight could not start the parser.");
+    setLocalVersions((current) => current.map((version) => version.id === versionId ? {
+      ...version,
+      extractedText: "",
+      notes: combineVersionNotes(stripUploadSystemNotesClient(version.notes), "Text extraction is queued. GreenLight is re-running parsing against the original stored file.")
+    } : version));
+    return data.uploadJob;
+  }
+
+  async function refreshWorkspaceAfterParse() {
+    if (workspaceMode !== "database") return;
+    hammerWorkspaceCache = null;
+    await loadDatabaseWorkspace({ force: true });
+  }
+
   async function updateDocumentStatus(versionId: string, status: ScriptStatus) {
     if (workspaceMode === "database") {
       await runWorkspaceAction("updateDocumentStatus", { versionId, status });
@@ -1960,8 +1989,8 @@ export function HammerOS({ view, id, selectedTaskId, scriptSection }: { view: Ha
     if (isProjectRouteView && id && !projects.some((item) => item.id === id)) {
       return <AccessDenied title="Development Slate item unavailable" detail="This slate item is not available in the current workspace, or your account does not have access to it." />;
     }
-    if (view === "project-detail") return <ProjectWorkspace project={project} activeTab="overview" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpdateProject={canManageScriptLibrary(currentUser.role) ? updateProject : undefined} onUpload={uploadDocumentVersion} onDelete={canManageScriptLibrary(currentUser.role) ? deleteUploadedDocument : undefined} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
-    if (view === "project-documents") return <ProjectWorkspace project={project} activeTab="documents" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpdateProject={canManageScriptLibrary(currentUser.role) ? updateProject : undefined} onUpload={uploadDocumentVersion} onDelete={canManageScriptLibrary(currentUser.role) ? deleteUploadedDocument : undefined} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
+    if (view === "project-detail") return <ProjectWorkspace project={project} activeTab="overview" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpdateProject={canManageScriptLibrary(currentUser.role) ? updateProject : undefined} onUpload={uploadDocumentVersion} onRetryParse={retryDocumentVersionParse} onRetryParseComplete={refreshWorkspaceAfterParse} onDelete={canManageScriptLibrary(currentUser.role) ? deleteUploadedDocument : undefined} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
+    if (view === "project-documents") return <ProjectWorkspace project={project} activeTab="documents" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpdateProject={canManageScriptLibrary(currentUser.role) ? updateProject : undefined} onUpload={uploadDocumentVersion} onRetryParse={retryDocumentVersionParse} onRetryParseComplete={refreshWorkspaceAfterParse} onDelete={canManageScriptLibrary(currentUser.role) ? deleteUploadedDocument : undefined} onAssignToProject={assignDocumentToProject} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
     if (view === "project-assets") return <ProjectWorkspace project={project} activeTab="assets" currentUser={currentUser} users={users} projects={projects} tasks={tasks} documents={documents} versions={versions} supportingDocuments={supportingDocuments} referenceImages={localReferenceImages} assets={assets} approvals={approvals} onUpdateProject={canManageScriptLibrary(currentUser.role) ? updateProject : undefined} onReferenceUpload={uploadReferenceImage} onCreateTask={createTask} />;
     if (view === "scripts") return <LegacyRedirect title="Scripts now live inside the slate" detail="Script tracking is most useful in context. Open a Development Slate item for active project scripts and supporting documents, or use Prospects for materials the team may want to pursue." href="/projects" label="Open Development Slate" />;
     if (["script-detail", "script-versions", "script-diff", "script-breakdown"].includes(view) && !documents.some((item) => item.id === document.id)) return <EmptyScriptState />;
@@ -3811,6 +3840,8 @@ function ProjectWorkspace({
   assets = hammerAssets,
   approvals = hammerApprovals,
   onUpload,
+  onRetryParse,
+  onRetryParseComplete,
   onDelete,
   onAssignToProject,
   onReferenceUpload,
@@ -3830,6 +3861,8 @@ function ProjectWorkspace({
   assets?: HammerAsset[];
   approvals?: HammerApproval[];
   onUpload?: (input: DocumentUploadInput) => Promise<DocumentUploadResult | void>;
+  onRetryParse?: (versionId: string) => Promise<UploadJobSnapshot>;
+  onRetryParseComplete?: () => Promise<void> | void;
   onDelete?: (documentId: string) => Promise<void> | void;
   onAssignToProject?: (documentId: string, projectId: string) => void;
   onReferenceUpload?: (input: { projectId: string; title: string; description: string; source: string; category: AssetType; file: File }) => Promise<void>;
@@ -3927,7 +3960,7 @@ function ProjectWorkspace({
         </div>
       ) : null}
 
-      {activeTab === "documents" ? <Scripts projectId={project.id} documents={documents} versions={versions} projects={projects} currentUser={currentUser} onUpload={onUpload} onDelete={onDelete} onAssignToProject={canManageScriptLibrary(currentUser.role) ? onAssignToProject : undefined} /> : null}
+      {activeTab === "documents" ? <Scripts projectId={project.id} documents={documents} versions={versions} projects={projects} currentUser={currentUser} onUpload={onUpload} onRetryParse={onRetryParse} onRetryParseComplete={onRetryParseComplete} onDelete={onDelete} onAssignToProject={canManageScriptLibrary(currentUser.role) ? onAssignToProject : undefined} /> : null}
       {activeTab === "assets" ? <ProjectReferenceWorkspace project={project} assets={projectAssets} referenceImages={projectReferenceImages} canDownload={canDownload} currentUser={currentUser} onReferenceUpload={onReferenceUpload} /> : null}
     </div>
   );
@@ -4251,6 +4284,8 @@ function Scripts({
   documents = hammerDocuments,
   versions = hammerVersions,
   onUpload,
+  onRetryParse,
+  onRetryParseComplete,
   onDelete,
   onAssignToProject,
   selectedSection,
@@ -4264,6 +4299,8 @@ function Scripts({
   documents?: HammerDocument[];
   versions?: HammerDocumentVersion[];
   onUpload?: (input: DocumentUploadInput) => Promise<DocumentUploadResult | void>;
+  onRetryParse?: (versionId: string) => Promise<UploadJobSnapshot>;
+  onRetryParseComplete?: () => Promise<void> | void;
   onDelete?: (documentId: string) => Promise<void> | void;
   onAssignToProject?: (documentId: string, projectId: string) => void;
   selectedSection?: ScriptLibrarySection;
@@ -4322,7 +4359,7 @@ function Scripts({
           action={onUpload ? <PrimaryButton icon={Plus} label="Add Document" onClick={() => setUploadOpen(true)} /> : undefined}
         />
         {uploadOpen && onUpload ? <DocumentUploadPanel projectId={scopedProjectId} documents={docs} onUpload={onUpload} onDone={() => setUploadOpen(false)} onCancel={() => setUploadOpen(false)} /> : null}
-        <DocumentRows docs={docs} versions={versions} projects={projects} currentUser={currentUser} canDownload={canDownload} omitProject={Boolean(projectId)} onDelete={onDelete} assignableProjects={projects} defaultProjectId={scopedProjectId} emptyLabel={projectName ? `No documents for ${projectName} yet. Upload a script, treatment, outline, or coverage document.` : "No documents match this view."} />
+        <DocumentRows docs={docs} versions={versions} projects={projects} currentUser={currentUser} canDownload={canDownload} omitProject={Boolean(projectId)} onDelete={onDelete} onRetryParse={onRetryParse} onRetryParseComplete={onRetryParseComplete} assignableProjects={projects} defaultProjectId={scopedProjectId} emptyLabel={projectName ? `No documents for ${projectName} yet. Upload a script, treatment, outline, or coverage document.` : "No documents match this view."} />
       </Panel>
     );
   }
@@ -4374,25 +4411,25 @@ function Scripts({
 
       {effectiveSection === "inbox" && canManageLibrary ? (
         <ScriptLibraryPanel title="Incoming Scripts" eyebrow="Triage" count={incomingDocs.length} description="Unassigned submissions and specs that have not been attached to a project yet.">
-          <DocumentRows docs={incomingDocs} versions={versions} projects={projects} currentUser={currentUser} canDownload={canDownload} showInboxMeta onDelete={onDelete} onAssignToProject={onAssignToProject} assignableProjects={projects} defaultProjectId={scopedProjectId} emptyLabel="No incoming scripts match these filters." />
+          <DocumentRows docs={incomingDocs} versions={versions} projects={projects} currentUser={currentUser} canDownload={canDownload} showInboxMeta onDelete={onDelete} onRetryParse={onRetryParse} onRetryParseComplete={onRetryParseComplete} onAssignToProject={onAssignToProject} assignableProjects={projects} defaultProjectId={scopedProjectId} emptyLabel="No incoming scripts match these filters." />
         </ScriptLibraryPanel>
       ) : null}
 
       {effectiveSection === "inbox" && !canManageLibrary ? (
         <ScriptLibraryPanel title="Active Project Scripts" eyebrow="Assigned Access" count={projectDocs.length} description="Incoming submissions are limited to producers, executives, and admins. Your scripts are grouped by the projects you can access.">
-          <GroupedProjectDocuments groups={groupedProjectDocs} versions={versions} projects={projects} currentUser={currentUser} canDownload={canDownload} canManageLibrary={canManageLibrary} onDelete={onDelete} />
+          <GroupedProjectDocuments groups={groupedProjectDocs} versions={versions} projects={projects} currentUser={currentUser} canDownload={canDownload} canManageLibrary={canManageLibrary} onDelete={onDelete} onRetryParse={onRetryParse} onRetryParseComplete={onRetryParseComplete} />
         </ScriptLibraryPanel>
       ) : null}
 
       {effectiveSection === "projects" ? (
         <ScriptLibraryPanel title="Active Project Scripts" eyebrow="By Project" count={projectDocs.length} description="Scripts, treatments, outlines, notes, decks, and coverage grouped by project so the library is not dependent on the top project switcher.">
-          <GroupedProjectDocuments groups={groupedProjectDocs} versions={versions} projects={projects} currentUser={currentUser} canDownload={canDownload} canManageLibrary={canManageLibrary} onDelete={onDelete} />
+          <GroupedProjectDocuments groups={groupedProjectDocs} versions={versions} projects={projects} currentUser={currentUser} canDownload={canDownload} canManageLibrary={canManageLibrary} onDelete={onDelete} onRetryParse={onRetryParse} onRetryParseComplete={onRetryParseComplete} />
         </ScriptLibraryPanel>
       ) : null}
 
       {effectiveSection === "all" ? (
         <ScriptLibraryPanel title="Library" eyebrow="Manager View" count={allDocs.length} description={canManageLibrary ? "A complete manager view across incoming submissions and active project documents." : "Everything you can access across your assigned projects."}>
-          <DocumentRows docs={allDocs} versions={versions} projects={projects} currentUser={currentUser} canDownload={canDownload} showInboxMeta={canManageLibrary} onDelete={onDelete} onAssignToProject={canManageLibrary ? onAssignToProject : undefined} assignableProjects={projects} defaultProjectId={scopedProjectId} emptyLabel="No scripts match these filters." />
+          <DocumentRows docs={allDocs} versions={versions} projects={projects} currentUser={currentUser} canDownload={canDownload} showInboxMeta={canManageLibrary} onDelete={onDelete} onRetryParse={onRetryParse} onRetryParseComplete={onRetryParseComplete} onAssignToProject={canManageLibrary ? onAssignToProject : undefined} assignableProjects={projects} defaultProjectId={scopedProjectId} emptyLabel="No scripts match these filters." />
         </ScriptLibraryPanel>
       ) : null}
 
@@ -4425,7 +4462,9 @@ function GroupedProjectDocuments({
   currentUser,
   canDownload,
   canManageLibrary,
-  onDelete
+  onDelete,
+  onRetryParse,
+  onRetryParseComplete
 }: {
   groups: Array<{ project: HammerProject; docs: HammerDocument[] }>;
   versions: HammerDocumentVersion[];
@@ -4434,6 +4473,8 @@ function GroupedProjectDocuments({
   canDownload?: boolean;
   canManageLibrary: boolean;
   onDelete?: (documentId: string) => void;
+  onRetryParse?: (versionId: string) => Promise<UploadJobSnapshot>;
+  onRetryParseComplete?: () => Promise<void> | void;
 }) {
   if (!groups.length) return <EmptyState label="No project scripts match these filters." />;
   return (
@@ -4447,7 +4488,7 @@ function GroupedProjectDocuments({
             </div>
             <span className="rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-[11px] text-studio-300">{group.docs.length}</span>
           </div>
-          <DocumentRows docs={group.docs} versions={versions} projects={projects} currentUser={currentUser} canDownload={canDownload} omitProject showInboxMeta={canManageLibrary} onDelete={onDelete} assignableProjects={projects} defaultProjectId={group.project.id} emptyLabel={`No scripts for ${group.project.title} match these filters.`} />
+          <DocumentRows docs={group.docs} versions={versions} projects={projects} currentUser={currentUser} canDownload={canDownload} omitProject showInboxMeta={canManageLibrary} onDelete={onDelete} onRetryParse={onRetryParse} onRetryParseComplete={onRetryParseComplete} assignableProjects={projects} defaultProjectId={group.project.id} emptyLabel={`No scripts for ${group.project.title} match these filters.`} />
         </div>
       ))}
     </div>
@@ -4823,6 +4864,107 @@ function uploadProgressSteps(activeStep?: UploadProgressStepId | "error", detail
   });
 }
 
+function ParseProgressModal({
+  document,
+  version,
+  uploadJob,
+  initialError,
+  onClose,
+  onComplete
+}: {
+  document: HammerDocument;
+  version: HammerDocumentVersion;
+  uploadJob?: UploadJobSnapshot;
+  initialError?: string;
+  onClose: () => void;
+  onComplete?: () => Promise<void> | void;
+}) {
+  const [statusTone, setStatusTone] = useState<"working" | "success" | "warning" | "error">(initialError ? "error" : "working");
+  const [message, setMessage] = useState(initialError || "Starting parser against the stored original file...");
+  const [steps, setSteps] = useState<UploadProgressStep[]>([
+    { id: "selected", label: "Original", detail: version.fileName, state: "done" },
+    { id: "uploading", label: "Stored", detail: "Using the existing uploaded file.", state: "done" },
+    { id: "stored", label: "Queued", detail: uploadJob ? "Parser job created." : "Creating parser job...", state: uploadJob ? "done" : "active" },
+    { id: "parsing", label: "Parsing", detail: "Extracting readable script text.", state: uploadJob ? "active" : "pending" },
+    { id: "complete", label: "Complete", detail: "Ready for review, diff, and breakdown.", state: "pending" }
+  ]);
+
+  useEffect(() => {
+    if (!uploadJob?.id || initialError) return;
+    let cancelled = false;
+    setSteps((current) => current.map((step) => step.id === "stored" ? { ...step, state: "done", detail: "Parser job created." } : step.id === "parsing" ? { ...step, state: "active" } : step));
+    setMessage("Parsing readable text. Keep this window open until GreenLight confirms the result.");
+    waitForUploadJob(uploadJob.id)
+      .then(async (job) => {
+        if (cancelled) return;
+        if (job.status === "COMPLETE") {
+          setStatusTone("success");
+          setMessage(`Parse complete. GreenLight extracted ${(job.characterCount ?? 0).toLocaleString()} readable characters.`);
+          setSteps((current) => current.map((step) => step.id === "parsing" ? { ...step, state: "done", detail: `Parsed ${(job.characterCount ?? 0).toLocaleString()} characters.` } : step.id === "complete" ? { ...step, state: "done", detail: "Document is ready for breakdown and diff tools." } : step));
+          await onComplete?.();
+        } else if (job.status === "WARNING") {
+          const warning = job.warning || job.versionNotes || "Parsing finished with a warning.";
+          setStatusTone("warning");
+          setMessage(job.characterCount ? `Parsed with warning: ${warning}` : `Parse issue: ${warning}`);
+          setSteps((current) => current.map((step) => step.id === "parsing" ? { ...step, state: "warning", detail: warning } : step.id === "complete" ? { ...step, state: "warning", detail: job.characterCount ? "Document has text but needs review." : "Readable text was not extracted." } : step));
+          await onComplete?.();
+        } else {
+          const error = job.error || "Parsing failed.";
+          setStatusTone("error");
+          setMessage(error);
+          setSteps((current) => current.map((step) => step.id === "parsing" ? { ...step, state: "error", detail: error } : step.id === "complete" ? { ...step, state: "error", detail: "Parser did not complete." } : step));
+          await onComplete?.();
+        }
+      })
+      .catch(async (error) => {
+        if (cancelled) return;
+        setStatusTone("error");
+        setMessage(error instanceof Error ? error.message : "Parser status could not be checked.");
+        setSteps((current) => current.map((step) => step.id === "parsing" ? { ...step, state: "error", detail: "Parser status could not be checked." } : step.id === "complete" ? { ...step, state: "error", detail: "Check upload troubleshooting." } : step));
+        await onComplete?.();
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [initialError, onComplete, uploadJob?.id]);
+
+  return createPortal(
+    <div className="fixed inset-0 z-[150] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm">
+      <div className="w-full max-w-3xl rounded-xl border border-amberline/25 bg-studio-950 p-4 shadow-2xl">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="font-display text-[10px] uppercase tracking-[0.16em] text-amberline">Document Parser</p>
+            <h3 className="mt-1 text-lg font-semibold text-studio-100">Parsing {document.title}</h3>
+            <p className="mt-1 text-xs text-studio-400">v{version.versionNumber} / {version.fileName}</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-md border border-white/10 bg-white/[0.03] p-2 text-studio-300 transition hover:border-amberline/40 hover:text-studio-100" aria-label="Close parser window">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="mt-4">
+          <UploadProgressPanel steps={steps} />
+        </div>
+        <div className={cn(
+          "mt-3 flex items-start gap-2 rounded-md border px-3 py-2 text-xs leading-5",
+          statusTone === "working" && "border-sky-300/25 bg-sky-400/10 text-sky-100",
+          statusTone === "success" && "border-emerald-300/30 bg-emerald-400/12 text-emerald-100",
+          statusTone === "warning" && "border-yellow-300/30 bg-yellow-300/10 text-yellow-100",
+          statusTone === "error" && "border-rose-300/30 bg-rose-500/10 text-rose-100"
+        )}>
+          {statusTone === "working" ? <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" /> : null}
+          <span>{message}</span>
+        </div>
+        <div className="mt-4 flex justify-end">
+          <button type="button" onClick={onClose} className="rounded-md border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 transition hover:border-white/20 hover:text-studio-100">
+            {statusTone === "working" ? "Hide Window" : "Close"}
+          </button>
+        </div>
+      </div>
+    </div>,
+    globalThis.document.body
+  );
+}
+
 async function waitForDocumentExtraction(documentId: string, versionId: string): Promise<{ state: "done" | "warning"; message: string; characterCount: number }> {
   const queuedNeedle = "Text extraction is queued";
   for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -5069,6 +5211,8 @@ function DocumentRows({
   omitProject = false,
   showInboxMeta = false,
   onDelete,
+  onRetryParse,
+  onRetryParseComplete,
   onAssignToProject,
   assignableProjects = projects,
   defaultProjectId,
@@ -5082,6 +5226,8 @@ function DocumentRows({
   omitProject?: boolean;
   showInboxMeta?: boolean;
   onDelete?: (documentId: string) => Promise<void> | void;
+  onRetryParse?: (versionId: string) => Promise<UploadJobSnapshot>;
+  onRetryParseComplete?: () => Promise<void> | void;
   onAssignToProject?: (documentId: string, projectId: string) => void;
   assignableProjects?: HammerProject[];
   defaultProjectId?: string;
@@ -5089,21 +5235,20 @@ function DocumentRows({
 }) {
   const [assignmentDrafts, setAssignmentDrafts] = useState<Record<string, string>>({});
   const [deletingDocumentId, setDeletingDocumentId] = useState("");
+  const [parseWindow, setParseWindow] = useState<{ doc: HammerDocument; version: HammerDocumentVersion; job?: UploadJobSnapshot; error?: string } | null>(null);
   const [page, setPage] = useState(1);
   const pageSize = useResponsiveTablePageSize({ max: 16, reservedHeight: 360 });
   const rowModels = docs.map((doc) => {
-    const version = currentParseReadyVersionFor(doc.id, docs, versions);
-    return { doc, version, hiddenReason: version ? "" : storedOnlyDocumentReason(doc, versions) };
+    const version = currentVersionFor(doc.id, docs, versions);
+    return { doc, version, parseState: documentVersionParseState(doc, version) };
   });
-  const visibleRows = rowModels.filter((row) => row.version || !row.hiddenReason);
-  const hiddenStoredOnlyCount = rowModels.length - visibleRows.length;
-  const totalPages = Math.max(1, Math.ceil(visibleRows.length / pageSize));
+  const totalPages = Math.max(1, Math.ceil(rowModels.length / pageSize));
   const normalizedPage = Math.min(page, totalPages);
-  const pagedRows = visibleRows.slice((normalizedPage - 1) * pageSize, normalizedPage * pageSize);
+  const pagedRows = rowModels.slice((normalizedPage - 1) * pageSize, normalizedPage * pageSize);
 
   useEffect(() => {
     setPage(1);
-  }, [docs.length, pageSize, hiddenStoredOnlyCount]);
+  }, [docs.length, pageSize]);
 
   async function deleteDocumentFromSlate(document: HammerDocument) {
     if (!onDelete || deletingDocumentId) return;
@@ -5116,17 +5261,31 @@ function DocumentRows({
       setDeletingDocumentId("");
     }
   }
-  if (!visibleRows.length) {
-    return (
-      <div className="grid gap-2">
-        <EmptyState label={hiddenStoredOnlyCount ? "No parse-ready documents are available yet. Stored-only uploads are hidden until readable text is extracted." : emptyLabel} />
-        {hiddenStoredOnlyCount ? <StoredOnlyUploadNotice count={hiddenStoredOnlyCount} /> : null}
-      </div>
-    );
+
+  async function retryParse(document: HammerDocument, version: HammerDocumentVersion) {
+    if (!onRetryParse) return;
+    setParseWindow({ doc: document, version });
+    try {
+      const job = await onRetryParse(version.id);
+      setParseWindow({ doc: document, version, job });
+    } catch (error) {
+      setParseWindow({ doc: document, version, error: error instanceof Error ? error.message : "GreenLight could not start parsing." });
+    }
   }
+
+  if (!rowModels.length) return <EmptyState label={emptyLabel} />;
   return (
     <div className="table-workspace">
-      {hiddenStoredOnlyCount ? <StoredOnlyUploadNotice count={hiddenStoredOnlyCount} /> : null}
+      {parseWindow ? (
+        <ParseProgressModal
+          document={parseWindow.doc}
+          version={parseWindow.version}
+          uploadJob={parseWindow.job}
+          initialError={parseWindow.error}
+          onClose={() => setParseWindow(null)}
+          onComplete={onRetryParseComplete}
+        />
+      ) : null}
       <div className="data-scroll table-workspace-scroll">
         <table className={cn("data-table", omitProject ? "min-w-[760px]" : "min-w-[860px]")}>
           <thead className="text-[11px] uppercase tracking-[0.12em] text-studio-400">
@@ -5142,18 +5301,24 @@ function DocumentRows({
             </tr>
           </thead>
           <tbody className="divide-y divide-white/10">
-            {pagedRows.map(({ doc, version }) => {
+            {pagedRows.map(({ doc, version, parseState }) => {
             const selectedProjectId = assignmentDrafts[doc.id] ?? "";
             const canAssignIncomingDocument = Boolean(onAssignToProject && assignableProjects.length && !doc.projectId);
             const canRunDocumentBreakdown = canBreakdownDocumentType(doc.type);
-            const isParseReady = Boolean(version && isDocumentVersionParseReady(doc, version));
+            const isParseReady = parseState.state === "parsed";
             return (
               <tr key={doc.id} className="text-studio-200">
                 <td className="py-2.5 font-semibold"><Link href={`/scripts/${doc.id}`}>{doc.title}</Link></td>
                 {!omitProject ? <td>{doc.projectId ? projectTitleFromList(doc.projectId, projects) : <span className="text-studio-300">Inbox</span>}</td> : null}
                 {showInboxMeta ? <td className="text-studio-300">{doc.source ?? "Internal"}{doc.submittedAt ? <p className="text-[11px] text-studio-500">{doc.submittedAt}</p> : null}</td> : null}
                 <td>v{version?.versionNumber ?? 1}</td>
-                <td><Badge value={version?.status ?? "DRAFT"} /></td>
+                <td>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <Badge value={version?.status ?? "DRAFT"} />
+                    {version ? <DocumentPipelineBadge tone="uploaded" label="Uploaded" title={version.fileName} /> : null}
+                    <DocumentPipelineBadge tone={parseState.tone} label={parseState.label} title={parseState.detail} />
+                  </div>
+                </td>
                 <td>{doc.writerName ?? userName(doc.createdById)}</td>
                 <td>{doc.updatedAt}</td>
                 <td className="space-x-1.5">
@@ -5166,8 +5331,23 @@ function DocumentRows({
                       <Gauge className="h-3 w-3" />
                       Breakdown
                     </Link>
+                  ) : canRunDocumentBreakdown && parseState.state === "parsing" ? (
+                    <span className="inline-flex items-center gap-1 rounded border border-sky-300/30 bg-sky-300/10 px-1.5 py-1 text-[11px] font-semibold text-sky-100" title={parseState.detail}>
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Parsing
+                    </span>
+                  ) : canRunDocumentBreakdown && version && onRetryParse ? (
+                    <button
+                      type="button"
+                      onClick={() => retryParse(doc, version)}
+                      className="inline-flex items-center gap-1 rounded border border-yellow-300/30 bg-yellow-300/10 px-1.5 py-1 text-[11px] font-semibold text-yellow-100 transition hover:border-yellow-200/50 hover:text-yellow-50"
+                      title={parseState.detail}
+                    >
+                      <Loader2 className="h-3 w-3" />
+                      Re-run parse
+                    </button>
                   ) : canRunDocumentBreakdown ? (
-                    <span className="inline-flex rounded border border-yellow-300/30 bg-yellow-300/10 px-1.5 py-1 text-[11px] font-semibold text-yellow-100" title="Readable script text is required before breakdown can run.">
+                    <span className="inline-flex rounded border border-yellow-300/30 bg-yellow-300/10 px-1.5 py-1 text-[11px] font-semibold text-yellow-100" title={parseState.detail}>
                       Needs parse
                     </span>
                   ) : null}
@@ -5211,15 +5391,7 @@ function DocumentRows({
           </tbody>
         </table>
       </div>
-      <PaginationFooter page={normalizedPage} pageSize={pageSize} total={visibleRows.length} onPageChange={setPage} />
-    </div>
-  );
-}
-
-function StoredOnlyUploadNotice({ count }: { count: number }) {
-  return (
-    <div className="rounded-md border border-yellow-300/25 bg-yellow-300/10 px-3 py-2 text-xs leading-5 text-yellow-100">
-      {count} stored-only upload{count === 1 ? "" : "s"} hidden from this list because readable text was not extracted. Upload a text-readable PDF/FDX/TXT/MD copy to enable review, diff, and breakdown.
+      <PaginationFooter page={normalizedPage} pageSize={pageSize} total={rowModels.length} onPageChange={setPage} />
     </div>
   );
 }
@@ -5228,27 +5400,82 @@ function canBreakdownDocumentType(type: DocumentType) {
   return type === "SCRIPT" || type === "TREATMENT" || type === "OUTLINE";
 }
 
-function currentParseReadyVersionFor(documentId: string, documents: HammerDocument[], versions: HammerDocumentVersion[]) {
-  const doc = documents.find((item) => item.id === documentId);
-  if (!doc) return undefined;
-  const currentVersion = currentVersionFor(documentId, documents, versions);
-  if (currentVersion && isDocumentVersionParseReady(doc, currentVersion)) return currentVersion;
-  return versions
-    .filter((version) => version.documentId === documentId)
-    .sort((a, b) => b.versionNumber - a.versionNumber)
-    .find((version) => isDocumentVersionParseReady(doc, version));
+type DocumentParseState = {
+  state: "not_uploaded" | "parsing" | "parsed" | "issue" | "not_required";
+  label: string;
+  tone: "muted" | "parsing" | "parsed" | "warning";
+  detail: string;
+};
+
+function documentVersionParseState(doc: HammerDocument, version?: HammerDocumentVersion): DocumentParseState {
+  if (!version) {
+    return {
+      state: "not_uploaded",
+      label: "No file",
+      tone: "muted",
+      detail: "No uploaded file version is attached to this document yet."
+    };
+  }
+  if (!documentRequiresReadableText(doc.type)) {
+    return {
+      state: "not_required",
+      label: "Stored",
+      tone: "muted",
+      detail: "This document type does not require script text parsing."
+    };
+  }
+  if (version.extractedText?.trim()) {
+    return {
+      state: "parsed",
+      label: "Parsed",
+      tone: "parsed",
+      detail: `${version.extractedText.trim().length.toLocaleString()} readable characters extracted.`
+    };
+  }
+  if (version.notes?.includes("Text extraction is queued")) {
+    return {
+      state: "parsing",
+      label: "Parsing",
+      tone: "parsing",
+      detail: "GreenLight is extracting readable text from the uploaded file."
+    };
+  }
+  if (/upload warning:/i.test(version.notes ?? "")) {
+    const warningDetail = uploadWarningDetail(version.notes);
+    return {
+      state: "issue",
+      label: "Parse issue",
+      tone: "warning",
+      detail: warningDetail || "The original file is uploaded, but readable text was not extracted."
+    };
+  }
+  return {
+    state: "issue",
+    label: "Needs parse",
+    tone: "warning",
+    detail: "The original file is uploaded, but readable text is not available yet."
+  };
 }
 
-function storedOnlyDocumentReason(doc: HammerDocument, versions: HammerDocumentVersion[]) {
-  const documentVersions = versions.filter((version) => version.documentId === doc.id);
-  if (!documentVersions.length) return "";
-  return documentVersions.some((version) => !isDocumentVersionParseReady(doc, version)) ? "stored-only" : "";
+function DocumentPipelineBadge({ tone, label, title }: { tone: DocumentParseState["tone"] | "uploaded"; label: string; title?: string }) {
+  const classes = {
+    uploaded: "border-emerald-400/25 bg-emerald-400/5 text-emerald-200",
+    parsed: "border-emerald-400/25 bg-emerald-400/5 text-emerald-200",
+    parsing: "border-sky-300/30 bg-sky-300/10 text-sky-100",
+    warning: "border-yellow-300/30 bg-yellow-300/10 text-yellow-100",
+    muted: "border-white/10 bg-white/[0.025] text-studio-400"
+  } satisfies Record<DocumentParseState["tone"] | "uploaded", string>;
+  return (
+    <span title={title} className={cn("inline-flex rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]", classes[tone])}>
+      {label}
+    </span>
+  );
 }
 
-function isDocumentVersionParseReady(doc: HammerDocument, version?: HammerDocumentVersion) {
-  if (!version) return false;
-  if (!documentRequiresReadableText(doc.type)) return true;
-  return Boolean(version.extractedText?.trim());
+function uploadWarningDetail(notes?: string) {
+  const marker = "Upload warning:";
+  const index = notes?.toLowerCase().indexOf(marker.toLowerCase()) ?? -1;
+  return index >= 0 ? notes?.slice(index + marker.length).trim() ?? "" : "";
 }
 
 function documentRequiresReadableText(type: DocumentType) {
@@ -14487,6 +14714,14 @@ function combineVersionNotes(notes: string, warning?: string) {
   if (!warning) return notes;
   const warningNote = `Upload warning: ${warning}`;
   return notes.trim() ? `${notes.trim()}\n\n${warningNote}` : warningNote;
+}
+
+function stripUploadSystemNotesClient(notes?: string) {
+  return (notes ?? "")
+    .split(/\n{2,}/)
+    .map((part) => part.trim())
+    .filter((part) => part && !/^Upload warning:/i.test(part) && !part.includes("Text extraction is queued"))
+    .join("\n\n");
 }
 
 
