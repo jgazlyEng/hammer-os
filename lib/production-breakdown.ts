@@ -78,6 +78,7 @@ const BREAKDOWN_NO_PROGRESS_MS = 30 * 60 * 1000;
 const BREAKDOWN_FINALIZE_STALE_MS = 5 * 60 * 1000;
 const BREAKDOWN_SAVE_STALE_MS = 5 * 60 * 1000;
 const BREAKDOWN_SAVE_ROW_TIMEOUT_MS = 20 * 1000;
+const BREAKDOWN_SAVE_BATCH_SIZE = 10;
 
 type BreakdownProgressUpdate = {
   phase: string;
@@ -225,11 +226,20 @@ async function processProductionBreakdownRun(runId: string) {
       backfilledLocationCount
     });
 
-    const savedElementCount = await withTimeout(
-      saveBreakdownElements(run.id, run.projectId, version.id, elements),
-      BREAKDOWN_SAVE_ROW_TIMEOUT_MS,
-      `Timed out while saving ${elements.length} breakdown review rows.`
-    );
+    const savedElementCount = await saveBreakdownElements({
+      runId: run.id,
+      projectId: run.projectId,
+      documentVersionId: version.id,
+      elements,
+      progress: {
+        processedSceneCount: sceneOutline.length,
+        totalSceneCount: sceneOutline.length,
+        partialElementCount: elements.length,
+        partialSceneCount: scenes.length,
+        sourceElementCount,
+        backfilledLocationCount
+      }
+    });
     const savedElements = elements.slice(0, savedElementCount);
     const failedElementNames = savedElementCount < elements.length
       ? elements.slice(savedElementCount).map((element) => element.displayName)
@@ -291,7 +301,7 @@ async function processProductionBreakdownRun(runId: string) {
       console.error("[hammer:breakdown:completion-metadata]", error);
     });
 
-    return getBreakdownRun(run.id);
+    return prisma.breakdownRun.findUnique({ where: { id: run.id }, include: breakdownRunInclude });
   } catch (error) {
     return markBreakdownRunFailed(run.id, error);
   }
@@ -316,12 +326,48 @@ async function writeBreakdownRunCompletionMetadata(runId: string, summaryJson: P
   });
 }
 
-async function saveBreakdownElements(runId: string, projectId: string, documentVersionId: string, elements: BreakdownElementDraft[]) {
-  const result = await prisma.breakdownElement.createMany({
-    data: elements.map((element) => breakdownElementCreateManyInput(runId, projectId, documentVersionId, element)),
-    skipDuplicates: true
-  });
-  return result.count;
+async function saveBreakdownElements(input: {
+  runId: string;
+  projectId: string;
+  documentVersionId: string;
+  elements: BreakdownElementDraft[];
+  progress: Omit<BreakdownProgressUpdate, "phase" | "savedElementCount" | "totalElementCount" | "failedElementCount" | "currentElementName" | "currentElementCategory" | "currentElementIndex">;
+}) {
+  let savedElementCount = 0;
+  for (let index = 0; index < input.elements.length; index += BREAKDOWN_SAVE_BATCH_SIZE) {
+    const batch = input.elements.slice(index, index + BREAKDOWN_SAVE_BATCH_SIZE);
+    const lastElement = batch[batch.length - 1];
+    await updateBreakdownRunProgress(input.runId, {
+      ...input.progress,
+      phase: "saving-review-table",
+      savedElementCount,
+      totalElementCount: input.elements.length,
+      failedElementCount: 0,
+      currentElementName: lastElement?.displayName,
+      currentElementCategory: lastElement?.category,
+      currentElementIndex: Math.min(index + batch.length, input.elements.length)
+    });
+    const result = await withTimeout(
+      prisma.breakdownElement.createMany({
+        data: batch.map((element) => breakdownElementCreateManyInput(input.runId, input.projectId, input.documentVersionId, element)),
+        skipDuplicates: true
+      }),
+      BREAKDOWN_SAVE_ROW_TIMEOUT_MS,
+      `Timed out while saving review rows ${index + 1}-${Math.min(index + batch.length, input.elements.length)}.`
+    );
+    savedElementCount += result.count;
+    await updateBreakdownRunProgress(input.runId, {
+      ...input.progress,
+      phase: "saving-review-table",
+      savedElementCount,
+      totalElementCount: input.elements.length,
+      failedElementCount: 0,
+      currentElementName: lastElement?.displayName,
+      currentElementCategory: lastElement?.category,
+      currentElementIndex: Math.min(index + batch.length, input.elements.length)
+    });
+  }
+  return savedElementCount;
 }
 
 function breakdownElementCreateManyInput(
@@ -463,10 +509,6 @@ async function markBreakdownRunReadyWithProgress(
   progress: BreakdownProgressUpdate,
   input: { parserName: string; parserVersion?: string; warning?: string }
 ) {
-  const existing = await prisma.breakdownRun.findUnique({ where: { id: runId }, select: { statsJson: true } });
-  const existingStats = existing?.statsJson && typeof existing.statsJson === "object" && !Array.isArray(existing.statsJson)
-    ? existing.statsJson as Prisma.JsonObject
-    : {};
   await prisma.breakdownRun.update({
     where: { id: runId },
     data: {
@@ -476,7 +518,6 @@ async function markBreakdownRunReadyWithProgress(
       warning: input.warning,
       completedAt: new Date(),
       statsJson: {
-        ...existingStats,
         progressPhase: "complete",
         processedSceneCount: progress.processedSceneCount,
         totalSceneCount: progress.totalSceneCount,
