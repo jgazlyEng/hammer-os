@@ -451,16 +451,19 @@ async function markStaleBreakdownRuns(documentVersionId: string) {
     const isFinalizingTooLong = progressPhase === "finalizing-review-table" && noProgressMs >= BREAKDOWN_FINALIZE_STALE_MS;
     const savedElementCount = typeof stats.savedElementCount === "number" && Number.isFinite(stats.savedElementCount) ? stats.savedElementCount : 0;
     const totalElementCount = typeof stats.totalElementCount === "number" && Number.isFinite(stats.totalElementCount) ? stats.totalElementCount : 0;
+    const savedAllRows = totalElementCount > 0 && savedElementCount >= totalElementCount && (progressPhase === "saving-review-table" || progressPhase === "review-table-saved");
     const isSaveTooLong = progressPhase === "saving-review-table" && savedElementCount > 0 && noProgressMs >= BREAKDOWN_SAVE_STALE_MS;
-    if (runAgeMs < BREAKDOWN_STALE_RUN_MS && noProgressMs < BREAKDOWN_NO_PROGRESS_MS && !isFinalizingTooLong && !isSaveTooLong) continue;
+    if (runAgeMs < BREAKDOWN_STALE_RUN_MS && noProgressMs < BREAKDOWN_NO_PROGRESS_MS && !isFinalizingTooLong && !isSaveTooLong && !savedAllRows) continue;
     const reason = runAgeMs >= BREAKDOWN_STALE_RUN_MS
       ? "This breakdown ran longer than the maximum allowed time and was stopped."
+      : savedAllRows
+        ? `GreenLight saved all ${savedElementCount} review rows but the run did not advance to Ready for Review automatically.`
       : isFinalizingTooLong
         ? "This breakdown saved the review rows but stalled while writing the final summary."
         : isSaveTooLong
           ? `This breakdown stalled while saving review rows after ${savedElementCount} of ${totalElementCount || "unknown"} rows.`
         : "This breakdown stopped reporting progress and was marked as stalled.";
-    const makeRowsAvailable = isFinalizingTooLong || isSaveTooLong;
+    const makeRowsAvailable = savedAllRows || isFinalizingTooLong || isSaveTooLong;
     await prisma.breakdownRun.update({
       where: { id: run.id },
       data: {
@@ -979,6 +982,7 @@ async function requestClaudeBreakdown(input: { apiKey: string; model: string; ti
       body: JSON.stringify({
         model: input.model,
         max_tokens: input.maxTokens,
+        temperature: 0,
         system: "You are running the Production Breakdown skill for GreenLight. Follow the uploaded production-breakdown skill taxonomy and CSV column intent exactly. Use the submit_breakdown tool exactly once.",
         tools: [claudeBreakdownTool()],
         tool_choice: { type: "tool", name: "submit_breakdown" },
