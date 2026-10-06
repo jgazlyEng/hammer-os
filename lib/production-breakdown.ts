@@ -229,8 +229,9 @@ async function processProductionBreakdownRun(runId: string) {
     let savedElementCount = 0;
     const savedElements: BreakdownElementDraft[] = [];
     const failedElementNames: string[] = [];
+    let markedReady = false;
     for (const [index, element] of elements.entries()) {
-      await updateBreakdownRunProgress(run.id, {
+      const saveProgress: BreakdownProgressUpdate = {
         phase: "saving-review-table",
         processedSceneCount: sceneOutline.length,
         totalSceneCount: sceneOutline.length,
@@ -244,7 +245,7 @@ async function processProductionBreakdownRun(runId: string) {
         currentElementIndex: index + 1,
         sourceElementCount,
         backfilledLocationCount
-      });
+      };
       try {
         await withTimeout(
           saveBreakdownElement(run.id, run.projectId, version.id, element),
@@ -257,7 +258,7 @@ async function processProductionBreakdownRun(runId: string) {
         failedElementNames.push(element.displayName);
         console.error("[hammer:breakdown:save-element]", element.displayName, error);
       }
-      await updateBreakdownRunProgress(run.id, {
+      const postSaveProgress: BreakdownProgressUpdate = {
         phase: "saving-review-table",
         processedSceneCount: sceneOutline.length,
         totalSceneCount: sceneOutline.length,
@@ -271,35 +272,41 @@ async function processProductionBreakdownRun(runId: string) {
         currentElementIndex: index + 1,
         sourceElementCount,
         backfilledLocationCount
-      });
+      };
+      if (savedElementCount >= elements.length && savedElementCount > 0) {
+        await markBreakdownRunReadyWithProgress(run.id, postSaveProgress, {
+          parserName: selected.parserName,
+          parserVersion: selected.parserVersion,
+          warning: [source.warning, selected.warning].filter(Boolean).join(" ") || undefined
+        });
+        markedReady = true;
+      } else {
+        await updateBreakdownRunProgress(run.id, postSaveProgress);
+      }
     }
-    await updateBreakdownRunProgress(run.id, {
-      phase: "review-table-saved",
-      processedSceneCount: sceneOutline.length,
-      totalSceneCount: sceneOutline.length,
-      partialElementCount: elements.length,
-      partialSceneCount: scenes.length,
-      savedElementCount,
-      totalElementCount: elements.length,
-      failedElementCount: failedElementNames.length,
-      sourceElementCount,
-      backfilledLocationCount
-    });
     if (!savedElementCount) throw new Error("GreenLight could not save any breakdown review rows.");
     const saveWarning = failedElementNames.length
       ? `GreenLight saved ${savedElementCount} of ${elements.length} review rows. Skipped ${failedElementNames.length} row${failedElementNames.length === 1 ? "" : "s"} that could not be saved: ${failedElementNames.slice(0, 6).join(", ")}${failedElementNames.length > 6 ? ", ..." : ""}.`
       : undefined;
 
-    await prisma.breakdownRun.update({
-      where: { id: run.id },
-      data: {
-        status: "READY_FOR_REVIEW",
+    if (!markedReady) {
+      await markBreakdownRunReadyWithProgress(run.id, {
+        phase: "review-table-saved",
+        processedSceneCount: sceneOutline.length,
+        totalSceneCount: sceneOutline.length,
+        partialElementCount: elements.length,
+        partialSceneCount: scenes.length,
+        savedElementCount,
+        totalElementCount: elements.length,
+        failedElementCount: failedElementNames.length,
+        sourceElementCount,
+        backfilledLocationCount
+      }, {
         parserName: selected.parserName,
         parserVersion: selected.parserVersion,
-        warning: [source.warning, selected.warning, saveWarning].filter(Boolean).join(" ") || undefined,
-        completedAt: new Date()
-      }
-    });
+        warning: [source.warning, selected.warning, saveWarning].filter(Boolean).join(" ") || undefined
+      });
+    }
 
     void writeBreakdownRunCompletionMetadata(run.id, {
       elementCount: savedElements.length,
@@ -505,6 +512,46 @@ async function updateBreakdownRunProgress(runId: string, progress: BreakdownProg
         currentElementName: progress.currentElementName ?? null,
         currentElementCategory: progress.currentElementCategory ?? null,
         currentElementIndex: progress.currentElementIndex ?? null,
+        sourceElementCount: progress.sourceElementCount ?? null,
+        backfilledLocationCount: progress.backfilledLocationCount ?? null,
+        progressUpdatedAt: new Date().toISOString()
+      }
+    }
+  });
+}
+
+async function markBreakdownRunReadyWithProgress(
+  runId: string,
+  progress: BreakdownProgressUpdate,
+  input: { parserName: string; parserVersion?: string; warning?: string }
+) {
+  const existing = await prisma.breakdownRun.findUnique({ where: { id: runId }, select: { statsJson: true } });
+  const existingStats = existing?.statsJson && typeof existing.statsJson === "object" && !Array.isArray(existing.statsJson)
+    ? existing.statsJson as Prisma.JsonObject
+    : {};
+  await prisma.breakdownRun.update({
+    where: { id: runId },
+    data: {
+      status: "READY_FOR_REVIEW",
+      parserName: input.parserName,
+      parserVersion: input.parserVersion,
+      warning: input.warning,
+      completedAt: new Date(),
+      statsJson: {
+        ...existingStats,
+        progressPhase: "complete",
+        processedSceneCount: progress.processedSceneCount,
+        totalSceneCount: progress.totalSceneCount,
+        completedBatchCount: progress.completedBatchCount ?? null,
+        totalBatchCount: progress.totalBatchCount ?? null,
+        partialElementCount: progress.partialElementCount ?? null,
+        partialSceneCount: progress.partialSceneCount ?? null,
+        savedElementCount: progress.savedElementCount ?? null,
+        totalElementCount: progress.totalElementCount ?? null,
+        failedElementCount: progress.failedElementCount ?? null,
+        currentElementName: null,
+        currentElementCategory: null,
+        currentElementIndex: null,
         sourceElementCount: progress.sourceElementCount ?? null,
         backfilledLocationCount: progress.backfilledLocationCount ?? null,
         progressUpdatedAt: new Date().toISOString()
@@ -982,7 +1029,6 @@ async function requestClaudeBreakdown(input: { apiKey: string; model: string; ti
       body: JSON.stringify({
         model: input.model,
         max_tokens: input.maxTokens,
-        temperature: 0,
         system: "You are running the Production Breakdown skill for GreenLight. Follow the uploaded production-breakdown skill taxonomy and CSV column intent exactly. Use the submit_breakdown tool exactly once.",
         tools: [claudeBreakdownTool()],
         tool_choice: { type: "tool", name: "submit_breakdown" },
