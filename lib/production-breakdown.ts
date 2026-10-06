@@ -208,10 +208,9 @@ async function processProductionBreakdownRun(runId: string) {
       onProgress: (progress) => updateBreakdownRunProgress(run.id, progress)
     });
     const scenes = sceneOutline.length ? mergeClaudeSceneDetailsIntoOutline(sceneOutline, selected.scenes) : selected.scenes;
-    const selectedElements = ensureSceneOutlineLocations(selected.elements, sceneOutline);
-    const elements = assignElementsToScenes(selectedElements, sceneOutline);
+    const elements = assignElementsToScenes(selected.elements, sceneOutline);
     const sourceElementCount = selected.elements.length;
-    const backfilledLocationCount = Math.max(0, elements.length - sourceElementCount);
+    const backfilledLocationCount = 0;
     attachElementsToSceneSummaries(scenes, elements);
 
     await updateBreakdownRunProgress(run.id, {
@@ -226,88 +225,36 @@ async function processProductionBreakdownRun(runId: string) {
       backfilledLocationCount
     });
 
-    let savedElementCount = 0;
-    const savedElements: BreakdownElementDraft[] = [];
-    const failedElementNames: string[] = [];
-    let markedReady = false;
-    for (const [index, element] of elements.entries()) {
-      const saveProgress: BreakdownProgressUpdate = {
-        phase: "saving-review-table",
-        processedSceneCount: sceneOutline.length,
-        totalSceneCount: sceneOutline.length,
-        partialElementCount: elements.length,
-        partialSceneCount: scenes.length,
-        savedElementCount,
-        totalElementCount: elements.length,
-        failedElementCount: failedElementNames.length,
-        currentElementName: element.displayName,
-        currentElementCategory: element.category,
-        currentElementIndex: index + 1,
-        sourceElementCount,
-        backfilledLocationCount
-      };
-      await updateBreakdownRunProgress(run.id, saveProgress);
-      try {
-        await withTimeout(
-          saveBreakdownElement(run.id, run.projectId, version.id, element),
-          BREAKDOWN_SAVE_ROW_TIMEOUT_MS,
-          `Timed out while saving review row ${index + 1}: ${element.category} - ${element.displayName}`
-        );
-        savedElementCount += 1;
-        savedElements.push(element);
-      } catch (error) {
-        failedElementNames.push(element.displayName);
-        console.error("[hammer:breakdown:save-element]", element.displayName, error);
-      }
-      const postSaveProgress: BreakdownProgressUpdate = {
-        phase: "saving-review-table",
-        processedSceneCount: sceneOutline.length,
-        totalSceneCount: sceneOutline.length,
-        partialElementCount: elements.length,
-        partialSceneCount: scenes.length,
-        savedElementCount,
-        totalElementCount: elements.length,
-        failedElementCount: failedElementNames.length,
-        currentElementName: element.displayName,
-        currentElementCategory: element.category,
-        currentElementIndex: index + 1,
-        sourceElementCount,
-        backfilledLocationCount
-      };
-      if (savedElementCount >= elements.length && savedElementCount > 0) {
-        await markBreakdownRunReadyWithProgress(run.id, postSaveProgress, {
-          parserName: selected.parserName,
-          parserVersion: selected.parserVersion,
-          warning: [source.warning, selected.warning].filter(Boolean).join(" ") || undefined
-        });
-        markedReady = true;
-      } else {
-        await updateBreakdownRunProgress(run.id, postSaveProgress);
-      }
-    }
+    const savedElementCount = await withTimeout(
+      saveBreakdownElements(run.id, run.projectId, version.id, elements),
+      BREAKDOWN_SAVE_ROW_TIMEOUT_MS,
+      `Timed out while saving ${elements.length} breakdown review rows.`
+    );
+    const savedElements = elements.slice(0, savedElementCount);
+    const failedElementNames = savedElementCount < elements.length
+      ? elements.slice(savedElementCount).map((element) => element.displayName)
+      : [];
     if (!savedElementCount) throw new Error("GreenLight could not save any breakdown review rows.");
     const saveWarning = failedElementNames.length
       ? `GreenLight saved ${savedElementCount} of ${elements.length} review rows. Skipped ${failedElementNames.length} row${failedElementNames.length === 1 ? "" : "s"} that could not be saved: ${failedElementNames.slice(0, 6).join(", ")}${failedElementNames.length > 6 ? ", ..." : ""}.`
       : undefined;
 
-    if (!markedReady) {
-      await markBreakdownRunReadyWithProgress(run.id, {
-        phase: "review-table-saved",
-        processedSceneCount: sceneOutline.length,
-        totalSceneCount: sceneOutline.length,
-        partialElementCount: elements.length,
-        partialSceneCount: scenes.length,
-        savedElementCount,
-        totalElementCount: elements.length,
-        failedElementCount: failedElementNames.length,
-        sourceElementCount,
-        backfilledLocationCount
-      }, {
-        parserName: selected.parserName,
-        parserVersion: selected.parserVersion,
-        warning: [source.warning, selected.warning, saveWarning].filter(Boolean).join(" ") || undefined
-      });
-    }
+    await markBreakdownRunReadyWithProgress(run.id, {
+      phase: "review-table-saved",
+      processedSceneCount: sceneOutline.length,
+      totalSceneCount: sceneOutline.length,
+      partialElementCount: elements.length,
+      partialSceneCount: scenes.length,
+      savedElementCount,
+      totalElementCount: elements.length,
+      failedElementCount: failedElementNames.length,
+      sourceElementCount,
+      backfilledLocationCount
+    }, {
+      parserName: selected.parserName,
+      parserVersion: selected.parserVersion,
+      warning: [source.warning, selected.warning, saveWarning].filter(Boolean).join(" ") || undefined
+    });
 
     void writeBreakdownRunCompletionMetadata(run.id, {
       elementCount: savedElements.length,
@@ -369,75 +316,47 @@ async function writeBreakdownRunCompletionMetadata(runId: string, summaryJson: P
   });
 }
 
-async function saveBreakdownElement(runId: string, projectId: string, documentVersionId: string, element: BreakdownElementDraft) {
-  await prisma.$transaction(async (tx) => {
-    const isBackfilledLocation = isBackfilledLocationElement(element);
-    const metadataJson = isBackfilledLocation
-      ? {
-        ...(element.metadataJson as Prisma.InputJsonObject),
-        sceneCount: element.scenes.length,
-        sceneNumbers: element.scenes.map((scene) => scene.sceneNumber).filter(Boolean).slice(0, 80),
-        sceneHeadings: element.scenes.map((scene) => scene.sceneHeading).filter(Boolean).slice(0, 20),
-        sceneLinkStorage: "metadata-only"
-      } satisfies Prisma.InputJsonObject
-      : element.metadataJson;
-    const tags = await Promise.all(element.tagKeys.map((tag) => tx.tag.upsert({
-      where: { scope_key_value: { scope: "BREAKDOWN", key: tag.key, value: tag.value } },
-      create: { scope: "BREAKDOWN", key: tag.key, value: tag.value, label: tag.label, color: tag.color },
-      update: { label: tag.label, color: tag.color }
-    })));
+async function saveBreakdownElements(runId: string, projectId: string, documentVersionId: string, elements: BreakdownElementDraft[]) {
+  const result = await prisma.breakdownElement.createMany({
+    data: elements.map((element) => breakdownElementCreateManyInput(runId, projectId, documentVersionId, element)),
+    skipDuplicates: true
+  });
+  return result.count;
+}
 
-    const created = await tx.breakdownElement.create({
-      data: {
-        runId,
-        projectId,
-        documentVersionId,
-        stableKey: element.stableKey,
-        category: element.category,
-        displayName: element.displayName,
-        normalizedName: element.normalizedName,
-        description: element.description,
-        evidenceText: element.evidenceText,
-        sourceText: element.sourceText,
-        firstPageNumber: element.firstPageNumber,
-        lastPageNumber: element.lastPageNumber,
-        pageSource: element.firstPageNumber || element.lastPageNumber ? "ESTIMATED" : "UNKNOWN",
-        confidence: element.confidence,
-        status: "UNREVIEWED",
-        sortOrder: element.sortOrder,
-        metadataJson
-      },
-      select: { id: true }
-    });
+function breakdownElementCreateManyInput(
+  runId: string,
+  projectId: string,
+  documentVersionId: string,
+  element: BreakdownElementDraft
+): Prisma.BreakdownElementCreateManyInput {
+  const metadataJson = {
+    ...(element.metadataJson as Prisma.InputJsonObject),
+    tagKeys: element.tagKeys,
+    sceneReferences: element.scenes.slice(0, 200),
+    sceneCount: element.scenes.length,
+    sceneLinkStorage: "metadata-only"
+  } satisfies Prisma.InputJsonObject;
 
-    if (tags.length) {
-      await tx.breakdownElementTag.createMany({
-        data: tags.map((tag) => ({ breakdownElementId: created.id, tagId: tag.id })),
-        skipDuplicates: true
-      });
-    }
-
-    if (isBackfilledLocation) return;
-
-    for (let index = 0; index < element.scenes.length; index += 50) {
-      const chunk = element.scenes.slice(index, index + 50);
-      await tx.breakdownSceneElement.createMany({
-        data: chunk.map((scene) => ({
-          runId,
-          breakdownElementId: created.id,
-          sceneNumber: scene.sceneNumber || undefined,
-          sceneHeading: scene.sceneHeading || undefined,
-          occurrenceCount: scene.occurrenceCount,
-          firstPageNumber: scene.firstPageNumber,
-          lastPageNumber: scene.lastPageNumber,
-          evidenceText: scene.evidenceText,
-          notes: scene.notes,
-          metadataJson: scene.metadataJson
-        })),
-        skipDuplicates: true
-      });
-    }
-  }, { maxWait: 5_000, timeout: 12_000 });
+  return {
+    runId,
+    projectId,
+    documentVersionId,
+    stableKey: element.stableKey,
+    category: element.category,
+    displayName: element.displayName,
+    normalizedName: element.normalizedName,
+    description: element.description,
+    evidenceText: element.evidenceText,
+    sourceText: element.sourceText,
+    firstPageNumber: element.firstPageNumber,
+    lastPageNumber: element.lastPageNumber,
+    pageSource: element.firstPageNumber || element.lastPageNumber ? "ESTIMATED" : "UNKNOWN",
+    confidence: element.confidence,
+    status: "UNREVIEWED",
+    sortOrder: element.sortOrder,
+    metadataJson
+  };
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {

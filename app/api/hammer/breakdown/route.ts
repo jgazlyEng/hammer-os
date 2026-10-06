@@ -154,49 +154,109 @@ function toBreakdownRun(run: ProductionBreakdownRunRecord) {
     updatedAt: dateTimeString(run.updatedAt),
     completedAt: run.completedAt ? dateTimeString(run.completedAt) : undefined,
     approvedAt: run.approvedAt ? dateTimeString(run.approvedAt) : undefined,
-    elements: run.elements.map((element) => ({
-      id: element.id,
-      runId: element.runId,
-      projectId: element.projectId,
-      documentVersionId: element.documentVersionId,
-      stableKey: element.stableKey,
-      category: element.category,
-      displayName: element.displayName,
-      normalizedName: element.normalizedName,
-      description: element.description ?? undefined,
-      evidenceText: element.evidenceText ?? undefined,
-      sourceText: element.sourceText ?? undefined,
-      firstPageNumber: element.firstPageNumber ?? undefined,
-      lastPageNumber: element.lastPageNumber ?? undefined,
-      pageSource: element.pageSource,
-      confidence: element.confidence ?? undefined,
-      status: element.status,
-      sortOrder: element.sortOrder,
-      metadata: normalizeJsonObject(element.metadataJson),
-      tags: element.tags.map((item) => ({
-        id: item.tag.id,
-        key: item.tag.key,
-        value: item.tag.value,
-        label: item.tag.label ?? undefined,
-        color: item.tag.color ?? undefined
-      })),
-      scenes: element.sceneElements.map((scene) => ({
-        id: scene.id,
-        sceneNumber: scene.sceneNumber ?? undefined,
-        sceneHeading: scene.sceneHeading ?? undefined,
-        occurrenceCount: scene.occurrenceCount,
-        firstPageNumber: scene.firstPageNumber ?? undefined,
-        lastPageNumber: scene.lastPageNumber ?? undefined,
-        evidenceText: scene.evidenceText ?? undefined,
-        notes: scene.notes ?? undefined,
-        metadata: normalizeJsonObject(scene.metadataJson)
-      }))
-    }))
+    elements: run.elements.map((element) => {
+      const metadata = normalizeJsonObject(element.metadataJson);
+      return {
+        id: element.id,
+        runId: element.runId,
+        projectId: element.projectId,
+        documentVersionId: element.documentVersionId,
+        stableKey: element.stableKey,
+        category: element.category,
+        displayName: element.displayName,
+        normalizedName: element.normalizedName,
+        description: element.description ?? undefined,
+        evidenceText: element.evidenceText ?? undefined,
+        sourceText: element.sourceText ?? undefined,
+        firstPageNumber: element.firstPageNumber ?? undefined,
+        lastPageNumber: element.lastPageNumber ?? undefined,
+        pageSource: element.pageSource,
+        confidence: element.confidence ?? undefined,
+        status: element.status,
+        sortOrder: element.sortOrder,
+        metadata,
+        tags: element.tags.length ? element.tags.map((item) => ({
+          id: item.tag.id,
+          key: item.tag.key,
+          value: item.tag.value,
+          label: item.tag.label ?? undefined,
+          color: item.tag.color ?? undefined
+        })) : metadataTags(metadata),
+        scenes: element.sceneElements.length ? element.sceneElements.map((scene) => ({
+          id: scene.id,
+          sceneNumber: scene.sceneNumber ?? undefined,
+          sceneHeading: scene.sceneHeading ?? undefined,
+          occurrenceCount: scene.occurrenceCount,
+          firstPageNumber: scene.firstPageNumber ?? undefined,
+          lastPageNumber: scene.lastPageNumber ?? undefined,
+          evidenceText: scene.evidenceText ?? undefined,
+          notes: scene.notes ?? undefined,
+          metadata: normalizeJsonObject(scene.metadataJson)
+        })) : metadataScenes(metadata)
+      };
+    })
   };
 }
 
 function normalizeJsonObject(value: Prisma.JsonValue | null | undefined) {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function metadataTags(metadata: Record<string, unknown> | undefined) {
+  const tags = metadata?.tagKeys;
+  if (!Array.isArray(tags)) return [];
+  const mapped: Array<{ id: string; key: string; value: string; label?: string; color?: string }> = [];
+  for (const [index, tag] of tags.entries()) {
+    if (!tag || typeof tag !== "object" || Array.isArray(tag)) continue;
+    const record = tag as Record<string, unknown>;
+    const key = stringField(record.key);
+    const value = stringField(record.value);
+    if (!key || !value) continue;
+    mapped.push({
+      id: `metadata-tag-${index}`,
+      key,
+      value,
+      label: stringField(record.label) || undefined,
+      color: stringField(record.color) || undefined
+    });
+  }
+  return mapped;
+}
+
+function metadataScenes(metadata: Record<string, unknown> | undefined) {
+  const scenes = metadata?.sceneReferences;
+  if (!Array.isArray(scenes)) return [];
+  const mapped: Array<{
+    id: string;
+    sceneNumber?: string;
+    sceneHeading?: string;
+    occurrenceCount: number;
+    firstPageNumber?: number;
+    lastPageNumber?: number;
+    evidenceText?: string;
+    notes?: string;
+    metadata?: Record<string, unknown>;
+  }> = [];
+  for (const [index, scene] of scenes.entries()) {
+    if (!scene || typeof scene !== "object" || Array.isArray(scene)) continue;
+    const record = scene as Record<string, unknown>;
+    mapped.push({
+      id: `metadata-scene-${index}`,
+      sceneNumber: stringField(record.sceneNumber) || undefined,
+      sceneHeading: stringField(record.sceneHeading) || undefined,
+      occurrenceCount: numberField(record.occurrenceCount) ?? 1,
+      firstPageNumber: numberField(record.firstPageNumber),
+      lastPageNumber: numberField(record.lastPageNumber),
+      evidenceText: stringField(record.evidenceText) || undefined,
+      notes: stringField(record.notes) || undefined,
+      metadata: normalizeJsonObject(record.metadataJson as Prisma.JsonValue)
+    });
+  }
+  return mapped;
+}
+
+function numberField(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function stringField(value: unknown) {
