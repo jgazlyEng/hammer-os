@@ -88,6 +88,9 @@ type BreakdownProgressUpdate = {
   savedElementCount?: number;
   totalElementCount?: number;
   failedElementCount?: number;
+  currentElementName?: string;
+  currentElementCategory?: BreakdownTaxonomyCategory;
+  currentElementIndex?: number;
 };
 
 const categoryDepartments: Record<BreakdownTaxonomyCategory, string> = {
@@ -218,7 +221,20 @@ async function processProductionBreakdownRun(runId: string) {
     let savedElementCount = 0;
     const savedElements: BreakdownElementDraft[] = [];
     const failedElementNames: string[] = [];
-    for (const element of elements) {
+    for (const [index, element] of elements.entries()) {
+      await updateBreakdownRunProgress(run.id, {
+        phase: "saving-review-table",
+        processedSceneCount: sceneOutline.length,
+        totalSceneCount: sceneOutline.length,
+        partialElementCount: elements.length,
+        partialSceneCount: scenes.length,
+        savedElementCount,
+        totalElementCount: elements.length,
+        failedElementCount: failedElementNames.length,
+        currentElementName: element.displayName,
+        currentElementCategory: element.category,
+        currentElementIndex: index + 1
+      });
       try {
         await saveBreakdownElement(run.id, run.projectId, version.id, element);
         savedElementCount += 1;
@@ -235,7 +251,10 @@ async function processProductionBreakdownRun(runId: string) {
         partialSceneCount: scenes.length,
         savedElementCount,
         totalElementCount: elements.length,
-        failedElementCount: failedElementNames.length
+        failedElementCount: failedElementNames.length,
+        currentElementName: element.displayName,
+        currentElementCategory: element.category,
+        currentElementIndex: index + 1
       });
     }
     if (!savedElementCount) throw new Error("GreenLight could not save any breakdown review rows.");
@@ -429,6 +448,10 @@ async function updateBreakdownRunProgress(runId: string, progress: BreakdownProg
         partialSceneCount: progress.partialSceneCount ?? null,
         savedElementCount: progress.savedElementCount ?? null,
         totalElementCount: progress.totalElementCount ?? null,
+        failedElementCount: progress.failedElementCount ?? null,
+        currentElementName: progress.currentElementName ?? null,
+        currentElementCategory: progress.currentElementCategory ?? null,
+        currentElementIndex: progress.currentElementIndex ?? null,
         progressUpdatedAt: new Date().toISOString()
       }
     }

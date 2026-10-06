@@ -8851,6 +8851,10 @@ function BreakdownProgressModal({
   const partialElementCount = breakdownStatNumber(state.run?.stats, "partialElementCount");
   const savedElementCount = breakdownStatNumber(state.run?.stats, "savedElementCount");
   const totalElementCount = breakdownStatNumber(state.run?.stats, "totalElementCount");
+  const failedElementCount = breakdownStatNumber(state.run?.stats, "failedElementCount");
+  const currentElementName = typeof state.run?.stats?.currentElementName === "string" ? state.run.stats.currentElementName : "";
+  const currentElementCategory = typeof state.run?.stats?.currentElementCategory === "string" ? state.run.stats.currentElementCategory : "";
+  const currentElementIndex = breakdownStatNumber(state.run?.stats, "currentElementIndex");
   const progressPhase = typeof state.run?.stats?.progressPhase === "string" ? state.run.stats.progressPhase : "";
   const sourceCharacters = breakdownStatNumber(state.run?.stats, "sourceTextCharacters");
   const steps = breakdownProgressSteps(state, elapsedSeconds);
@@ -8928,7 +8932,11 @@ function BreakdownProgressModal({
         {partialElementCount !== undefined ? (
           <p className="mt-2 text-[11px] text-studio-500">
             {savedElementCount !== undefined && totalElementCount ? (
-              <>GreenLight has saved {Math.min(savedElementCount, totalElementCount).toLocaleString()} of {totalElementCount.toLocaleString()} review row{totalElementCount === 1 ? "" : "s"} to the database.</>
+              <>
+                GreenLight has saved {Math.min(savedElementCount, totalElementCount).toLocaleString()} of {totalElementCount.toLocaleString()} review row{totalElementCount === 1 ? "" : "s"} to the database.
+                {currentElementName ? <> Currently saving {currentElementIndex ? `row ${currentElementIndex.toLocaleString()}: ` : ""}{currentElementCategory ? `${statusLabel(currentElementCategory)} - ` : ""}{currentElementName}.</> : null}
+                {failedElementCount ? <> Skipped {failedElementCount.toLocaleString()} row{failedElementCount === 1 ? "" : "s"}.</> : null}
+              </>
             ) : (
               <>Claude has returned {partialElementCount.toLocaleString()} production item{partialElementCount === 1 ? "" : "s"} so far. GreenLight will save the final review table when all batches finish.</>
             )}
@@ -9002,6 +9010,9 @@ function breakdownRunningCopy(attempt: number, run?: HammerBreakdownRun) {
   const partialElementCount = breakdownStatNumber(run?.stats, "partialElementCount");
   const savedElementCount = breakdownStatNumber(run?.stats, "savedElementCount");
   const totalElementCount = breakdownStatNumber(run?.stats, "totalElementCount");
+  const currentElementName = typeof run?.stats?.currentElementName === "string" ? run.stats.currentElementName : "";
+  const currentElementCategory = typeof run?.stats?.currentElementCategory === "string" ? run.stats.currentElementCategory : "";
+  const currentElementIndex = breakdownStatNumber(run?.stats, "currentElementIndex");
   const progressPhase = typeof run?.stats?.progressPhase === "string" ? run.stats.progressPhase : "";
   if (progressPhase === "finalizing-review-table") {
     return {
@@ -9011,9 +9022,12 @@ function breakdownRunningCopy(attempt: number, run?: HammerBreakdownRun) {
     };
   }
   if (savedElementCount !== undefined && totalElementCount) {
+    const currentRow = currentElementName
+      ? ` Currently saving ${currentElementIndex ? `row ${currentElementIndex.toLocaleString()}: ` : ""}${currentElementCategory ? `${statusLabel(currentElementCategory)} - ` : ""}${currentElementName}.`
+      : "";
     return {
       phase: "Saving review table",
-      message: `GreenLight is saving ${Math.min(savedElementCount, totalElementCount).toLocaleString()} of ${totalElementCount.toLocaleString()} review rows to the database.`,
+      message: `GreenLight is saving ${Math.min(savedElementCount, totalElementCount).toLocaleString()} of ${totalElementCount.toLocaleString()} review rows to the database.${currentRow}`,
       detail: "This final step links elements to scenes, saves tags, and prepares the breakdown table for review."
     };
   }
