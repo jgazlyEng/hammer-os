@@ -8533,8 +8533,8 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
   }, []);
 
   const waitForBreakdownCompletion = useCallback(async (versionId: string, runId: string) => {
-    for (let attempt = 0; attempt < 180; attempt += 1) {
-      await delay(2500);
+    for (let attempt = 0; attempt < 1440; attempt += 1) {
+      await delay(5000);
       const runs = await loadPersistedBreakdownRuns(versionId);
       setPersistedRuns(runs);
       const run = runs.find((item) => item.id === runId);
@@ -8555,7 +8555,9 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
   useEffect(() => {
     if (workspaceMode !== "database" || !version?.id || activeRun?.status !== "RUNNING") return;
     const createdAt = new Date(activeRun.createdAt).getTime();
-    if (Number.isFinite(createdAt) && Date.now() - createdAt > 30 * 60 * 1000) {
+    const progressUpdatedAt = typeof activeRun.stats?.progressUpdatedAt === "string" ? Date.parse(activeRun.stats.progressUpdatedAt) : NaN;
+    const lastProgressAt = Number.isFinite(progressUpdatedAt) ? progressUpdatedAt : createdAt;
+    if (Number.isFinite(lastProgressAt) && Date.now() - lastProgressAt > 30 * 60 * 1000) {
       setBreakdownStatus("This breakdown is still marked as running but appears stale. Remove it and run a new breakdown.");
       return;
     }
@@ -8841,13 +8843,15 @@ function BreakdownProgressModal({
   }, [isWorking]);
 
   const elapsedSeconds = Math.max(0, Math.round((now - state.startedAt) / 1000));
-  const progress = state.tone === "success" ? 100 : state.tone === "error" ? 100 : Math.min(88, Math.max(12, 12 + Math.floor(elapsedSeconds / 3) * 4));
   const processedSceneCount = breakdownStatNumber(state.run?.stats, "processedSceneCount");
   const totalSceneCount = breakdownStatNumber(state.run?.stats, "totalSceneCount") ?? breakdownStatNumber(state.run?.stats, "outlineSceneCount");
   const sceneCount = breakdownStatNumber(state.run?.stats, "summarySceneCount") ?? totalSceneCount;
   const completedBatchCount = breakdownStatNumber(state.run?.stats, "completedBatchCount");
   const totalBatchCount = breakdownStatNumber(state.run?.stats, "totalBatchCount");
   const partialElementCount = breakdownStatNumber(state.run?.stats, "partialElementCount");
+  const savedElementCount = breakdownStatNumber(state.run?.stats, "savedElementCount");
+  const totalElementCount = breakdownStatNumber(state.run?.stats, "totalElementCount");
+  const progressPhase = typeof state.run?.stats?.progressPhase === "string" ? state.run.stats.progressPhase : "";
   const sourceCharacters = breakdownStatNumber(state.run?.stats, "sourceTextCharacters");
   const steps = breakdownProgressSteps(state, elapsedSeconds);
   const sceneProgress = processedSceneCount !== undefined && totalSceneCount
@@ -8856,6 +8860,18 @@ function BreakdownProgressModal({
   const batchProgress = completedBatchCount !== undefined && totalBatchCount
     ? `${Math.min(completedBatchCount, totalBatchCount).toLocaleString()} / ${totalBatchCount.toLocaleString()}`
     : state.pollCount ? state.pollCount.toLocaleString() : isWorking ? "Starting" : "Done";
+  const liveSceneProgress = processedSceneCount !== undefined && totalSceneCount
+    ? Math.min(96, Math.max(8, Math.round((Math.min(processedSceneCount, totalSceneCount) / totalSceneCount) * 96)))
+    : undefined;
+  const liveBatchProgress = completedBatchCount !== undefined && totalBatchCount
+    ? Math.min(96, Math.max(8, Math.round((Math.min(completedBatchCount, totalBatchCount) / totalBatchCount) * 96)))
+    : undefined;
+  const liveSaveProgress = savedElementCount !== undefined && totalElementCount
+    ? Math.min(98, Math.max(92, Math.round(92 + (Math.min(savedElementCount, totalElementCount) / totalElementCount) * 6)))
+    : undefined;
+  const liveFinalizeProgress = progressPhase === "finalizing-review-table" ? 99 : undefined;
+  const estimatedProgress = Math.min(88, Math.max(12, 12 + Math.floor(elapsedSeconds / 3) * 4));
+  const progress = state.tone === "success" ? 100 : state.tone === "error" ? 100 : liveFinalizeProgress ?? liveSaveProgress ?? liveSceneProgress ?? liveBatchProgress ?? estimatedProgress;
   const categories = state.run?.summary?.categories && typeof state.run.summary.categories === "object" && !Array.isArray(state.run.summary.categories)
     ? state.run.summary.categories as Record<string, unknown>
     : {};
@@ -8911,7 +8927,11 @@ function BreakdownProgressModal({
         </div>
         {partialElementCount !== undefined ? (
           <p className="mt-2 text-[11px] text-studio-500">
-            Claude has returned {partialElementCount.toLocaleString()} production item{partialElementCount === 1 ? "" : "s"} so far. GreenLight will save the final review table when all batches finish.
+            {savedElementCount !== undefined && totalElementCount ? (
+              <>GreenLight has saved {Math.min(savedElementCount, totalElementCount).toLocaleString()} of {totalElementCount.toLocaleString()} review row{totalElementCount === 1 ? "" : "s"} to the database.</>
+            ) : (
+              <>Claude has returned {partialElementCount.toLocaleString()} production item{partialElementCount === 1 ? "" : "s"} so far. GreenLight will save the final review table when all batches finish.</>
+            )}
           </p>
         ) : null}
 
@@ -8980,6 +9000,23 @@ function breakdownRunningCopy(attempt: number, run?: HammerBreakdownRun) {
   const completedBatchCount = breakdownStatNumber(run?.stats, "completedBatchCount");
   const totalBatchCount = breakdownStatNumber(run?.stats, "totalBatchCount");
   const partialElementCount = breakdownStatNumber(run?.stats, "partialElementCount");
+  const savedElementCount = breakdownStatNumber(run?.stats, "savedElementCount");
+  const totalElementCount = breakdownStatNumber(run?.stats, "totalElementCount");
+  const progressPhase = typeof run?.stats?.progressPhase === "string" ? run.stats.progressPhase : "";
+  if (progressPhase === "finalizing-review-table") {
+    return {
+      phase: "Finalizing review table",
+      message: "GreenLight has saved the review rows and is writing the final breakdown summary.",
+      detail: "This should be brief. If it does not complete, GreenLight will mark the run stalled instead of leaving it running forever."
+    };
+  }
+  if (savedElementCount !== undefined && totalElementCount) {
+    return {
+      phase: "Saving review table",
+      message: `GreenLight is saving ${Math.min(savedElementCount, totalElementCount).toLocaleString()} of ${totalElementCount.toLocaleString()} review rows to the database.`,
+      detail: "This final step links elements to scenes, saves tags, and prepares the breakdown table for review."
+    };
+  }
   if (processedSceneCount !== undefined && totalSceneCount) {
     const sceneText = `${Math.min(processedSceneCount, totalSceneCount).toLocaleString()} of ${totalSceneCount.toLocaleString()} scenes`;
     const batchText = completedBatchCount !== undefined && totalBatchCount ? ` Batch ${Math.min(completedBatchCount, totalBatchCount).toLocaleString()} of ${totalBatchCount.toLocaleString()} is complete.` : "";
@@ -9019,9 +9056,19 @@ function breakdownRunningCopy(attempt: number, run?: HammerBreakdownRun) {
 }
 
 function breakdownProgressSteps(state: BreakdownProgressModalState, elapsedSeconds: number) {
-  const activeIndex = state.tone === "working"
-    ? elapsedSeconds < 8 ? 0 : elapsedSeconds < 45 ? 1 : elapsedSeconds < 120 ? 2 : 3
-    : state.tone === "success" ? 4 : 2;
+  const savedElementCount = breakdownStatNumber(state.run?.stats, "savedElementCount");
+  const totalElementCount = breakdownStatNumber(state.run?.stats, "totalElementCount");
+  const processedSceneCount = breakdownStatNumber(state.run?.stats, "processedSceneCount");
+  const totalSceneCount = breakdownStatNumber(state.run?.stats, "totalSceneCount") ?? breakdownStatNumber(state.run?.stats, "outlineSceneCount");
+  const activeIndex = state.tone === "success"
+    ? 4
+    : state.tone === "error"
+      ? 2
+      : savedElementCount !== undefined && totalElementCount
+        ? 3
+        : processedSceneCount !== undefined && totalSceneCount && processedSceneCount >= totalSceneCount
+          ? 2
+          : elapsedSeconds < 8 ? 0 : elapsedSeconds < 45 ? 1 : elapsedSeconds < 120 ? 2 : 3;
   return [
     {
       label: "Validate script text",
