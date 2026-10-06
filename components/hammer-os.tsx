@@ -8855,6 +8855,9 @@ function BreakdownProgressModal({
   const currentElementName = typeof state.run?.stats?.currentElementName === "string" ? state.run.stats.currentElementName : "";
   const currentElementCategory = typeof state.run?.stats?.currentElementCategory === "string" ? state.run.stats.currentElementCategory : "";
   const currentElementIndex = breakdownStatNumber(state.run?.stats, "currentElementIndex");
+  const sourceElementCount = breakdownStatNumber(state.run?.stats, "sourceElementCount");
+  const backfilledLocationCount = breakdownStatNumber(state.run?.stats, "backfilledLocationCount");
+  const isActivelySavingRow = savedElementCount !== undefined && totalElementCount !== undefined && savedElementCount < totalElementCount;
   const progressPhase = typeof state.run?.stats?.progressPhase === "string" ? state.run.stats.progressPhase : "";
   const sourceCharacters = breakdownStatNumber(state.run?.stats, "sourceTextCharacters");
   const steps = breakdownProgressSteps(state, elapsedSeconds);
@@ -8934,7 +8937,8 @@ function BreakdownProgressModal({
             {savedElementCount !== undefined && totalElementCount ? (
               <>
                 GreenLight has saved {Math.min(savedElementCount, totalElementCount).toLocaleString()} of {totalElementCount.toLocaleString()} review row{totalElementCount === 1 ? "" : "s"} to the database.
-                {currentElementName ? <> Currently saving {currentElementIndex ? `row ${currentElementIndex.toLocaleString()}: ` : ""}{currentElementCategory ? `${statusLabel(currentElementCategory)} - ` : ""}{currentElementName}.</> : null}
+                {sourceElementCount !== undefined && backfilledLocationCount ? <> Claude returned {sourceElementCount.toLocaleString()} rows; GreenLight added {backfilledLocationCount.toLocaleString()} location row{backfilledLocationCount === 1 ? "" : "s"} from scene headings.</> : null}
+                {isActivelySavingRow && currentElementName ? <> Currently saving {currentElementIndex ? `row ${currentElementIndex.toLocaleString()}: ` : ""}{currentElementCategory ? `${statusLabel(currentElementCategory)} - ` : ""}{currentElementName}.</> : null}
                 {failedElementCount ? <> Skipped {failedElementCount.toLocaleString()} row{failedElementCount === 1 ? "" : "s"}.</> : null}
               </>
             ) : (
@@ -9013,6 +9017,8 @@ function breakdownRunningCopy(attempt: number, run?: HammerBreakdownRun) {
   const currentElementName = typeof run?.stats?.currentElementName === "string" ? run.stats.currentElementName : "";
   const currentElementCategory = typeof run?.stats?.currentElementCategory === "string" ? run.stats.currentElementCategory : "";
   const currentElementIndex = breakdownStatNumber(run?.stats, "currentElementIndex");
+  const sourceElementCount = breakdownStatNumber(run?.stats, "sourceElementCount");
+  const backfilledLocationCount = breakdownStatNumber(run?.stats, "backfilledLocationCount");
   const progressPhase = typeof run?.stats?.progressPhase === "string" ? run.stats.progressPhase : "";
   if (progressPhase === "finalizing-review-table") {
     return {
@@ -9022,13 +9028,16 @@ function breakdownRunningCopy(attempt: number, run?: HammerBreakdownRun) {
     };
   }
   if (savedElementCount !== undefined && totalElementCount) {
-    const currentRow = currentElementName
+    const currentRow = currentElementName && savedElementCount < totalElementCount
       ? ` Currently saving ${currentElementIndex ? `row ${currentElementIndex.toLocaleString()}: ` : ""}${currentElementCategory ? `${statusLabel(currentElementCategory)} - ` : ""}${currentElementName}.`
+      : "";
+    const backfillNote = sourceElementCount !== undefined && backfilledLocationCount
+      ? ` Claude returned ${sourceElementCount.toLocaleString()} rows; GreenLight added ${backfilledLocationCount.toLocaleString()} missing location row${backfilledLocationCount === 1 ? "" : "s"}.`
       : "";
     return {
       phase: "Saving review table",
       message: `GreenLight is saving ${Math.min(savedElementCount, totalElementCount).toLocaleString()} of ${totalElementCount.toLocaleString()} review rows to the database.${currentRow}`,
-      detail: "This final step links elements to scenes, saves tags, and prepares the breakdown table for review."
+      detail: `${backfillNote} This final step links elements to scenes, saves tags, and prepares the breakdown table for review.`.trim()
     };
   }
   if (processedSceneCount !== undefined && totalSceneCount) {

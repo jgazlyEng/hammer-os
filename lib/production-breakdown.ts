@@ -76,6 +76,8 @@ const CLAUDE_BREAKDOWN_REQUEST_TIMEOUT_MS = 12 * 60 * 1000;
 const BREAKDOWN_STALE_RUN_MS = 2 * 60 * 60 * 1000;
 const BREAKDOWN_NO_PROGRESS_MS = 30 * 60 * 1000;
 const BREAKDOWN_FINALIZE_STALE_MS = 5 * 60 * 1000;
+const BREAKDOWN_SAVE_STALE_MS = 5 * 60 * 1000;
+const BREAKDOWN_SAVE_ROW_TIMEOUT_MS = 20 * 1000;
 
 type BreakdownProgressUpdate = {
   phase: string;
@@ -91,6 +93,8 @@ type BreakdownProgressUpdate = {
   currentElementName?: string;
   currentElementCategory?: BreakdownTaxonomyCategory;
   currentElementIndex?: number;
+  sourceElementCount?: number;
+  backfilledLocationCount?: number;
 };
 
 const categoryDepartments: Record<BreakdownTaxonomyCategory, string> = {
@@ -206,6 +210,8 @@ async function processProductionBreakdownRun(runId: string) {
     const scenes = sceneOutline.length ? mergeClaudeSceneDetailsIntoOutline(sceneOutline, selected.scenes) : selected.scenes;
     const selectedElements = ensureSceneOutlineLocations(selected.elements, sceneOutline);
     const elements = assignElementsToScenes(selectedElements, sceneOutline);
+    const sourceElementCount = selected.elements.length;
+    const backfilledLocationCount = Math.max(0, elements.length - sourceElementCount);
     attachElementsToSceneSummaries(scenes, elements);
 
     await updateBreakdownRunProgress(run.id, {
@@ -215,7 +221,9 @@ async function processProductionBreakdownRun(runId: string) {
       partialElementCount: elements.length,
       partialSceneCount: scenes.length,
       savedElementCount: 0,
-      totalElementCount: elements.length
+      totalElementCount: elements.length,
+      sourceElementCount,
+      backfilledLocationCount
     });
 
     let savedElementCount = 0;
@@ -233,10 +241,16 @@ async function processProductionBreakdownRun(runId: string) {
         failedElementCount: failedElementNames.length,
         currentElementName: element.displayName,
         currentElementCategory: element.category,
-        currentElementIndex: index + 1
+        currentElementIndex: index + 1,
+        sourceElementCount,
+        backfilledLocationCount
       });
       try {
-        await saveBreakdownElement(run.id, run.projectId, version.id, element);
+        await withTimeout(
+          saveBreakdownElement(run.id, run.projectId, version.id, element),
+          BREAKDOWN_SAVE_ROW_TIMEOUT_MS,
+          `Timed out while saving review row ${index + 1}: ${element.category} - ${element.displayName}`
+        );
         savedElementCount += 1;
         savedElements.push(element);
       } catch (error) {
@@ -254,9 +268,23 @@ async function processProductionBreakdownRun(runId: string) {
         failedElementCount: failedElementNames.length,
         currentElementName: element.displayName,
         currentElementCategory: element.category,
-        currentElementIndex: index + 1
+        currentElementIndex: index + 1,
+        sourceElementCount,
+        backfilledLocationCount
       });
     }
+    await updateBreakdownRunProgress(run.id, {
+      phase: "review-table-saved",
+      processedSceneCount: sceneOutline.length,
+      totalSceneCount: sceneOutline.length,
+      partialElementCount: elements.length,
+      partialSceneCount: scenes.length,
+      savedElementCount,
+      totalElementCount: elements.length,
+      failedElementCount: failedElementNames.length,
+      sourceElementCount,
+      backfilledLocationCount
+    });
     if (!savedElementCount) throw new Error("GreenLight could not save any breakdown review rows.");
     const saveWarning = failedElementNames.length
       ? `GreenLight saved ${savedElementCount} of ${elements.length} review rows. Skipped ${failedElementNames.length} row${failedElementNames.length === 1 ? "" : "s"} that could not be saved: ${failedElementNames.slice(0, 6).join(", ")}${failedElementNames.length > 6 ? ", ..." : ""}.`
@@ -287,6 +315,8 @@ async function processProductionBreakdownRun(runId: string) {
       savedElementCount: savedElements.length,
       totalElementCount: elements.length,
       failedElementCount: failedElementNames.length,
+      sourceElementCount,
+      backfilledLocationCount,
       progressUpdatedAt: new Date().toISOString(),
       sourceTextCharacters: sourceText.length,
       sourceTextType: source.source,
@@ -390,6 +420,20 @@ async function saveBreakdownElement(runId: string, projectId: string, documentVe
   }, { maxWait: 5_000, timeout: 12_000 });
 }
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 async function markStaleBreakdownRuns(documentVersionId: string) {
   const runningRuns = await prisma.breakdownRun.findMany({
     where: { documentVersionId, status: "RUNNING" },
@@ -405,22 +449,28 @@ async function markStaleBreakdownRuns(documentVersionId: string) {
     const runAgeMs = now - run.createdAt.getTime();
     const noProgressMs = Number.isFinite(progressUpdatedAt) ? now - progressUpdatedAt : runAgeMs;
     const isFinalizingTooLong = progressPhase === "finalizing-review-table" && noProgressMs >= BREAKDOWN_FINALIZE_STALE_MS;
-    if (runAgeMs < BREAKDOWN_STALE_RUN_MS && noProgressMs < BREAKDOWN_NO_PROGRESS_MS && !isFinalizingTooLong) continue;
+    const savedElementCount = typeof stats.savedElementCount === "number" && Number.isFinite(stats.savedElementCount) ? stats.savedElementCount : 0;
+    const totalElementCount = typeof stats.totalElementCount === "number" && Number.isFinite(stats.totalElementCount) ? stats.totalElementCount : 0;
+    const isSaveTooLong = progressPhase === "saving-review-table" && savedElementCount > 0 && noProgressMs >= BREAKDOWN_SAVE_STALE_MS;
+    if (runAgeMs < BREAKDOWN_STALE_RUN_MS && noProgressMs < BREAKDOWN_NO_PROGRESS_MS && !isFinalizingTooLong && !isSaveTooLong) continue;
     const reason = runAgeMs >= BREAKDOWN_STALE_RUN_MS
       ? "This breakdown ran longer than the maximum allowed time and was stopped."
       : isFinalizingTooLong
         ? "This breakdown saved the review rows but stalled while writing the final summary."
+        : isSaveTooLong
+          ? `This breakdown stalled while saving review rows after ${savedElementCount} of ${totalElementCount || "unknown"} rows.`
         : "This breakdown stopped reporting progress and was marked as stalled.";
+    const makeRowsAvailable = isFinalizingTooLong || isSaveTooLong;
     await prisma.breakdownRun.update({
       where: { id: run.id },
       data: {
-        status: isFinalizingTooLong ? "READY_FOR_REVIEW" : "FAILED",
-        warning: isFinalizingTooLong ? `${reason} GreenLight made the saved review rows available and skipped the oversized final summary.` : undefined,
-        error: isFinalizingTooLong ? undefined : `${reason} Remove it and run a new breakdown.`,
+        status: makeRowsAvailable ? "READY_FOR_REVIEW" : "FAILED",
+        warning: makeRowsAvailable ? `${reason} GreenLight made the saved review rows available with a warning.` : undefined,
+        error: makeRowsAvailable ? undefined : `${reason} Remove it and run a new breakdown.`,
         completedAt: new Date(),
         statsJson: {
           ...stats,
-          progressPhase: isFinalizingTooLong ? "complete" : "stalled",
+          progressPhase: makeRowsAvailable ? "complete" : "stalled",
           progressUpdatedAt: new Date().toISOString()
         }
       }
@@ -452,6 +502,8 @@ async function updateBreakdownRunProgress(runId: string, progress: BreakdownProg
         currentElementName: progress.currentElementName ?? null,
         currentElementCategory: progress.currentElementCategory ?? null,
         currentElementIndex: progress.currentElementIndex ?? null,
+        sourceElementCount: progress.sourceElementCount ?? null,
+        backfilledLocationCount: progress.backfilledLocationCount ?? null,
         progressUpdatedAt: new Date().toISOString()
       }
     }
