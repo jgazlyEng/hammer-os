@@ -246,6 +246,7 @@ async function processProductionBreakdownRun(runId: string) {
         sourceElementCount,
         backfilledLocationCount
       };
+      await updateBreakdownRunProgress(run.id, saveProgress);
       try {
         await withTimeout(
           saveBreakdownElement(run.id, run.projectId, version.id, element),
@@ -370,6 +371,16 @@ async function writeBreakdownRunCompletionMetadata(runId: string, summaryJson: P
 
 async function saveBreakdownElement(runId: string, projectId: string, documentVersionId: string, element: BreakdownElementDraft) {
   await prisma.$transaction(async (tx) => {
+    const isBackfilledLocation = isBackfilledLocationElement(element);
+    const metadataJson = isBackfilledLocation
+      ? {
+        ...(element.metadataJson as Prisma.InputJsonObject),
+        sceneCount: element.scenes.length,
+        sceneNumbers: element.scenes.map((scene) => scene.sceneNumber).filter(Boolean).slice(0, 80),
+        sceneHeadings: element.scenes.map((scene) => scene.sceneHeading).filter(Boolean).slice(0, 20),
+        sceneLinkStorage: "metadata-only"
+      } satisfies Prisma.InputJsonObject
+      : element.metadataJson;
     const tags = await Promise.all(element.tagKeys.map((tag) => tx.tag.upsert({
       where: { scope_key_value: { scope: "BREAKDOWN", key: tag.key, value: tag.value } },
       create: { scope: "BREAKDOWN", key: tag.key, value: tag.value, label: tag.label, color: tag.color },
@@ -394,7 +405,7 @@ async function saveBreakdownElement(runId: string, projectId: string, documentVe
         confidence: element.confidence,
         status: "UNREVIEWED",
         sortOrder: element.sortOrder,
-        metadataJson: element.metadataJson
+        metadataJson
       },
       select: { id: true }
     });
@@ -405,6 +416,8 @@ async function saveBreakdownElement(runId: string, projectId: string, documentVe
         skipDuplicates: true
       });
     }
+
+    if (isBackfilledLocation) return;
 
     for (let index = 0; index < element.scenes.length; index += 50) {
       const chunk = element.scenes.slice(index, index + 50);
@@ -439,6 +452,12 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
   } finally {
     if (timeout) clearTimeout(timeout);
   }
+}
+
+function isBackfilledLocationElement(element: BreakdownElementDraft) {
+  if (element.category !== "LOCATION") return false;
+  const metadata = element.metadataJson;
+  return Boolean(metadata && typeof metadata === "object" && !Array.isArray(metadata) && metadata.parser === "greenlight-scene-outline-location-backfill");
 }
 
 async function markStaleBreakdownRuns(documentVersionId: string) {
