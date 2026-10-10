@@ -77,7 +77,7 @@ const BREAKDOWN_STALE_RUN_MS = 2 * 60 * 60 * 1000;
 const BREAKDOWN_NO_PROGRESS_MS = 30 * 60 * 1000;
 const BREAKDOWN_FINALIZE_STALE_MS = 5 * 60 * 1000;
 const BREAKDOWN_SAVE_STALE_MS = 5 * 60 * 1000;
-const BREAKDOWN_SAVE_ROW_TIMEOUT_MS = 20 * 1000;
+const BREAKDOWN_SAVE_ROW_TIMEOUT_MS = 8 * 1000;
 const BREAKDOWN_SAVE_BATCH_SIZE = 10;
 
 type BreakdownProgressUpdate = {
@@ -347,14 +347,21 @@ async function saveBreakdownElements(input: {
       currentElementCategory: lastElement?.category,
       currentElementIndex: Math.min(index + batch.length, input.elements.length)
     });
-    const result = await withTimeout(
-      prisma.breakdownElement.createMany({
-        data: batch.map((element) => breakdownElementCreateManyInput(input.runId, input.projectId, input.documentVersionId, element)),
-        skipDuplicates: true
-      }),
-      BREAKDOWN_SAVE_ROW_TIMEOUT_MS,
-      `Timed out while saving review rows ${index + 1}-${Math.min(index + batch.length, input.elements.length)}.`
-    );
+    let result: { count: number };
+    try {
+      result = await withTimeout(
+        prisma.breakdownElement.createMany({
+          data: batch.map((element) => breakdownElementCreateManyInput(input.runId, input.projectId, input.documentVersionId, element)),
+          skipDuplicates: true
+        }),
+        BREAKDOWN_SAVE_ROW_TIMEOUT_MS,
+        `Timed out while saving review rows ${index + 1}-${Math.min(index + batch.length, input.elements.length)}.`
+      );
+    } catch (error) {
+      console.error("[hammer:breakdown:save-batch]", error);
+      if (savedElementCount > 0) return savedElementCount;
+      throw error;
+    }
     savedElementCount += result.count;
     await updateBreakdownRunProgress(input.runId, {
       ...input.progress,
