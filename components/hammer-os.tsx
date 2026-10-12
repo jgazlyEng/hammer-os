@@ -119,6 +119,7 @@ interface DocumentUploadResponse {
 
 type BreakdownElementStatus = "UNREVIEWED" | "ACCEPTED" | "IGNORED" | "MERGED" | "NEEDS_REVIEW";
 type BreakdownRunStatus = "DRAFT" | "RUNNING" | "READY_FOR_REVIEW" | "NEEDS_REVISION" | "APPROVED" | "ARCHIVED" | "FAILED";
+type BreakdownJobState = "QUEUED" | "PREPARING_TEXT" | "RUNNING_CLAUDE" | "RAW_SAVED" | "READY_FOR_REVIEW" | "INDEXING" | "INDEXED" | "PARTIAL" | "FAILED";
 
 interface HammerBreakdownElement {
   id: string;
@@ -132,6 +133,7 @@ interface HammerBreakdownElement {
   pageSource: string;
   confidence?: number;
   status: BreakdownElementStatus;
+  metadata?: Record<string, unknown>;
   tags: Array<{ id: string; key: string; value: string; label?: string }>;
   scenes: Array<{ id: string; sceneNumber?: string; sceneHeading?: string; occurrenceCount: number; firstPageNumber?: number; lastPageNumber?: number; evidenceText?: string }>;
 }
@@ -144,6 +146,7 @@ interface HammerBreakdownRun {
   parserName: string;
   parserVersion?: string;
   status: BreakdownRunStatus;
+  jobState?: BreakdownJobState;
   summary?: Record<string, unknown>;
   stats?: Record<string, unknown>;
   warning?: string;
@@ -9317,54 +9320,58 @@ function PersistedBreakdownElementPanel({ run, onUpdateStatus, updating }: { run
                     <p className="line-clamp-3 text-xs leading-5 text-studio-300">{scene.synopsis || scene.evidence || "No synopsis captured."}</p>
                   </td>
                 </tr>
-              )) : filteredElements.map((element) => (
-                <tr key={element.id} className="align-top text-studio-200">
-                  <td className="py-2.5"><Badge value={element.category} /></td>
-                  <td className="max-w-[220px]">
-                    <p className="font-semibold text-studio-100">{element.displayName}</p>
-                    {element.description ? <p className="mt-1 line-clamp-2 text-xs leading-5 text-studio-400">{element.description}</p> : null}
-                  </td>
-                  <td className="max-w-[220px] text-xs text-studio-300">{breakdownSceneSummary(element)}</td>
-                  <td className="text-xs text-studio-300">{breakdownPageSummary(element)}</td>
-                  <td className="max-w-[240px]">
-                    <div className="flex flex-wrap gap-1">
-                      {element.tags.length ? element.tags.map((tag) => (
-                        <span key={`${element.id}-${tag.id}`} className="rounded-full border border-emerald-300/25 bg-emerald-400/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-100">
-                          {tag.key}: {tag.label ?? tag.value}
-                        </span>
-                      )) : <span className="text-xs text-studio-500">No tags</span>}
-                    </div>
-                  </td>
-                  <td className="max-w-[320px]">
-                    <p className="line-clamp-3 text-xs leading-5 text-studio-300">{element.evidenceText || element.scenes.find((scene) => scene.evidenceText)?.evidenceText || "No evidence captured."}</p>
-                  </td>
-                  <td><Badge value={element.status} /></td>
-                  <td>
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        disabled={updating || element.status === "ACCEPTED"}
-                        onClick={() => onUpdateStatus(element.id, "ACCEPTED")}
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-signal/25 bg-signal/5 text-signal transition hover:border-signal/50 disabled:cursor-not-allowed disabled:opacity-50"
-                        title={`Accept ${element.displayName}`}
-                        aria-label={`Accept ${element.displayName}`}
-                      >
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        disabled={updating}
-                        onClick={() => onUpdateStatus(element.id, "IGNORED")}
-                        className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-rose-400/25 bg-rose-500/5 text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200 disabled:cursor-not-allowed disabled:opacity-50"
-                        title={`Remove ${element.displayName} from this breakdown`}
-                        aria-label={`Remove ${element.displayName} from this breakdown`}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              )) : filteredElements.map((element) => {
+                const rawOnly = Boolean(element.metadata?.rawResultOnly);
+                return (
+                  <tr key={element.id} className="align-top text-studio-200">
+                    <td className="py-2.5"><Badge value={element.category} /></td>
+                    <td className="max-w-[220px]">
+                      <p className="font-semibold text-studio-100">{element.displayName}</p>
+                      {element.description ? <p className="mt-1 line-clamp-2 text-xs leading-5 text-studio-400">{element.description}</p> : null}
+                      {rawOnly ? <p className="mt-1 text-[11px] font-semibold text-amberline">Indexing in background</p> : null}
+                    </td>
+                    <td className="max-w-[220px] text-xs text-studio-300">{breakdownSceneSummary(element)}</td>
+                    <td className="text-xs text-studio-300">{breakdownPageSummary(element)}</td>
+                    <td className="max-w-[240px]">
+                      <div className="flex flex-wrap gap-1">
+                        {element.tags.length ? element.tags.map((tag) => (
+                          <span key={`${element.id}-${tag.id}`} className="rounded-full border border-emerald-300/25 bg-emerald-400/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-100">
+                            {tag.key}: {tag.label ?? tag.value}
+                          </span>
+                        )) : <span className="text-xs text-studio-500">No tags</span>}
+                      </div>
+                    </td>
+                    <td className="max-w-[320px]">
+                      <p className="line-clamp-3 text-xs leading-5 text-studio-300">{element.evidenceText || element.scenes.find((scene) => scene.evidenceText)?.evidenceText || "No evidence captured."}</p>
+                    </td>
+                    <td><Badge value={element.status} /></td>
+                    <td>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          disabled={updating || rawOnly || element.status === "ACCEPTED"}
+                          onClick={() => onUpdateStatus(element.id, "ACCEPTED")}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-signal/25 bg-signal/5 text-signal transition hover:border-signal/50 disabled:cursor-not-allowed disabled:opacity-50"
+                          title={rawOnly ? "This row can be accepted after indexing finishes." : `Accept ${element.displayName}`}
+                          aria-label={`Accept ${element.displayName}`}
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={updating || rawOnly}
+                          onClick={() => onUpdateStatus(element.id, "IGNORED")}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-rose-400/25 bg-rose-500/5 text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200 disabled:cursor-not-allowed disabled:opacity-50"
+                          title={rawOnly ? "This row can be removed after indexing finishes." : `Remove ${element.displayName} from this breakdown`}
+                          aria-label={`Remove ${element.displayName} from this breakdown`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
           {activeEntityType === "SCENES" && !sceneRows.length ? <div className="p-4"><EmptyState label="No scenes were captured for this breakdown." /></div> : null}

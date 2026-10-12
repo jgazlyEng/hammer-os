@@ -327,6 +327,18 @@ enum BreakdownRunStatus {
   FAILED
 }
 
+enum BreakdownJobState {
+  QUEUED
+  PREPARING_TEXT
+  RUNNING_CLAUDE
+  RAW_SAVED
+  READY_FOR_REVIEW
+  INDEXING
+  INDEXED
+  PARTIAL
+  FAILED
+}
+
 enum BreakdownTaxonomyCategory {
   CHARACTER
   EXTRAS
@@ -755,6 +767,10 @@ model BreakdownRun {
   parserName        String                  @default("greenlight-production-breakdown")
   parserVersion     String?
   status            BreakdownRunStatus      @default(DRAFT)
+  jobState          BreakdownJobState        @default(QUEUED)
+  rawResultJson     Json?
+  rawSavedAt        DateTime?
+  indexedAt         DateTime?
   summaryJson       Json?
   statsJson         Json?
   warning           String?                 @db.Text
@@ -778,6 +794,7 @@ model BreakdownRun {
   @@index([documentId])
   @@index([documentVersionId])
   @@index([status])
+  @@index([jobState])
   @@index([createdAt])
 }
 

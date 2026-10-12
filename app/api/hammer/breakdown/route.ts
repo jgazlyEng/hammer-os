@@ -134,6 +134,47 @@ function canViewEverything(role: string) {
 }
 
 function toBreakdownRun(run: ProductionBreakdownRunRecord) {
+  const persistedElements = run.elements.map((element) => {
+    const metadata = normalizeJsonObject(element.metadataJson);
+    return {
+      id: element.id,
+      runId: element.runId,
+      projectId: element.projectId,
+      documentVersionId: element.documentVersionId,
+      stableKey: element.stableKey,
+      category: element.category,
+      displayName: element.displayName,
+      normalizedName: element.normalizedName,
+      description: element.description ?? undefined,
+      evidenceText: element.evidenceText ?? undefined,
+      sourceText: element.sourceText ?? undefined,
+      firstPageNumber: element.firstPageNumber ?? undefined,
+      lastPageNumber: element.lastPageNumber ?? undefined,
+      pageSource: element.pageSource,
+      confidence: element.confidence ?? undefined,
+      status: element.status,
+      sortOrder: element.sortOrder,
+      metadata,
+      tags: element.tags.length ? element.tags.map((item) => ({
+        id: item.tag.id,
+        key: item.tag.key,
+        value: item.tag.value,
+        label: item.tag.label ?? undefined,
+        color: item.tag.color ?? undefined
+      })) : metadataTags(metadata),
+      scenes: element.sceneElements.length ? element.sceneElements.map((scene) => ({
+        id: scene.id,
+        sceneNumber: scene.sceneNumber ?? undefined,
+        sceneHeading: scene.sceneHeading ?? undefined,
+        occurrenceCount: scene.occurrenceCount,
+        firstPageNumber: scene.firstPageNumber ?? undefined,
+        lastPageNumber: scene.lastPageNumber ?? undefined,
+        evidenceText: scene.evidenceText ?? undefined,
+        notes: scene.notes ?? undefined,
+        metadata: normalizeJsonObject(scene.metadataJson)
+      })) : metadataScenes(metadata)
+    };
+  });
   return {
     id: run.id,
     projectId: run.projectId,
@@ -142,6 +183,7 @@ function toBreakdownRun(run: ProductionBreakdownRunRecord) {
     parserName: run.parserName,
     parserVersion: run.parserVersion ?? undefined,
     status: run.status,
+    jobState: run.jobState,
     summary: normalizeJsonObject(run.summaryJson),
     stats: normalizeJsonObject(run.statsJson),
     warning: run.warning ?? undefined,
@@ -154,52 +196,52 @@ function toBreakdownRun(run: ProductionBreakdownRunRecord) {
     updatedAt: dateTimeString(run.updatedAt),
     completedAt: run.completedAt ? dateTimeString(run.completedAt) : undefined,
     approvedAt: run.approvedAt ? dateTimeString(run.approvedAt) : undefined,
-    elements: run.elements.map((element) => {
-      const metadata = normalizeJsonObject(element.metadataJson);
-      return {
-        id: element.id,
-        runId: element.runId,
-        projectId: element.projectId,
-        documentVersionId: element.documentVersionId,
-        stableKey: element.stableKey,
-        category: element.category,
-        displayName: element.displayName,
-        normalizedName: element.normalizedName,
-        description: element.description ?? undefined,
-        evidenceText: element.evidenceText ?? undefined,
-        sourceText: element.sourceText ?? undefined,
-        firstPageNumber: element.firstPageNumber ?? undefined,
-        lastPageNumber: element.lastPageNumber ?? undefined,
-        pageSource: element.pageSource,
-        confidence: element.confidence ?? undefined,
-        status: element.status,
-        sortOrder: element.sortOrder,
-        metadata,
-        tags: element.tags.length ? element.tags.map((item) => ({
-          id: item.tag.id,
-          key: item.tag.key,
-          value: item.tag.value,
-          label: item.tag.label ?? undefined,
-          color: item.tag.color ?? undefined
-        })) : metadataTags(metadata),
-        scenes: element.sceneElements.length ? element.sceneElements.map((scene) => ({
-          id: scene.id,
-          sceneNumber: scene.sceneNumber ?? undefined,
-          sceneHeading: scene.sceneHeading ?? undefined,
-          occurrenceCount: scene.occurrenceCount,
-          firstPageNumber: scene.firstPageNumber ?? undefined,
-          lastPageNumber: scene.lastPageNumber ?? undefined,
-          evidenceText: scene.evidenceText ?? undefined,
-          notes: scene.notes ?? undefined,
-          metadata: normalizeJsonObject(scene.metadataJson)
-        })) : metadataScenes(metadata)
-      };
-    })
+    rawSavedAt: run.rawSavedAt ? dateTimeString(run.rawSavedAt) : undefined,
+    indexedAt: run.indexedAt ? dateTimeString(run.indexedAt) : undefined,
+    elements: persistedElements.length ? persistedElements : rawBreakdownElements(run)
   };
 }
 
 function normalizeJsonObject(value: Prisma.JsonValue | null | undefined) {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function rawBreakdownElements(run: ProductionBreakdownRunRecord) {
+  const raw = normalizeJsonObject(run.rawResultJson);
+  const elements = raw?.elements;
+  if (!Array.isArray(elements)) return [];
+  return elements.map((item, index) => {
+    const record = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : {};
+    const metadata = normalizeJsonObject(record.metadataJson as Prisma.JsonValue) ?? {};
+    return {
+      id: `raw-${run.id}-${index}`,
+      runId: run.id,
+      projectId: run.projectId,
+      documentVersionId: run.documentVersionId,
+      stableKey: stringField(record.stableKey) || `raw-${index}`,
+      category: breakdownCategoryField(record.category),
+      displayName: stringField(record.displayName) || "Untitled item",
+      normalizedName: stringField(record.normalizedName) || stringField(record.displayName).toLowerCase(),
+      description: stringField(record.description) || undefined,
+      evidenceText: stringField(record.evidenceText) || undefined,
+      sourceText: stringField(record.sourceText) || undefined,
+      firstPageNumber: numberField(record.firstPageNumber),
+      lastPageNumber: numberField(record.lastPageNumber),
+      pageSource: "ESTIMATED",
+      confidence: numberField(record.confidence),
+      status: "UNREVIEWED",
+      sortOrder: numberField(record.sortOrder) ?? index,
+      metadata: { ...metadata, rawResultOnly: true },
+      tags: metadataTags({ ...metadata, tagKeys: Array.isArray(record.tagKeys) ? record.tagKeys : metadata.tagKeys }),
+      scenes: metadataScenes({ ...metadata, sceneReferences: Array.isArray(record.scenes) ? record.scenes : metadata.sceneReferences })
+    };
+  });
+}
+
+function breakdownCategoryField(value: unknown) {
+  const category = stringField(value);
+  const allowed = ["CHARACTER", "EXTRAS", "LOCATION", "PROP", "VEHICLE", "WARDROBE", "SFX", "ANIMAL", "ACTION", "VFX", "NOTE", "OTHER"];
+  return allowed.includes(category) ? category : "OTHER";
 }
 
 function metadataTags(metadata: Record<string, unknown> | undefined) {

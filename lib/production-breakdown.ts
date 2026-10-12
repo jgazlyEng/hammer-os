@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import type { BreakdownElementStatus, BreakdownRunStatus, BreakdownTaxonomyCategory, Prisma } from "@prisma/client";
+import type { BreakdownElementStatus, BreakdownJobState, BreakdownRunStatus, BreakdownTaxonomyCategory, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { readStoredLlmProviderSettings, resolveLlmApiKey } from "@/lib/llm-settings";
 import { parseScriptText } from "@/lib/script-parser";
@@ -156,6 +156,7 @@ async function createProductionBreakdownRun(input: { documentVersionId: string; 
       documentId: version.documentId,
       documentVersionId: version.id,
       status: "RUNNING",
+      jobState: "QUEUED",
       parserName: "claude-production-breakdown-skill",
       parserVersion: "pending",
       createdById: input.userId
@@ -171,6 +172,7 @@ async function processProductionBreakdownRun(runId: string) {
   });
   if (!run) throw new Error("Breakdown run not found.");
   const version = run.documentVersion;
+  await setBreakdownJobState(run.id, "PREPARING_TEXT");
   const source = await bestBreakdownSourceText(version);
   const sourceText = source.text.trim();
   if (!sourceText) {
@@ -178,6 +180,7 @@ async function processProductionBreakdownRun(runId: string) {
       where: { id: run.id },
       data: {
         status: "FAILED",
+        jobState: "FAILED",
         error: "No readable script text is available for this version. Upload a text-selectable PDF, FDX, TXT, or MD file before running breakdown."
       },
       include: breakdownRunInclude
@@ -201,6 +204,7 @@ async function processProductionBreakdownRun(runId: string) {
       recoveredSceneCount: source.recoveredSceneCount ?? null,
       outlineSceneCount: sceneOutline.length
     });
+    await setBreakdownJobState(run.id, "RUNNING_CLAUDE");
     const selected = await runClaudeSkillBreakdown({
       sourceText,
       title: version.document.title,
@@ -214,24 +218,28 @@ async function processProductionBreakdownRun(runId: string) {
     const backfilledLocationCount = 0;
     attachElementsToSceneSummaries(scenes, elements);
 
-    await updateBreakdownRunProgress(run.id, {
-      phase: "saving-review-table",
-      processedSceneCount: sceneOutline.length,
-      totalSceneCount: sceneOutline.length,
-      partialElementCount: elements.length,
-      partialSceneCount: scenes.length,
-      savedElementCount: 0,
-      totalElementCount: elements.length,
+    await saveRawBreakdownResult(run.id, {
+      selected,
+      scenes,
+      elements,
+      source,
+      sourceTextCharacters: sourceText.length,
+      sceneOutline,
       sourceElementCount,
       backfilledLocationCount
     });
 
-    const savedElementCount = await saveBreakdownElements({
+    void indexBreakdownRows({
       runId: run.id,
       projectId: run.projectId,
       documentVersionId: version.id,
+      parserName: selected.parserName,
+      parserVersion: selected.parserVersion,
+      warning: [source.warning, selected.warning].filter(Boolean).join(" ") || undefined,
       elements,
+      scenes,
       progress: {
+        phase: "indexing-review-table",
         processedSceneCount: sceneOutline.length,
         totalSceneCount: sceneOutline.length,
         partialElementCount: elements.length,
@@ -239,66 +247,8 @@ async function processProductionBreakdownRun(runId: string) {
         sourceElementCount,
         backfilledLocationCount
       }
-    });
-    const savedElements = elements.slice(0, savedElementCount);
-    const failedElementNames = savedElementCount < elements.length
-      ? elements.slice(savedElementCount).map((element) => element.displayName)
-      : [];
-    if (!savedElementCount) throw new Error("GreenLight could not save any breakdown review rows.");
-    const saveWarning = failedElementNames.length
-      ? `GreenLight saved ${savedElementCount} of ${elements.length} review rows. Skipped ${failedElementNames.length} row${failedElementNames.length === 1 ? "" : "s"} that could not be saved: ${failedElementNames.slice(0, 6).join(", ")}${failedElementNames.length > 6 ? ", ..." : ""}.`
-      : undefined;
-
-    await markBreakdownRunReadyWithProgress(run.id, {
-      phase: "review-table-saved",
-      processedSceneCount: sceneOutline.length,
-      totalSceneCount: sceneOutline.length,
-      partialElementCount: elements.length,
-      partialSceneCount: scenes.length,
-      savedElementCount,
-      totalElementCount: elements.length,
-      failedElementCount: failedElementNames.length,
-      sourceElementCount,
-      backfilledLocationCount
-    }, {
-      parserName: selected.parserName,
-      parserVersion: selected.parserVersion,
-      warning: [source.warning, selected.warning, saveWarning].filter(Boolean).join(" ") || undefined
-    });
-
-    void writeBreakdownRunCompletionMetadata(run.id, {
-      elementCount: savedElements.length,
-      categories: countBy(savedElements.map((element) => element.category)),
-      sceneCount: scenes.length,
-      aiModel: selected.model
-    }, {
-      progressPhase: "complete",
-      processedSceneCount: sceneOutline.length,
-      totalSceneCount: sceneOutline.length,
-      partialElementCount: elements.length,
-      partialSceneCount: scenes.length,
-      savedElementCount: savedElements.length,
-      totalElementCount: elements.length,
-      failedElementCount: failedElementNames.length,
-      sourceElementCount,
-      backfilledLocationCount,
-      progressUpdatedAt: new Date().toISOString(),
-      sourceTextCharacters: sourceText.length,
-      sourceTextType: source.source,
-      storedSceneCount: source.storedSceneCount,
-      recoveredSceneCount: source.recoveredSceneCount ?? null,
-      outlineSceneCount: sceneOutline.length,
-      summarySceneCount: scenes.length,
-      characters: savedElements.filter((element) => element.category === "CHARACTER").length,
-      extras: savedElements.filter((element) => element.category === "EXTRAS").length,
-      locations: savedElements.filter((element) => element.category === "LOCATION").length,
-      props: savedElements.filter((element) => element.category === "PROP").length,
-      vehicles: savedElements.filter((element) => element.category === "VEHICLE").length,
-      wardrobe: savedElements.filter((element) => element.category === "WARDROBE").length,
-      sfx: savedElements.filter((element) => element.category === "SFX").length,
-      animals: savedElements.filter((element) => element.category === "ANIMAL").length
     }).catch((error) => {
-      console.error("[hammer:breakdown:completion-metadata]", error);
+      console.error("[hammer:breakdown:indexing]", error);
     });
 
     return prisma.breakdownRun.findUnique({ where: { id: run.id }, include: breakdownRunInclude });
@@ -307,15 +257,138 @@ async function processProductionBreakdownRun(runId: string) {
   }
 }
 
+async function saveRawBreakdownResult(runId: string, input: {
+  selected: BreakdownSource;
+  scenes: BreakdownSceneDraft[];
+  elements: BreakdownElementDraft[];
+  source: BreakdownTextSource;
+  sourceTextCharacters: number;
+  sceneOutline: BreakdownSceneReference[];
+  sourceElementCount: number;
+  backfilledLocationCount: number;
+}) {
+  await prisma.breakdownRun.update({
+    where: { id: runId },
+    data: {
+      status: "READY_FOR_REVIEW",
+      jobState: "READY_FOR_REVIEW",
+      parserName: input.selected.parserName,
+      parserVersion: input.selected.parserVersion,
+      warning: [input.source.warning, input.selected.warning].filter(Boolean).join(" ") || undefined,
+      completedAt: new Date(),
+      rawSavedAt: new Date(),
+      rawResultJson: {
+        parserName: input.selected.parserName,
+        parserVersion: input.selected.parserVersion,
+        model: input.selected.model,
+        warning: input.selected.warning,
+        elements: input.elements,
+        scenes: input.scenes
+      },
+      summaryJson: {
+        scenes: input.scenes,
+        elementCount: input.elements.length,
+        categories: countBy(input.elements.map((element) => element.category)),
+        sceneCount: input.scenes.length,
+        aiModel: input.selected.model
+      },
+      statsJson: {
+        progressPhase: "raw-saved",
+        processedSceneCount: input.sceneOutline.length,
+        totalSceneCount: input.sceneOutline.length,
+        partialElementCount: input.elements.length,
+        partialSceneCount: input.scenes.length,
+        savedElementCount: 0,
+        totalElementCount: input.elements.length,
+        failedElementCount: 0,
+        sourceElementCount: input.sourceElementCount,
+        backfilledLocationCount: input.backfilledLocationCount,
+        progressUpdatedAt: new Date().toISOString(),
+        sourceTextCharacters: input.sourceTextCharacters,
+        sourceTextType: input.source.source,
+        storedSceneCount: input.source.storedSceneCount,
+        recoveredSceneCount: input.source.recoveredSceneCount ?? null,
+        outlineSceneCount: input.sceneOutline.length,
+        summarySceneCount: input.scenes.length,
+        characters: input.elements.filter((element) => element.category === "CHARACTER").length,
+        extras: input.elements.filter((element) => element.category === "EXTRAS").length,
+        locations: input.elements.filter((element) => element.category === "LOCATION").length,
+        props: input.elements.filter((element) => element.category === "PROP").length,
+        vehicles: input.elements.filter((element) => element.category === "VEHICLE").length,
+        wardrobe: input.elements.filter((element) => element.category === "WARDROBE").length,
+        sfx: input.elements.filter((element) => element.category === "SFX").length,
+        animals: input.elements.filter((element) => element.category === "ANIMAL").length
+      }
+    }
+  });
+}
+
+async function indexBreakdownRows(input: {
+  runId: string;
+  projectId: string;
+  documentVersionId: string;
+  parserName: string;
+  parserVersion?: string;
+  warning?: string;
+  elements: BreakdownElementDraft[];
+  scenes: BreakdownSceneDraft[];
+  progress: BreakdownProgressUpdate;
+}) {
+  await prisma.breakdownRun.update({
+    where: { id: input.runId },
+    data: { jobState: "INDEXING" }
+  });
+  const savedElementCount = await saveBreakdownElements({
+    runId: input.runId,
+    projectId: input.projectId,
+    documentVersionId: input.documentVersionId,
+    elements: input.elements,
+    progress: input.progress
+  });
+  const savedElements = input.elements.slice(0, savedElementCount);
+  const failedElementNames = savedElementCount < input.elements.length
+    ? input.elements.slice(savedElementCount).map((element) => element.displayName)
+    : [];
+  const saveWarning = failedElementNames.length
+    ? `GreenLight indexed ${savedElementCount} of ${input.elements.length} review rows. Skipped ${failedElementNames.length} row${failedElementNames.length === 1 ? "" : "s"} that could not be indexed: ${failedElementNames.slice(0, 6).join(", ")}${failedElementNames.length > 6 ? ", ..." : ""}. The raw Claude breakdown remains available for review.`
+    : undefined;
+
+  await markBreakdownRunIndexedWithProgress(input.runId, {
+      phase: failedElementNames.length ? "partial-indexed" : "indexed",
+      processedSceneCount: input.progress.processedSceneCount,
+      totalSceneCount: input.progress.totalSceneCount,
+      partialElementCount: input.elements.length,
+      partialSceneCount: input.scenes.length,
+      savedElementCount,
+      totalElementCount: input.elements.length,
+      failedElementCount: failedElementNames.length,
+      sourceElementCount: input.progress.sourceElementCount,
+      backfilledLocationCount: input.progress.backfilledLocationCount
+    }, {
+      parserName: input.parserName,
+      parserVersion: input.parserVersion,
+      warning: [input.warning, saveWarning].filter(Boolean).join(" ") || undefined,
+      partial: Boolean(failedElementNames.length)
+    });
+}
+
 async function markBreakdownRunFailed(runId: string, error: unknown) {
   return prisma.breakdownRun.update({
     where: { id: runId },
     data: {
       status: "FAILED",
+      jobState: "FAILED",
       error: error instanceof Error ? error.message : "Breakdown failed unexpectedly.",
       completedAt: new Date()
     },
     include: breakdownRunInclude
+  });
+}
+
+async function setBreakdownJobState(runId: string, jobState: BreakdownJobState) {
+  await prisma.breakdownRun.update({
+    where: { id: runId },
+    data: { jobState }
   });
 }
 
@@ -339,7 +412,7 @@ async function saveBreakdownElements(input: {
     const lastElement = batch[batch.length - 1];
     await updateBreakdownRunProgress(input.runId, {
       ...input.progress,
-      phase: "saving-review-table",
+      phase: "indexing-review-table",
       savedElementCount,
       totalElementCount: input.elements.length,
       failedElementCount: 0,
@@ -365,7 +438,7 @@ async function saveBreakdownElements(input: {
     savedElementCount += result.count;
     await updateBreakdownRunProgress(input.runId, {
       ...input.progress,
-      phase: "saving-review-table",
+      phase: "indexing-review-table",
       savedElementCount,
       totalElementCount: input.elements.length,
       failedElementCount: 0,
@@ -466,6 +539,7 @@ async function markStaleBreakdownRuns(documentVersionId: string) {
       where: { id: run.id },
       data: {
         status: makeRowsAvailable ? "READY_FOR_REVIEW" : "FAILED",
+        jobState: makeRowsAvailable ? "PARTIAL" : "FAILED",
         warning: makeRowsAvailable ? `${reason} GreenLight made the saved review rows available with a warning.` : undefined,
         error: makeRowsAvailable ? undefined : `${reason} Remove it and run a new breakdown.`,
         completedAt: new Date(),
@@ -520,12 +594,48 @@ async function markBreakdownRunReadyWithProgress(
     where: { id: runId },
     data: {
       status: "READY_FOR_REVIEW",
+      jobState: "READY_FOR_REVIEW",
       parserName: input.parserName,
       parserVersion: input.parserVersion,
       warning: input.warning,
       completedAt: new Date(),
       statsJson: {
         progressPhase: "complete",
+        processedSceneCount: progress.processedSceneCount,
+        totalSceneCount: progress.totalSceneCount,
+        completedBatchCount: progress.completedBatchCount ?? null,
+        totalBatchCount: progress.totalBatchCount ?? null,
+        partialElementCount: progress.partialElementCount ?? null,
+        partialSceneCount: progress.partialSceneCount ?? null,
+        savedElementCount: progress.savedElementCount ?? null,
+        totalElementCount: progress.totalElementCount ?? null,
+        failedElementCount: progress.failedElementCount ?? null,
+        currentElementName: null,
+        currentElementCategory: null,
+        currentElementIndex: null,
+        sourceElementCount: progress.sourceElementCount ?? null,
+        backfilledLocationCount: progress.backfilledLocationCount ?? null,
+        progressUpdatedAt: new Date().toISOString()
+      }
+    }
+  });
+}
+
+async function markBreakdownRunIndexedWithProgress(
+  runId: string,
+  progress: BreakdownProgressUpdate,
+  input: { parserName: string; parserVersion?: string; warning?: string; partial?: boolean }
+) {
+  await prisma.breakdownRun.update({
+    where: { id: runId },
+    data: {
+      jobState: input.partial ? "PARTIAL" : "INDEXED",
+      parserName: input.parserName,
+      parserVersion: input.parserVersion,
+      warning: input.warning,
+      indexedAt: new Date(),
+      statsJson: {
+        progressPhase: input.partial ? "partial-indexed" : "indexed",
         processedSceneCount: progress.processedSceneCount,
         totalSceneCount: progress.totalSceneCount,
         completedBatchCount: progress.completedBatchCount ?? null,
