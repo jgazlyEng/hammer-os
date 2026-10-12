@@ -2570,10 +2570,10 @@ function Projects({
                   <input className="field pl-8" value={slateSearch} onChange={(event) => setSlateSearch(event.target.value)} placeholder="Search title, creator, logline, vendor, contact, notes" />
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-1.5">
-                  <PrimaryButton icon={Plus} label="Add Prospect" onClick={() => setAddSlateOpen(true)} />
+                  <PrimaryButton icon={Plus} label={activeProspectSection.source === "Submissions" ? "Upload Submission" : "Add Submission"} onClick={() => setAddSlateOpen(true)} />
                   <label className="inline-flex min-h-10 cursor-pointer items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.025] px-2.5 py-2 text-xs font-semibold text-studio-200 transition hover:border-amberline/40 hover:text-amberline">
                     <UploadCloud className="h-3.5 w-3.5" />
-                    Import CSV
+                    Import Submissions CSV
                     <input className="hidden" type="file" accept=".csv,text/csv" onChange={(event) => importSlateCsv(event.target.files?.[0])} />
                   </label>
                   <button type="button" onClick={() => setShowSlateFilters((open) => !open)} className={cn("inline-flex min-h-10 items-center justify-center gap-2 rounded-md border px-3 py-2 text-xs font-semibold transition", activeSlateFilterCount ? "border-amberline/35 bg-amberline/10 text-amberline" : "border-white/10 bg-white/[0.025] text-studio-300 hover:border-amberline/35 hover:text-amberline")} aria-expanded={showSlateFilters}>
@@ -2706,6 +2706,8 @@ function ProspectSourceTable({
   const totalPages = Math.max(1, Math.ceil(leads.length / pageSize));
   const normalizedPage = Math.min(page, totalPages);
   const pagedLeads = leads.slice((normalizedPage - 1) * pageSize, normalizedPage * pageSize);
+  const columns = prospectTableColumns(title);
+  const tableWidth = Math.max(980, columns.reduce((total, column) => total + column.width, 0));
 
   useEffect(() => {
     setPage(1);
@@ -2721,40 +2723,23 @@ function ProspectSourceTable({
       </div>
       {leads.length ? (
         <div className="data-scroll min-h-0 flex-1 overflow-auto">
-          <table className="data-table min-w-[1380px] table-fixed">
+          <table className="data-table table-fixed" style={{ minWidth: `${tableWidth}px` }}>
             <colgroup>
-              <col className="w-[260px]" />
-              <col className="w-[360px]" />
-              <col className="w-[170px]" />
-              <col className="w-[120px]" />
-              <col className="w-[210px]" />
-              <col className="w-[160px]" />
-              <col className="w-[220px]" />
-              <col className="w-[90px]" />
+              {columns.map((column) => <col key={column.key} style={{ width: `${column.width}px` }} />)}
             </colgroup>
             <thead>
               <tr>
-                <SortableHeader label="Title" sortKey="title" activeSort={activeSort} onSort={onSort} />
-                <SortableHeader label="Logline" sortKey="logline" activeSort={activeSort} onSort={onSort} />
-                <SortableHeader label="Genre" sortKey="genre" activeSort={activeSort} onSort={onSort} />
-                <SortableHeader label="Urgency" sortKey="urgency" activeSort={activeSort} onSort={onSort} />
-                <SortableHeader label="Rights" sortKey="rights" activeSort={activeSort} onSort={onSort} />
-                <SortableHeader label="Owner" sortKey="owner" activeSort={activeSort} onSort={onSort} />
-                <SortableHeader label="Action Status" sortKey="actionStatus" activeSort={activeSort} onSort={onSort} />
-                <SortableHeader label="Score" sortKey="score" activeSort={activeSort} onSort={onSort} />
+                {columns.map((column) => column.sortKey
+                  ? <SortableHeader key={column.key} label={column.label} sortKey={column.sortKey} activeSort={activeSort} onSort={onSort} />
+                  : <th key={column.key}>{column.label}</th>)}
               </tr>
             </thead>
             <tbody>
               {pagedLeads.map((lead) => (
                 <tr key={`${lead.id}-${lead.title}`} onClick={() => onOpen(lead)} className={cn("cursor-pointer text-studio-200 hover:bg-white/[0.035]", selectedLeadId === lead.id && selectedLeadTitle === lead.title && "bg-emerald-400/10")}>
-                  <td><p className="truncate font-semibold text-studio-100">{lead.title}</p><p className="mt-0.5 truncate text-xs text-studio-400">{lead.creator || lead.platformSource || lead.sourceLink || "No source listed"}</p></td>
-                  <td><span className="line-clamp-2 text-[13px] leading-5 text-studio-300">{lead.logline || "-"}</span></td>
-                  <td><span className="block truncate">{lead.genre || "-"}</span></td>
-                  <td>{lead.urgencyLabel ? <Badge value={lead.urgencyLabel} subtle /> : <span className="text-studio-500">-</span>}</td>
-                  <td><span className="block truncate">{lead.rightsStatus || "-"}</span></td>
-                  <td><span className="block truncate">{prospectOwnerLabel(lead, users)}</span></td>
-                  <td><span className="block truncate">{lead.nextActionStatus || "-"}</span></td>
-                  <td className="font-semibold text-studio-100">{lead.priorityScore ?? "-"}</td>
+                  {columns.map((column) => (
+                    <td key={column.key}>{renderProspectCell(lead, column, users)}</td>
+                  ))}
                 </tr>
               ))}
             </tbody>
@@ -2807,6 +2792,121 @@ function ProspectOwnerFilter({ label, value, users, leads, onChange }: { label: 
   return (
     <SlateMultiFilter label={label} value={value} options={ownerOptions.map((user) => user.id)} optionLabels={ownerLabels} onChange={onChange} />
   );
+}
+
+type ProspectTableColumn = {
+  key: string;
+  label: string;
+  width: number;
+  sortKey?: ProspectSortKey;
+  aliases?: string[];
+  kind?: "title" | "badge" | "score" | "owner" | "long" | "link";
+};
+
+function prospectTableColumns(sectionTitle: string): ProspectTableColumn[] {
+  if (sectionTitle === "Public IP") {
+    return [
+      { key: "title", label: "IP / Property", width: 260, sortKey: "title", kind: "title", aliases: ["IP", "Public IP", "Title", "Name", "Property"] },
+      { key: "owner", label: "Owner / Rights Holder", width: 220, sortKey: "rights", aliases: ["Owner", "Rights Holder", "IP Owner", "Company", "Publisher"] },
+      { key: "category", label: "Category", width: 170, sortKey: "genre", aliases: ["Category", "Type", "Genre", "Medium", "Format"] },
+      { key: "description", label: "Description", width: 380, sortKey: "logline", kind: "long", aliases: ["Description", "Summary", "Overview", "Notes", "Logline"] },
+      { key: "source", label: "Source", width: 180, aliases: ["Source", "Platform", "Outlet", "Publication", "Where Found"] },
+      { key: "rights", label: "Rights", width: 180, sortKey: "rights", aliases: ["Rights", "Rights Status", "Availability"] },
+      { key: "link", label: "Link", width: 220, kind: "link", aliases: ["URL", "Link", "Source Link", "Website", "Reference"] }
+    ];
+  }
+  if (sectionTitle === "Cultural Trends") {
+    return [
+      { key: "title", label: "Trend", width: 260, sortKey: "title", kind: "title", aliases: ["Trend", "Cultural Trend", "Cultural Trends", "Topic", "Title", "Name"] },
+      { key: "category", label: "Category", width: 180, sortKey: "genre", aliases: ["Category", "Vertical", "Genre", "Type"] },
+      { key: "summary", label: "Signal / Summary", width: 380, sortKey: "logline", kind: "long", aliases: ["Signal", "Summary", "Description", "Insight", "Why Now", "Why It Matters", "Overview", "Notes"] },
+      { key: "audience", label: "Audience", width: 180, aliases: ["Audience", "Demographic", "Community", "Market"] },
+      { key: "source", label: "Source", width: 180, aliases: ["Source", "Platform", "Outlet", "Publication", "Where Found"] },
+      { key: "action", label: "Next Step", width: 220, sortKey: "actionStatus", aliases: ["Next Step", "Next Steps", "Next Action", "Action", "Follow Up"] },
+      { key: "link", label: "Link", width: 220, kind: "link", aliases: ["URL", "Link", "Source Link", "Article", "Reference"] }
+    ];
+  }
+  return [
+    { key: "title", label: "Title", width: 260, sortKey: "title", kind: "title" },
+    { key: "logline", label: "Logline", width: 360, sortKey: "logline", kind: "long" },
+    { key: "genre", label: "Genre", width: 170, sortKey: "genre" },
+    { key: "urgency", label: "Urgency", width: 120, sortKey: "urgency", kind: "badge" },
+    { key: "rights", label: "Rights", width: 210, sortKey: "rights" },
+    { key: "owner", label: "Owner", width: 160, sortKey: "owner", kind: "owner" },
+    { key: "action", label: "Action Status", width: 220, sortKey: "actionStatus" },
+    { key: "score", label: "Score", width: 90, sortKey: "score", kind: "score" }
+  ];
+}
+
+function renderProspectCell(lead: HammerProjectLead, column: ProspectTableColumn, users: HammerUser[]) {
+  if (column.kind === "title") {
+    return (
+      <>
+        <p className="truncate font-semibold text-studio-100">{prospectColumnValue(lead, column) || lead.title}</p>
+        <p className="mt-0.5 truncate text-xs text-studio-400">{lead.creator || lead.platformSource || lead.sourceLink || prospectRawFieldValue(lead, ["Source", "Platform", "Owner"]) || "No source listed"}</p>
+      </>
+    );
+  }
+  if (column.kind === "owner") return <span className="block truncate">{prospectOwnerLabel(lead, users)}</span>;
+  if (column.kind === "badge") {
+    const value = prospectColumnValue(lead, column);
+    return value ? <Badge value={value} subtle /> : <span className="text-studio-500">-</span>;
+  }
+  if (column.kind === "score") return <span className="font-semibold text-studio-100">{(lead.priorityScore ?? prospectColumnValue(lead, column)) || "-"}</span>;
+  if (column.kind === "link") {
+    const value = prospectColumnValue(lead, column);
+    return value ? <span className="block truncate text-amberline">{value}</span> : <span className="text-studio-500">-</span>;
+  }
+  const value = prospectColumnValue(lead, column);
+  return column.kind === "long"
+    ? <span className="line-clamp-2 text-[13px] leading-5 text-studio-300">{value || "-"}</span>
+    : <span className="block truncate">{value || "-"}</span>;
+}
+
+function prospectColumnValue(lead: HammerProjectLead, column: ProspectTableColumn) {
+  if (column.aliases?.length) return prospectRawFieldValue(lead, column.aliases) || normalizedProspectColumnValue(lead, column.key);
+  return normalizedProspectColumnValue(lead, column.key);
+}
+
+function normalizedProspectColumnValue(lead: HammerProjectLead, key: string) {
+  if (key === "title") return lead.title;
+  if (key === "logline") return lead.logline;
+  if (key === "genre") return lead.genre;
+  if (key === "urgency") return lead.urgencyLabel;
+  if (key === "rights") return lead.rightsStatus;
+  if (key === "action") return lead.nextActionStatus;
+  if (key === "score") return lead.priorityScore === undefined ? undefined : String(lead.priorityScore);
+  return undefined;
+}
+
+function prospectRawFieldValue(lead: HammerProjectLead, aliases: string[]) {
+  const fields = lead.airtableFieldsJson;
+  if (!fields) return undefined;
+  for (const alias of aliases) {
+    const match = Object.entries(fields).find(([key]) => normalizeProspectFieldKey(key) === normalizeProspectFieldKey(alias));
+    const value = match ? stringifyProspectRawValue(match[1]) : undefined;
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function normalizeProspectFieldKey(value: string) {
+  return value.toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function stringifyProspectRawValue(value: unknown): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === "string") return value.trim() || undefined;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) {
+    const values = value.map(stringifyProspectRawValue).filter(Boolean);
+    return values.length ? values.join(", ") : undefined;
+  }
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return stringifyProspectRawValue(record.name ?? record.filename ?? record.url ?? record.email ?? record.id);
+  }
+  return undefined;
 }
 
 function SlateCreateModal({ users, onClose, onCreate }: { users: HammerUser[]; onClose: () => void; onCreate: (lead: Partial<HammerProjectLead>) => Promise<void> }) {
