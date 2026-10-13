@@ -8912,6 +8912,43 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
     }
   }
 
+  async function stopActiveBreakdown() {
+    const runToStop = breakdownModal?.run ?? activeRun;
+    if (!runToStop || updatingBreakdown) return;
+    if (!window.confirm("Stop this breakdown? Completed batch checkpoints will stay saved, but unfinished batches will be skipped.")) return;
+    setUpdatingBreakdown(true);
+    setBreakdownStatus("Stopping breakdown...");
+    try {
+      const response = await fetch("/api/hammer/breakdown", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "stopRun", runId: runToStop.id })
+      });
+      const data = await response.json().catch(() => null) as { run?: HammerBreakdownRun; error?: string } | null;
+      if (!response.ok) throw new Error(data?.error || "Breakdown could not be stopped.");
+      if (data?.run) {
+        setPersistedRuns((current) => [data.run!, ...current.filter((run) => run.id !== data.run!.id)]);
+        setBreakdownStatus(data.run.error || "Breakdown stopped.");
+        setBreakdownModal((current) => current ? {
+          ...current,
+          open: true,
+          tone: "error",
+          phase: "Breakdown stopped",
+          message: data.run?.error || "Breakdown stopped.",
+          detail: "Completed batch checkpoints were kept. You can remove or resume this breakdown run.",
+          run: data.run
+        } : current);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Breakdown could not be stopped.";
+      setBreakdownStatus(message);
+      setBreakdownModal((current) => current ? { ...current, open: true, tone: "error", phase: "Stop failed", message, detail: "GreenLight could not stop this breakdown run." } : current);
+    } finally {
+      setUpdatingBreakdown(false);
+      setRunningBreakdown(false);
+    }
+  }
+
   return (
     <div className="space-y-4">
       {breakdownModal?.open ? (
@@ -8919,7 +8956,9 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
           documentTitle={doc.title}
           version={version}
           state={breakdownModal}
-          onClose={() => setBreakdownModal(null)}
+          onClose={() => setBreakdownModal((current) => current ? { ...current, open: false } : current)}
+          onStop={stopActiveBreakdown}
+          stopping={updatingBreakdown}
         />
       ) : null}
       <Panel className="p-3">
@@ -8948,6 +8987,14 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
         {textState.message ? <p className="mt-2 rounded border border-ember/30 bg-ember/10 px-2.5 py-1.5 text-xs text-ember">{textState.message}</p> : null}
         {activeRun?.error ? <p className="mt-2 rounded border border-ember/30 bg-ember/10 px-2.5 py-1.5 text-xs text-ember">{activeRun.error}</p> : null}
         {breakdownStatus ? <p className="mt-2 rounded border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-xs text-studio-300">{breakdownStatus}</p> : null}
+        {breakdownModal && !breakdownModal.open ? (
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded border border-sky-300/20 bg-sky-400/10 px-2.5 py-2 text-xs text-sky-100">
+            <span>{breakdownModal.phase}: {breakdownModal.message}</span>
+            <button type="button" onClick={() => setBreakdownModal((current) => current ? { ...current, open: true } : current)} className="rounded border border-sky-200/25 px-2 py-1 font-semibold transition hover:border-sky-100/50">
+              Reopen Progress
+            </button>
+          </div>
+        ) : null}
       </Panel>
       {tableRun ? <PersistedBreakdownElementPanel run={tableRun} onUpdateStatus={updatePersistedElementStatus} updating={updatingBreakdown} /> : <Panel><SectionHeader eyebrow="Breakdown Table" title="Production Items" /><EmptyState label={activeRun?.status === "RUNNING" ? "Claude breakdown is running. This table will appear when processing completes." : "Run Claude production breakdown to detect characters, extras, locations, props, vehicles, wardrobe, SFX, and animals."} /></Panel>}
     </div>
@@ -8984,12 +9031,16 @@ function BreakdownProgressModal({
   documentTitle,
   version,
   state,
-  onClose
+  onClose,
+  onStop,
+  stopping
 }: {
   documentTitle: string;
   version?: HammerDocumentVersion;
   state: BreakdownProgressModalState;
   onClose: () => void;
+  onStop?: () => void;
+  stopping?: boolean;
 }) {
   const [now, setNow] = useState(Date.now());
   const isWorking = state.tone === "working";
@@ -9157,7 +9208,12 @@ function BreakdownProgressModal({
 
         {state.run?.warning ? <p className="mt-3 rounded border border-yellow-300/25 bg-yellow-300/10 px-2.5 py-1.5 text-xs text-yellow-100">{state.run.warning}</p> : null}
 
-        <div className="mt-4 flex justify-end">
+        <div className="mt-4 flex flex-wrap justify-end gap-2">
+          {isWorking && onStop ? (
+            <button type="button" onClick={onStop} disabled={stopping} className="rounded-md border border-rose-400/25 bg-rose-500/10 px-3 py-2 text-sm font-semibold text-rose-200 transition hover:border-rose-300/50 disabled:cursor-wait disabled:opacity-60">
+              {stopping ? "Stopping..." : "Stop Breakdown"}
+            </button>
+          ) : null}
           <button type="button" onClick={onClose} className="rounded-md border border-white/10 px-3 py-2 text-sm font-semibold text-studio-300 transition hover:border-white/20 hover:text-studio-100">
             {isWorking ? "Hide Window" : "Close"}
           </button>

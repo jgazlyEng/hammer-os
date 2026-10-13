@@ -179,6 +179,31 @@ export async function resumeProductionBreakdownRun(runId: string) {
   return getBreakdownRun(run.id);
 }
 
+export async function stopProductionBreakdownRun(runId: string, userId?: string) {
+  await prisma.breakdownBatch.updateMany({
+    where: { runId, status: { in: ["QUEUED", "RUNNING"] } },
+    data: {
+      status: "SKIPPED",
+      error: "Stopped by user before this batch completed.",
+      completedAt: new Date()
+    }
+  });
+  return prisma.breakdownRun.update({
+    where: { id: runId },
+    data: {
+      status: "FAILED",
+      jobState: "FAILED",
+      error: userId ? "Breakdown stopped by user." : "Breakdown stopped.",
+      completedAt: new Date(),
+      statsJson: {
+        progressPhase: "stopped",
+        progressUpdatedAt: new Date().toISOString()
+      }
+    },
+    include: breakdownRunInclude
+  });
+}
+
 async function createProductionBreakdownRun(input: { documentVersionId: string; userId?: string }) {
   const version = await prisma.documentVersion.findUnique({
     where: { id: input.documentVersionId },
@@ -1178,6 +1203,7 @@ async function runClaudeSkillBreakdownInBatches(input: BreakdownClaudeInput, set
   });
 
   for (const [index, scenes] of chunks.entries()) {
+    await assertBreakdownRunActive(input.runId);
     const batch = durableBatches[index];
     if (batch?.status === "COMPLETED") {
       const snapshot = breakdownSourceFromBatch(batch);
@@ -1222,6 +1248,7 @@ async function runClaudeSkillBreakdownInBatches(input: BreakdownClaudeInput, set
         sceneOutline: scenes,
         maxTokens: 8000
       });
+      await assertBreakdownRunActive(input.runId);
       batchElements = normalizeClaudeElements(payload);
       batchScenes = normalizeClaudeScenes(payload);
       if (batch) await markBreakdownBatchCompleted(batch.id, {
@@ -1265,6 +1292,12 @@ async function runClaudeSkillBreakdownInBatches(input: BreakdownClaudeInput, set
     scenes: mergeBreakdownScenes(allScenes),
     warning: warnings.join(" ")
   };
+}
+
+async function assertBreakdownRunActive(runId?: string) {
+  if (!runId) return;
+  const run = await prisma.breakdownRun.findUnique({ where: { id: runId }, select: { status: true, error: true } });
+  if (!run || run.status !== "RUNNING") throw new Error(run?.error || "Breakdown stopped before the next batch could run.");
 }
 
 async function requestClaudeBreakdown(input: { apiKey: string; model: string; title: string; fileName: string; text: string; sceneOutline: BreakdownSceneReference[]; maxTokens: number }) {

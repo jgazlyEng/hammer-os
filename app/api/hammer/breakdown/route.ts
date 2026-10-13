@@ -8,6 +8,7 @@ import {
   listBreakdownRuns,
   resumeProductionBreakdownRun,
   startProductionBreakdown,
+  stopProductionBreakdownRun,
   updateBreakdownElementStatus,
   updateBreakdownRunStatus,
   type ProductionBreakdownRunRecord
@@ -111,6 +112,18 @@ export async function PATCH(request: Request) {
     if (!canRunBreakdown(auth.user, run.projectId)) return NextResponse.json(forbidden(), { status: 403 });
 
     const updated = await resumeProductionBreakdownRun(runId);
+    return NextResponse.json({ mode: "database", run: updated ? toBreakdownRun(updated) : null });
+  }
+
+  if (action === "stopRun") {
+    const runId = stringField(body.runId);
+    if (!runId) return NextResponse.json({ error: "Run id is required." }, { status: 400 });
+
+    const run = await getBreakdownRun(runId);
+    if (!run) return NextResponse.json({ error: "Breakdown run not found." }, { status: 404 });
+    if (!canRunBreakdown(auth.user, run.projectId)) return NextResponse.json(forbidden(), { status: 403 });
+
+    const updated = await stopProductionBreakdownRun(runId, auth.user.id);
     return NextResponse.json({ mode: "database", run: updated ? toBreakdownRun(updated) : null });
   }
 
