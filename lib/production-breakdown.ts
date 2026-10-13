@@ -74,7 +74,8 @@ type BreakdownTextSource = {
   source: "stored-text" | "stored-original";
 };
 
-const CLAUDE_BREAKDOWN_REQUEST_TIMEOUT_MS = 12 * 60 * 1000;
+const CLAUDE_BREAKDOWN_REQUEST_TIMEOUT_MS = Number(process.env.CLAUDE_BREAKDOWN_REQUEST_TIMEOUT_MS || 10 * 60 * 1000);
+const BREAKDOWN_BATCH_STALE_MS = Number(process.env.BREAKDOWN_BATCH_STALE_MS || 10 * 60 * 1000);
 const BREAKDOWN_STALE_RUN_MS = 2 * 60 * 60 * 1000;
 const BREAKDOWN_NO_PROGRESS_MS = 30 * 60 * 1000;
 const BREAKDOWN_FINALIZE_STALE_MS = 5 * 60 * 1000;
@@ -598,6 +599,7 @@ async function markStaleBreakdownRuns(documentVersionId: string) {
   const now = Date.now();
   for (const run of runningRuns) {
     if (await promoteRunIfAllBatchesCompleted(run.id, run.parserVersion)) continue;
+    if (await failRunIfBatchTimedOut(run.id, now)) continue;
     const stats = run.statsJson && typeof run.statsJson === "object" && !Array.isArray(run.statsJson)
       ? run.statsJson as Prisma.JsonObject
       : {};
@@ -661,6 +663,45 @@ async function markStaleBreakdownRuns(documentVersionId: string) {
       }
     });
   }
+}
+
+async function failRunIfBatchTimedOut(runId: string, now: number) {
+  const runningBatch = await prisma.breakdownBatch.findFirst({
+    where: { runId, status: "RUNNING", startedAt: { not: null } },
+    orderBy: { startedAt: "asc" }
+  });
+  if (!runningBatch?.startedAt) return false;
+  const elapsedMs = now - runningBatch.startedAt.getTime();
+  if (elapsedMs < BREAKDOWN_BATCH_STALE_MS) return false;
+  const message = `Batch ${runningBatch.batchNumber} timed out after ${Math.round(elapsedMs / 60000)} minutes. Resume this breakdown to retry only the failed batch.`;
+  await prisma.$transaction([
+    prisma.breakdownBatch.update({
+      where: { id: runningBatch.id },
+      data: {
+        status: "FAILED",
+        error: message,
+        completedAt: new Date()
+      }
+    }),
+    prisma.breakdownRun.update({
+      where: { id: runId },
+      data: {
+        status: "FAILED",
+        jobState: "FAILED",
+        error: message,
+        completedAt: new Date(),
+        statsJson: {
+          progressPhase: "batch-timeout",
+          currentBatchIndex: runningBatch.batchNumber,
+          currentBatchSceneCount: runningBatch.sceneCount,
+          completedBatchCount: Math.max(0, runningBatch.batchNumber - 1),
+          totalBatchCount: runningBatch.totalBatches,
+          progressUpdatedAt: new Date().toISOString()
+        }
+      }
+    })
+  ]);
+  return true;
 }
 
 async function promoteRunIfAllBatchesCompleted(runId: string, model?: string | null) {
