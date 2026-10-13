@@ -98,6 +98,15 @@ type BreakdownProgressUpdate = {
   backfilledLocationCount?: number;
 };
 
+type BreakdownClaudeInput = {
+  sourceText: string;
+  title: string;
+  fileName: string;
+  sceneOutline: BreakdownSceneReference[];
+  onProgress?: (progress: BreakdownProgressUpdate) => Promise<void>;
+  onRawSnapshot?: (snapshot: BreakdownSource, progress: BreakdownProgressUpdate) => Promise<void>;
+};
+
 const categoryDepartments: Record<BreakdownTaxonomyCategory, string> = {
   CHARACTER: "cast",
   EXTRAS: "background-casting",
@@ -210,7 +219,24 @@ async function processProductionBreakdownRun(runId: string) {
       title: version.document.title,
       fileName: version.fileName,
       sceneOutline,
-      onProgress: (progress) => updateBreakdownRunProgress(run.id, progress)
+      onProgress: (progress) => updateBreakdownRunProgress(run.id, progress),
+      onRawSnapshot: async (snapshot, progress) => {
+        const snapshotScenes = sceneOutline.length ? mergeClaudeSceneDetailsIntoOutline(sceneOutline, snapshot.scenes) : snapshot.scenes;
+        const snapshotElements = assignElementsToScenes(snapshot.elements, sceneOutline);
+        attachElementsToSceneSummaries(snapshotScenes, snapshotElements);
+        await saveRawBreakdownResult(run.id, {
+          selected: snapshot,
+          scenes: snapshotScenes,
+          elements: snapshotElements,
+          source,
+          sourceTextCharacters: sourceText.length,
+          sceneOutline,
+          sourceElementCount: snapshot.elements.length,
+          backfilledLocationCount: 0,
+          progress,
+          reviewable: progress.totalSceneCount > 0 && progress.processedSceneCount >= progress.totalSceneCount
+        });
+      }
     });
     const scenes = sceneOutline.length ? mergeClaudeSceneDetailsIntoOutline(sceneOutline, selected.scenes) : selected.scenes;
     const elements = assignElementsToScenes(selected.elements, sceneOutline);
@@ -266,16 +292,19 @@ async function saveRawBreakdownResult(runId: string, input: {
   sceneOutline: BreakdownSceneReference[];
   sourceElementCount: number;
   backfilledLocationCount: number;
+  progress?: BreakdownProgressUpdate;
+  reviewable?: boolean;
 }) {
+  const reviewable = input.reviewable ?? true;
+  const processedSceneCount = input.progress?.processedSceneCount ?? input.sceneOutline.length;
+  const totalSceneCount = input.progress?.totalSceneCount ?? input.sceneOutline.length;
   await prisma.breakdownRun.update({
     where: { id: runId },
     data: {
-      status: "READY_FOR_REVIEW",
-      jobState: "READY_FOR_REVIEW",
+      ...(reviewable ? { status: "READY_FOR_REVIEW" as const, jobState: "READY_FOR_REVIEW" as const, completedAt: new Date() } : {}),
       parserName: input.selected.parserName,
       parserVersion: input.selected.parserVersion,
       warning: [input.source.warning, input.selected.warning].filter(Boolean).join(" ") || undefined,
-      completedAt: new Date(),
       rawSavedAt: new Date(),
       rawResultJson: {
         parserName: input.selected.parserName,
@@ -293,9 +322,11 @@ async function saveRawBreakdownResult(runId: string, input: {
         aiModel: input.selected.model
       },
       statsJson: {
-        progressPhase: "raw-saved",
-        processedSceneCount: input.sceneOutline.length,
-        totalSceneCount: input.sceneOutline.length,
+        progressPhase: reviewable ? "raw-saved" : "raw-snapshot-saved",
+        processedSceneCount,
+        totalSceneCount,
+        completedBatchCount: input.progress?.completedBatchCount ?? null,
+        totalBatchCount: input.progress?.totalBatchCount ?? null,
         partialElementCount: input.elements.length,
         partialSceneCount: input.scenes.length,
         savedElementCount: 0,
@@ -1015,7 +1046,7 @@ function normalizeSearchText(value?: string) {
   return (value ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
-async function runClaudeSkillBreakdown(input: { sourceText: string; title: string; fileName: string; sceneOutline: BreakdownSceneReference[]; onProgress?: (progress: BreakdownProgressUpdate) => Promise<void> }): Promise<BreakdownSource> {
+async function runClaudeSkillBreakdown(input: BreakdownClaudeInput): Promise<BreakdownSource> {
   const settings = await readStoredLlmProviderSettings().catch(() => null);
   if (!settings?.enabled) throw new Error("Claude production breakdown is disabled in Admin Settings.");
   if (settings.provider !== "anthropic") throw new Error("Production breakdown requires Claude / Anthropic as the active LLM provider.");
@@ -1052,7 +1083,7 @@ async function runClaudeSkillBreakdown(input: { sourceText: string; title: strin
     partialElementCount: elements.length,
     partialSceneCount: scenes.length
   });
-  return {
+  const result = {
     parserName: "claude-production-breakdown-skill",
     parserVersion: settings.model,
     model: settings.model,
@@ -1060,9 +1091,17 @@ async function runClaudeSkillBreakdown(input: { sourceText: string; title: strin
     scenes,
     warning: input.sourceText.length > settings.maxInputCharacters ? `Claude analyzed the first ${settings.maxInputCharacters.toLocaleString()} characters because of the configured Admin limit.` : undefined
   };
+  await input.onRawSnapshot?.(result, {
+    phase: "claude-single-pass-complete",
+    processedSceneCount: input.sceneOutline.length,
+    totalSceneCount: input.sceneOutline.length,
+    partialElementCount: elements.length,
+    partialSceneCount: scenes.length
+  });
+  return result;
 }
 
-async function runClaudeSkillBreakdownInBatches(input: { sourceText: string; title: string; fileName: string; sceneOutline: BreakdownSceneReference[]; onProgress?: (progress: BreakdownProgressUpdate) => Promise<void> }, settings: { model: string; maxInputCharacters: number }, apiKey: string): Promise<BreakdownSource> {
+async function runClaudeSkillBreakdownInBatches(input: BreakdownClaudeInput, settings: { model: string; maxInputCharacters: number }, apiKey: string): Promise<BreakdownSource> {
   const chunks = chunkScenes(input.sceneOutline, 18);
   const allElements: BreakdownElementDraft[] = [];
   const allScenes: BreakdownSceneDraft[] = [];
@@ -1088,7 +1127,7 @@ async function runClaudeSkillBreakdownInBatches(input: { sourceText: string; tit
     });
     allElements.push(...normalizeClaudeElements(payload));
     allScenes.push(...normalizeClaudeScenes(payload));
-    await input.onProgress?.({
+    const progress = {
       phase: "claude-batch-complete",
       processedSceneCount: chunks.slice(0, index + 1).reduce((total, chunk) => total + chunk.length, 0),
       totalSceneCount: input.sceneOutline.length,
@@ -1096,7 +1135,16 @@ async function runClaudeSkillBreakdownInBatches(input: { sourceText: string; tit
       totalBatchCount: chunks.length,
       partialElementCount: allElements.length,
       partialSceneCount: allScenes.length
-    });
+    };
+    await input.onProgress?.(progress);
+    await input.onRawSnapshot?.({
+      parserName: "claude-production-breakdown-skill",
+      parserVersion: settings.model,
+      model: settings.model,
+      elements: allElements.map((element, elementIndex) => ({ ...element, sortOrder: elementIndex })),
+      scenes: allScenes,
+      warning: warnings.join(" ")
+    }, progress);
   }
 
   const elements = mergeBreakdownElementRows(allElements);

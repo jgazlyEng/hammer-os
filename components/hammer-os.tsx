@@ -9138,9 +9138,16 @@ function breakdownRunningCopy(attempt: number, run?: HammerBreakdownRun) {
       ? ` Claude returned ${sourceElementCount.toLocaleString()} rows; GreenLight added ${backfilledLocationCount.toLocaleString()} missing location row${backfilledLocationCount === 1 ? "" : "s"}.`
       : "";
     return {
-      phase: "Saving review table",
-      message: `GreenLight is saving ${Math.min(savedElementCount, totalElementCount).toLocaleString()} of ${totalElementCount.toLocaleString()} review rows to the database.${currentRow}`,
-      detail: `${backfillNote} This final step links elements to scenes, saves tags, and prepares the breakdown table for review.`.trim()
+      phase: "Indexing review table",
+      message: `GreenLight is indexing ${Math.min(savedElementCount, totalElementCount).toLocaleString()} of ${totalElementCount.toLocaleString()} review rows for search and filtering.${currentRow}`,
+      detail: `${backfillNote} The raw review table is saved first; this background step links elements to scenes and saves searchable tags.`.trim()
+    };
+  }
+  if (progressPhase === "raw-saved") {
+    return {
+      phase: "Review table ready",
+      message: "GreenLight saved the Claude breakdown and is preparing the searchable index in the background.",
+      detail: "You can review the table while indexing finishes. If indexing skips a row, the raw Claude result remains available."
     };
   }
   if (processedSceneCount !== undefined && totalSceneCount) {
@@ -9150,7 +9157,7 @@ function breakdownRunningCopy(attempt: number, run?: HammerBreakdownRun) {
     return {
       phase: processedSceneCount >= totalSceneCount ? "Claude response received" : "Claude scene batches running",
       message: `GreenLight has processed ${sceneText}.${batchText}`,
-      detail: `${itemText} The final table appears after GreenLight normalizes and saves all returned rows.`.trim()
+      detail: `${itemText} GreenLight now saves a reviewable Claude snapshot first, then indexes the rows for search in the background.`.trim()
     };
   }
   if (attempt < 2) {
@@ -9169,9 +9176,9 @@ function breakdownRunningCopy(attempt: number, run?: HammerBreakdownRun) {
   }
   if (attempt < 60) {
     return {
-      phase: "Normalizing returned rows",
-      message: "GreenLight is waiting for Claude's response and preparing the rows for the review table.",
-      detail: "This step maps categories, scene references, evidence, and tags into the GreenLight breakdown format."
+      phase: "Saving review snapshot",
+      message: "GreenLight is saving Claude's returned rows so the review table can open quickly.",
+      detail: "Search indexing happens after the review copy is safely stored."
     };
   }
   return {
@@ -9205,12 +9212,12 @@ function breakdownProgressSteps(state: BreakdownProgressModalState, elapsedSecon
       description: "Send the screenplay to the production-breakdown prompt in scene-aware batches."
     },
     {
-      label: "Normalize rows",
-      description: "Convert Claude’s response into categories, scene links, evidence, and searchable tags."
+      label: "Save review copy",
+      description: "Store Claude’s returned rows so the table can open before background indexing finishes."
     },
     {
-      label: "Save review table",
-      description: "Write the finished breakdown rows back to GreenLight so the table can refresh."
+      label: "Index searchable rows",
+      description: "Link elements to scenes and save tags for filtering, search, and reporting."
     }
   ].map((step, index) => ({
     ...step,
