@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Archive, ArrowLeft, ArrowUpDown, CalendarClock, CheckCircle2, ChevronDown, Circle, ContactRound, Download, FileDiff, FileText, Gauge, GripVertical, ImagePlus, Loader2, MessageSquare, PackageCheck, Pencil, Plus, Search, Share2, ShieldCheck, Trash2, UploadCloud, UsersRound, X } from "lucide-react";
+import { Archive, ArrowLeft, ArrowUpDown, CalendarClock, CheckCircle2, ChevronDown, Circle, ContactRound, Download, FileDiff, FileText, Gauge, GripVertical, ImagePlus, Loader2, MessageSquare, PackageCheck, Pencil, Plus, RotateCcw, Search, Share2, ShieldCheck, Trash2, UploadCloud, UsersRound, X } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { EmptyState, Panel, SectionHeader } from "@/components/ui";
 import {
@@ -156,6 +156,21 @@ interface HammerBreakdownRun {
   createdAt: string;
   completedAt?: string;
   approvedAt?: string;
+  batches?: Array<{
+    id: string;
+    batchNumber: number;
+    totalBatches: number;
+    status: string;
+    sceneStartIndex: number;
+    sceneEndIndex: number;
+    sceneCount: number;
+    elementCount: number;
+    sceneResultCount: number;
+    attempts: number;
+    error?: string;
+    startedAt?: string;
+    completedAt?: string;
+  }>;
   elements: HammerBreakdownElement[];
 }
 
@@ -8858,6 +8873,45 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
     }
   }
 
+  async function resumeActiveBreakdown() {
+    if (!activeRun || updatingBreakdown) return;
+    setUpdatingBreakdown(true);
+    setRunningBreakdown(true);
+    setBreakdownStatus("Resuming Claude production breakdown...");
+    setBreakdownModal({
+      open: true,
+      tone: "working",
+      phase: "Resuming breakdown",
+      message: "GreenLight is resuming this breakdown from its saved batch checkpoints.",
+      detail: "Completed Claude batches will be reused; failed or unfinished batches will run again.",
+      startedAt: Date.now(),
+      run: activeRun
+    });
+    try {
+      const response = await fetch("/api/hammer/breakdown", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "resumeRun", runId: activeRun.id })
+      });
+      const data = await response.json().catch(() => null) as { run?: HammerBreakdownRun; error?: string } | null;
+      if (!response.ok) throw new Error(data?.error || "Breakdown could not be resumed.");
+      if (data?.run) {
+        setPersistedRuns((current) => [data.run!, ...current.filter((run) => run.id !== data.run!.id)]);
+        const completedRun = await waitForBreakdownCompletion(data.run.documentVersionId, data.run.id);
+        const message = breakdownCompleteMessage(completedRun);
+        setBreakdownStatus(message);
+        setBreakdownModal((current) => current ? { ...current, tone: "success", phase: "Breakdown saved", message, detail: "GreenLight resumed the saved batch job and refreshed the breakdown table.", run: completedRun } : current);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Breakdown could not be resumed.";
+      setBreakdownStatus(message);
+      setBreakdownModal((current) => current ? { ...current, tone: "error", phase: "Resume failed", message, detail: "GreenLight could not resume this breakdown run." } : current);
+    } finally {
+      setUpdatingBreakdown(false);
+      setRunningBreakdown(false);
+    }
+  }
+
   return (
     <div className="space-y-4">
       {breakdownModal?.open ? (
@@ -8881,6 +8935,7 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
           </div>
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={runBreakdown} disabled={runningBreakdown || updatingBreakdown} className="inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-wait disabled:opacity-60">{runningBreakdown ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Gauge className="h-3.5 w-3.5" />}{runningBreakdown ? "Running..." : "Run Breakdown"}</button>
+            {activeRun?.status === "FAILED" ? <button type="button" onClick={resumeActiveBreakdown} disabled={runningBreakdown || updatingBreakdown} className="inline-flex items-center gap-1.5 rounded border border-sky-300/25 bg-sky-400/10 px-2.5 py-1.5 text-xs font-semibold text-sky-100 transition hover:border-sky-200/50 disabled:cursor-wait disabled:opacity-60">{updatingBreakdown ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}Resume</button> : null}
             <button type="button" onClick={approveBreakdown} disabled={updatingBreakdown || !tableRun} className="inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.025] px-2.5 py-1.5 text-xs font-semibold text-studio-300 transition hover:border-amberline/35 hover:text-amberline disabled:cursor-not-allowed disabled:opacity-50"><CheckCircle2 className="h-3.5 w-3.5" />Approve</button>
             {activeRun ? <button type="button" onClick={deleteActiveBreakdown} disabled={updatingBreakdown} className="inline-flex items-center gap-1.5 rounded border border-rose-400/25 bg-rose-500/5 px-2.5 py-1.5 text-xs font-semibold text-rose-300 transition hover:border-rose-300/50 hover:text-rose-200 disabled:cursor-not-allowed disabled:opacity-50"><Trash2 className="h-3.5 w-3.5" />Remove</button> : null}
           </div>
@@ -9045,9 +9100,22 @@ function BreakdownProgressModal({
                 {failedElementCount ? <> Skipped {failedElementCount.toLocaleString()} row{failedElementCount === 1 ? "" : "s"}.</> : null}
               </>
             ) : (
-              <>Claude has returned {partialElementCount.toLocaleString()} production item{partialElementCount === 1 ? "" : "s"} so far. GreenLight will save the final review table when all batches finish.</>
+              <>Claude has returned {partialElementCount.toLocaleString()} production item{partialElementCount === 1 ? "" : "s"} so far. GreenLight saves completed batches as checkpoints before moving on.</>
             )}
           </p>
+        ) : null}
+        {state.run?.batches?.length ? (
+          <div className="mt-3 flex flex-wrap gap-1.5 text-[10px] uppercase tracking-[0.08em] text-studio-400">
+            {state.run.batches.map((batch) => (
+              <span key={batch.id} className={cn(
+                "rounded border px-2 py-1",
+                batch.status === "COMPLETED" && "border-emerald-300/25 bg-emerald-400/10 text-emerald-100",
+                batch.status === "RUNNING" && "border-sky-300/30 bg-sky-400/10 text-sky-100",
+                batch.status === "FAILED" && "border-rose-300/30 bg-rose-500/10 text-rose-100",
+                !["COMPLETED", "RUNNING", "FAILED"].includes(batch.status) && "border-white/10 bg-white/[0.025]"
+              )}>Batch {batch.batchNumber}: {statusLabel(batch.status)}</span>
+            ))}
+          </div>
         ) : null}
 
         <div className="mt-3 rounded-lg border border-white/10 bg-white/[0.025] p-3">
@@ -9123,6 +9191,20 @@ function breakdownRunningCopy(attempt: number, run?: HammerBreakdownRun) {
   const sourceElementCount = breakdownStatNumber(run?.stats, "sourceElementCount");
   const backfilledLocationCount = breakdownStatNumber(run?.stats, "backfilledLocationCount");
   const progressPhase = typeof run?.stats?.progressPhase === "string" ? run.stats.progressPhase : "";
+  const currentBatchIndex = breakdownStatNumber(run?.stats, "currentBatchIndex");
+  const currentBatchSceneCount = breakdownStatNumber(run?.stats, "currentBatchSceneCount");
+  if (progressPhase === "claude-batch-running") {
+    const batchText = currentBatchIndex && totalBatchCount
+      ? `batch ${currentBatchIndex.toLocaleString()} of ${totalBatchCount.toLocaleString()}`
+      : "the next scene batch";
+    const sceneText = currentBatchSceneCount ? ` This batch contains ${currentBatchSceneCount.toLocaleString()} scene${currentBatchSceneCount === 1 ? "" : "s"}.` : "";
+    const itemText = partialElementCount !== undefined ? ` Claude has returned ${partialElementCount.toLocaleString()} production item${partialElementCount === 1 ? "" : "s"} from completed batches so far.` : "";
+    return {
+      phase: "Claude batch running",
+      message: `Claude is analyzing ${batchText}.${sceneText}`,
+      detail: `${itemText} GreenLight saves each completed batch before moving to the next one.`.trim()
+    };
+  }
   if (progressPhase === "finalizing-review-table") {
     return {
       phase: "Finalizing review table",
@@ -9193,15 +9275,20 @@ function breakdownProgressSteps(state: BreakdownProgressModalState, elapsedSecon
   const totalElementCount = breakdownStatNumber(state.run?.stats, "totalElementCount");
   const processedSceneCount = breakdownStatNumber(state.run?.stats, "processedSceneCount");
   const totalSceneCount = breakdownStatNumber(state.run?.stats, "totalSceneCount") ?? breakdownStatNumber(state.run?.stats, "outlineSceneCount");
+  const progressPhase = typeof state.run?.stats?.progressPhase === "string" ? state.run.stats.progressPhase : "";
   const activeIndex = state.tone === "success"
     ? 4
     : state.tone === "error"
       ? 2
+      : progressPhase === "indexed" || progressPhase === "partial-indexed"
+        ? 4
       : savedElementCount !== undefined && totalElementCount
         ? 3
-        : processedSceneCount !== undefined && totalSceneCount && processedSceneCount >= totalSceneCount
+      : progressPhase === "raw-saved" || progressPhase === "raw-snapshot-saved" || (processedSceneCount !== undefined && totalSceneCount && processedSceneCount >= totalSceneCount)
           ? 2
-          : elapsedSeconds < 8 ? 0 : elapsedSeconds < 45 ? 1 : elapsedSeconds < 120 ? 2 : 3;
+      : progressPhase === "scene-outline-ready" || progressPhase === "claude-batches-started" || progressPhase === "claude-batch-running" || progressPhase === "claude-batch-complete" || elapsedSeconds >= 8
+        ? 1
+      : 0;
   return [
     {
       label: "Validate script text",

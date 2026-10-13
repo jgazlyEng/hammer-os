@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import type { BreakdownElementStatus, BreakdownJobState, BreakdownRunStatus, BreakdownTaxonomyCategory, Prisma } from "@prisma/client";
+import type { BreakdownBatchStatus, BreakdownElementStatus, BreakdownJobState, BreakdownRunStatus, BreakdownTaxonomyCategory, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { readStoredLlmProviderSettings, resolveLlmApiKey } from "@/lib/llm-settings";
 import { parseScriptText } from "@/lib/script-parser";
@@ -9,6 +9,8 @@ import type { ParsedScriptScene } from "@/lib/types";
 export type ProductionBreakdownRunRecord = Prisma.BreakdownRunGetPayload<{
   include: typeof breakdownRunInclude;
 }>;
+
+type BreakdownBatchRecord = Prisma.BreakdownBatchGetPayload<Record<string, never>>;
 
 type BreakdownElementDraft = {
   stableKey: string;
@@ -94,6 +96,8 @@ type BreakdownProgressUpdate = {
   currentElementName?: string;
   currentElementCategory?: BreakdownTaxonomyCategory;
   currentElementIndex?: number;
+  currentBatchIndex?: number;
+  currentBatchSceneCount?: number;
   sourceElementCount?: number;
   backfilledLocationCount?: number;
 };
@@ -105,6 +109,9 @@ type BreakdownClaudeInput = {
   sceneOutline: BreakdownSceneReference[];
   onProgress?: (progress: BreakdownProgressUpdate) => Promise<void>;
   onRawSnapshot?: (snapshot: BreakdownSource, progress: BreakdownProgressUpdate) => Promise<void>;
+  runId?: string;
+  projectId?: string;
+  documentVersionId?: string;
 };
 
 const categoryDepartments: Record<BreakdownTaxonomyCategory, string> = {
@@ -131,6 +138,9 @@ export const breakdownRunInclude = {
       sceneElements: true
     },
     orderBy: [{ category: "asc" as const }, { sortOrder: "asc" as const }, { displayName: "asc" as const }]
+  },
+  batches: {
+    orderBy: { batchNumber: "asc" as const }
   }
 } satisfies Prisma.BreakdownRunInclude;
 
@@ -145,6 +155,25 @@ export async function startProductionBreakdown(input: { documentVersionId: strin
     void processProductionBreakdownRun(run.id).catch(async (error) => {
       await markBreakdownRunFailed(run.id, error);
       console.error("[hammer:breakdown:background]", error);
+    });
+  }, 0);
+  return getBreakdownRun(run.id);
+}
+
+export async function resumeProductionBreakdownRun(runId: string) {
+  const run = await prisma.breakdownRun.update({
+    where: { id: runId },
+    data: {
+      status: "RUNNING",
+      jobState: "QUEUED",
+      error: null,
+      completedAt: null
+    }
+  });
+  setTimeout(() => {
+    void processProductionBreakdownRun(run.id).catch(async (error) => {
+      await markBreakdownRunFailed(run.id, error);
+      console.error("[hammer:breakdown:resume]", error);
     });
   }, 0);
   return getBreakdownRun(run.id);
@@ -219,15 +248,15 @@ async function processProductionBreakdownRun(runId: string) {
       title: version.document.title,
       fileName: version.fileName,
       sceneOutline,
+      runId: run.id,
+      projectId: run.projectId,
+      documentVersionId: version.id,
       onProgress: (progress) => updateBreakdownRunProgress(run.id, progress),
       onRawSnapshot: async (snapshot, progress) => {
-        const snapshotScenes = sceneOutline.length ? mergeClaudeSceneDetailsIntoOutline(sceneOutline, snapshot.scenes) : snapshot.scenes;
-        const snapshotElements = assignElementsToScenes(snapshot.elements, sceneOutline);
-        attachElementsToSceneSummaries(snapshotScenes, snapshotElements);
         await saveRawBreakdownResult(run.id, {
           selected: snapshot,
-          scenes: snapshotScenes,
-          elements: snapshotElements,
+          scenes: snapshot.scenes,
+          elements: snapshot.elements,
           source,
           sourceTextCharacters: sourceText.length,
           sceneOutline,
@@ -539,7 +568,7 @@ function isBackfilledLocationElement(element: BreakdownElementDraft) {
 async function markStaleBreakdownRuns(documentVersionId: string) {
   const runningRuns = await prisma.breakdownRun.findMany({
     where: { documentVersionId, status: "RUNNING" },
-    select: { id: true, createdAt: true, statsJson: true }
+    select: { id: true, createdAt: true, statsJson: true, rawResultJson: true, rawSavedAt: true }
   });
   const now = Date.now();
   for (const run of runningRuns) {
@@ -553,6 +582,30 @@ async function markStaleBreakdownRuns(documentVersionId: string) {
     const isFinalizingTooLong = progressPhase === "finalizing-review-table" && noProgressMs >= BREAKDOWN_FINALIZE_STALE_MS;
     const savedElementCount = typeof stats.savedElementCount === "number" && Number.isFinite(stats.savedElementCount) ? stats.savedElementCount : 0;
     const totalElementCount = typeof stats.totalElementCount === "number" && Number.isFinite(stats.totalElementCount) ? stats.totalElementCount : 0;
+    const processedSceneCount = typeof stats.processedSceneCount === "number" && Number.isFinite(stats.processedSceneCount) ? stats.processedSceneCount : 0;
+    const totalSceneCount = typeof stats.totalSceneCount === "number" && Number.isFinite(stats.totalSceneCount) ? stats.totalSceneCount : 0;
+    const rawResult = run.rawResultJson && typeof run.rawResultJson === "object" && !Array.isArray(run.rawResultJson)
+      ? run.rawResultJson as Prisma.JsonObject
+      : undefined;
+    const rawElements = Array.isArray(rawResult?.elements) ? rawResult.elements : [];
+    if (rawElements.length && totalSceneCount > 0 && processedSceneCount >= totalSceneCount) {
+      await prisma.breakdownRun.update({
+        where: { id: run.id },
+        data: {
+          status: "READY_FOR_REVIEW",
+          jobState: "READY_FOR_REVIEW",
+          completedAt: new Date(),
+          rawSavedAt: run.rawSavedAt ?? new Date(),
+          statsJson: {
+            ...stats,
+            progressPhase: "raw-saved",
+            partialElementCount: rawElements.length,
+            progressUpdatedAt: new Date().toISOString()
+          }
+        }
+      });
+      continue;
+    }
     const savedAllRows = totalElementCount > 0 && savedElementCount >= totalElementCount && (progressPhase === "saving-review-table" || progressPhase === "review-table-saved");
     const isSaveTooLong = progressPhase === "saving-review-table" && savedElementCount > 0 && noProgressMs >= BREAKDOWN_SAVE_STALE_MS;
     if (runAgeMs < BREAKDOWN_STALE_RUN_MS && noProgressMs < BREAKDOWN_NO_PROGRESS_MS && !isFinalizingTooLong && !isSaveTooLong && !savedAllRows) continue;
@@ -608,6 +661,8 @@ async function updateBreakdownRunProgress(runId: string, progress: BreakdownProg
         currentElementName: progress.currentElementName ?? null,
         currentElementCategory: progress.currentElementCategory ?? null,
         currentElementIndex: progress.currentElementIndex ?? null,
+        currentBatchIndex: progress.currentBatchIndex ?? null,
+        currentBatchSceneCount: progress.currentBatchSceneCount ?? null,
         sourceElementCount: progress.sourceElementCount ?? null,
         backfilledLocationCount: progress.backfilledLocationCount ?? null,
         progressUpdatedAt: new Date().toISOString()
@@ -1103,6 +1158,14 @@ async function runClaudeSkillBreakdown(input: BreakdownClaudeInput): Promise<Bre
 
 async function runClaudeSkillBreakdownInBatches(input: BreakdownClaudeInput, settings: { model: string; maxInputCharacters: number }, apiKey: string): Promise<BreakdownSource> {
   const chunks = chunkScenes(input.sceneOutline, 18);
+  const durableBatches = input.runId && input.projectId && input.documentVersionId
+    ? await ensureBreakdownBatchPlan({
+      runId: input.runId,
+      projectId: input.projectId,
+      documentVersionId: input.documentVersionId,
+      chunks
+    })
+    : [];
   const allElements: BreakdownElementDraft[] = [];
   const allScenes: BreakdownSceneDraft[] = [];
   const warnings: string[] = [`Claude processed this feature-length script in ${chunks.length} scene batches to avoid oversized breakdown responses.`];
@@ -1115,18 +1178,66 @@ async function runClaudeSkillBreakdownInBatches(input: BreakdownClaudeInput, set
   });
 
   for (const [index, scenes] of chunks.entries()) {
-    const text = batchSceneText(scenes).slice(0, settings.maxInputCharacters);
-    const payload = await requestClaudeBreakdown({
-      apiKey,
-      model: settings.model,
-      title: input.title,
-      fileName: `${input.fileName} / batch ${index + 1} of ${chunks.length}`,
-      text,
-      sceneOutline: scenes,
-      maxTokens: 8000
+    const batch = durableBatches[index];
+    if (batch?.status === "COMPLETED") {
+      const snapshot = breakdownSourceFromBatch(batch);
+      allElements.push(...snapshot.elements);
+      allScenes.push(...snapshot.scenes);
+      const progress = {
+        phase: "claude-batch-complete",
+        processedSceneCount: chunks.slice(0, index + 1).reduce((total, chunk) => total + chunk.length, 0),
+        totalSceneCount: input.sceneOutline.length,
+        completedBatchCount: index + 1,
+        totalBatchCount: chunks.length,
+        partialElementCount: allElements.length,
+        partialSceneCount: allScenes.length
+      };
+      await input.onRawSnapshot?.(breakdownSourceSnapshot(settings.model, allElements, allScenes, warnings.join(" ")), progress);
+      await input.onProgress?.(progress);
+      continue;
+    }
+    await input.onProgress?.({
+      phase: "claude-batch-running",
+      processedSceneCount: chunks.slice(0, index).reduce((total, chunk) => total + chunk.length, 0),
+      totalSceneCount: input.sceneOutline.length,
+      completedBatchCount: index,
+      totalBatchCount: chunks.length,
+      currentBatchIndex: index + 1,
+      currentBatchSceneCount: scenes.length,
+      partialElementCount: allElements.length,
+      partialSceneCount: allScenes.length
     });
-    allElements.push(...normalizeClaudeElements(payload));
-    allScenes.push(...normalizeClaudeScenes(payload));
+    if (batch) await markBreakdownBatchRunning(batch.id);
+    const text = batchSceneText(scenes).slice(0, settings.maxInputCharacters);
+    let payload: unknown;
+    let batchElements: BreakdownElementDraft[] = [];
+    let batchScenes: BreakdownSceneDraft[] = [];
+    try {
+      payload = await requestClaudeBreakdown({
+        apiKey,
+        model: settings.model,
+        title: input.title,
+        fileName: `${input.fileName} / batch ${index + 1} of ${chunks.length}`,
+        text,
+        sceneOutline: scenes,
+        maxTokens: 8000
+      });
+      batchElements = normalizeClaudeElements(payload);
+      batchScenes = normalizeClaudeScenes(payload);
+      if (batch) await markBreakdownBatchCompleted(batch.id, {
+        parserName: "claude-production-breakdown-skill",
+        parserVersion: settings.model,
+        model: settings.model,
+        elements: batchElements.map((element, elementIndex) => ({ ...element, sortOrder: elementIndex })),
+        scenes: batchScenes,
+        warning: warnings.join(" ")
+      });
+    } catch (error) {
+      if (batch) await markBreakdownBatchFailed(batch.id, error);
+      throw error;
+    }
+    allElements.push(...batchElements);
+    allScenes.push(...batchScenes);
     const progress = {
       phase: "claude-batch-complete",
       processedSceneCount: chunks.slice(0, index + 1).reduce((total, chunk) => total + chunk.length, 0),
@@ -1136,15 +1247,9 @@ async function runClaudeSkillBreakdownInBatches(input: BreakdownClaudeInput, set
       partialElementCount: allElements.length,
       partialSceneCount: allScenes.length
     };
+    const rawSnapshot = input.runId ? await breakdownSourceFromCompletedBatches(input.runId, settings.model, warnings.join(" ")) : breakdownSourceSnapshot(settings.model, allElements, allScenes, warnings.join(" "));
+    await input.onRawSnapshot?.(rawSnapshot, progress);
     await input.onProgress?.(progress);
-    await input.onRawSnapshot?.({
-      parserName: "claude-production-breakdown-skill",
-      parserVersion: settings.model,
-      model: settings.model,
-      elements: allElements.map((element, elementIndex) => ({ ...element, sortOrder: elementIndex })),
-      scenes: allScenes,
-      warning: warnings.join(" ")
-    }, progress);
   }
 
   const elements = mergeBreakdownElementRows(allElements);
@@ -1253,6 +1358,217 @@ function batchSceneText(scenes: BreakdownSceneReference[]) {
     `SCENE ${scene.sceneNumber ?? ""}: ${scene.sceneHeading ?? "Untitled Scene"}`,
     scene.text ?? ""
   ].filter(Boolean).join("\n")).join("\n\n");
+}
+
+async function ensureBreakdownBatchPlan(input: {
+  runId: string;
+  projectId: string;
+  documentVersionId: string;
+  chunks: BreakdownSceneReference[][];
+}) {
+  const totalBatches = input.chunks.length;
+  let sceneOffset = 0;
+  for (const [index, scenes] of input.chunks.entries()) {
+    const sceneStartIndex = sceneOffset;
+    const sceneEndIndex = sceneOffset + scenes.length - 1;
+    sceneOffset += scenes.length;
+    await prisma.breakdownBatch.upsert({
+      where: { runId_batchNumber: { runId: input.runId, batchNumber: index + 1 } },
+      update: {
+        totalBatches,
+        sceneStartIndex,
+        sceneEndIndex,
+        sceneCount: scenes.length,
+        sceneOutlineJson: toJson(scenes)
+      },
+      create: {
+        runId: input.runId,
+        projectId: input.projectId,
+        documentVersionId: input.documentVersionId,
+        batchNumber: index + 1,
+        totalBatches,
+        sceneStartIndex,
+        sceneEndIndex,
+        sceneCount: scenes.length,
+        sceneOutlineJson: toJson(scenes)
+      }
+    });
+  }
+  return prisma.breakdownBatch.findMany({ where: { runId: input.runId }, orderBy: { batchNumber: "asc" } });
+}
+
+async function markBreakdownBatchRunning(batchId: string) {
+  await prisma.breakdownBatch.update({
+    where: { id: batchId },
+    data: {
+      status: "RUNNING",
+      error: null,
+      attempts: { increment: 1 },
+      startedAt: new Date()
+    }
+  });
+}
+
+async function markBreakdownBatchCompleted(batchId: string, source: BreakdownSource) {
+  await prisma.breakdownBatch.update({
+    where: { id: batchId },
+    data: {
+      status: "COMPLETED",
+      rawResultJson: toJson(source),
+      elementCount: source.elements.length,
+      sceneResultCount: source.scenes.length,
+      completedAt: new Date(),
+      error: null
+    }
+  });
+}
+
+async function markBreakdownBatchFailed(batchId: string, error: unknown) {
+  await prisma.breakdownBatch.update({
+    where: { id: batchId },
+    data: {
+      status: "FAILED",
+      error: error instanceof Error ? error.message : "Claude batch failed unexpectedly."
+    }
+  });
+}
+
+async function breakdownSourceFromCompletedBatches(runId: string, model: string, warning?: string): Promise<BreakdownSource> {
+  const batches = await prisma.breakdownBatch.findMany({
+    where: { runId, status: "COMPLETED" },
+    orderBy: { batchNumber: "asc" }
+  });
+  const elements: BreakdownElementDraft[] = [];
+  const scenes: BreakdownSceneDraft[] = [];
+  for (const batch of batches) {
+    const source = breakdownSourceFromBatch(batch);
+    elements.push(...source.elements);
+    scenes.push(...source.scenes);
+  }
+  return breakdownSourceSnapshot(model, elements, scenes, warning);
+}
+
+function breakdownSourceFromBatch(batch: BreakdownBatchRecord): BreakdownSource {
+  const raw = batch.rawResultJson && typeof batch.rawResultJson === "object" && !Array.isArray(batch.rawResultJson)
+    ? batch.rawResultJson as Prisma.JsonObject
+    : {};
+  return {
+    parserName: stringFromJson(raw.parserName) || "claude-production-breakdown-skill",
+    parserVersion: stringFromJson(raw.parserVersion) || stringFromJson(raw.model) || "unknown",
+    model: stringFromJson(raw.model) || undefined,
+    warning: stringFromJson(raw.warning) || undefined,
+    elements: normalizeRawBreakdownElements(raw.elements),
+    scenes: normalizeRawBreakdownScenes(raw.scenes)
+  };
+}
+
+function breakdownSourceSnapshot(model: string, elements: BreakdownElementDraft[], scenes: BreakdownSceneDraft[], warning?: string): BreakdownSource {
+  return {
+    parserName: "claude-production-breakdown-skill",
+    parserVersion: model,
+    model,
+    elements: elements.map((element, index) => ({ ...element, sortOrder: index })),
+    scenes,
+    warning
+  };
+}
+
+function normalizeRawBreakdownElements(value: unknown): BreakdownElementDraft[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item, index) => {
+    const record = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : {};
+    const category = safeBreakdownCategory(record.category);
+    const displayName = stringFromJson(record.displayName) || "Untitled item";
+    return [{
+      stableKey: stringFromJson(record.stableKey) || `${category.toLowerCase()}-${slugify(displayName)}-${index}`,
+      category,
+      displayName,
+      normalizedName: stringFromJson(record.normalizedName) || normalizeSearchText(displayName),
+      description: stringFromJson(record.description) || undefined,
+      evidenceText: stringFromJson(record.evidenceText) || undefined,
+      sourceText: stringFromJson(record.sourceText) || undefined,
+      firstPageNumber: numberFromJson(record.firstPageNumber),
+      lastPageNumber: numberFromJson(record.lastPageNumber),
+      confidence: numberFromJson(record.confidence),
+      sortOrder: numberFromJson(record.sortOrder) ?? index,
+      metadataJson: objectFromJson(record.metadataJson),
+      tagKeys: tagKeysFromJson(record.tagKeys),
+      scenes: sceneRefsFromJson(record.scenes)
+    }];
+  });
+}
+
+function normalizeRawBreakdownScenes(value: unknown): BreakdownSceneDraft[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const record = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : {};
+    return [{
+      sceneNumber: stringFromJson(record.sceneNumber) || undefined,
+      printedNumber: stringFromJson(record.printedNumber) || undefined,
+      page: numberFromJson(record.page),
+      pageEighths: numberFromJson(record.pageEighths),
+      intExt: stringFromJson(record.intExt) || undefined,
+      location: stringFromJson(record.location) || undefined,
+      timeOfDay: stringFromJson(record.timeOfDay) || undefined,
+      sceneHeading: stringFromJson(record.sceneHeading) || undefined,
+      synopsis: stringFromJson(record.synopsis) || undefined,
+      cast: Array.isArray(record.cast) ? record.cast.map(stringFromJson).filter(Boolean) : [],
+      elementIds: Array.isArray(record.elementIds) ? record.elementIds.map(stringFromJson).filter(Boolean) : [],
+      evidence: stringFromJson(record.evidence) || undefined
+    }];
+  });
+}
+
+function tagKeysFromJson(value: unknown): BreakdownElementDraft["tagKeys"] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const record = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : {};
+    const key = stringFromJson(record.key);
+    const tagValue = stringFromJson(record.value);
+    if (!key || !tagValue) return [];
+    return [{ key, value: tagValue, label: stringFromJson(record.label) || undefined, color: stringFromJson(record.color) || undefined }];
+  });
+}
+
+function sceneRefsFromJson(value: unknown): BreakdownElementDraft["scenes"] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const record = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : {};
+    return [{
+      sceneNumber: stringFromJson(record.sceneNumber),
+      sceneHeading: stringFromJson(record.sceneHeading),
+      occurrenceCount: numberFromJson(record.occurrenceCount) ?? 1,
+      firstPageNumber: numberFromJson(record.firstPageNumber),
+      lastPageNumber: numberFromJson(record.lastPageNumber),
+      evidenceText: stringFromJson(record.evidenceText) || undefined,
+      notes: stringFromJson(record.notes) || undefined,
+      metadataJson: objectFromJson(record.metadataJson)
+    }];
+  });
+}
+
+function objectFromJson(value: unknown): Prisma.InputJsonObject {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Prisma.InputJsonObject : {};
+}
+
+function stringFromJson(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function numberFromJson(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function safeBreakdownCategory(value: unknown): BreakdownTaxonomyCategory {
+  try {
+    return normalizeCategory(value);
+  } catch {
+    return "OTHER";
+  }
+}
+
+function toJson(value: unknown): Prisma.InputJsonValue {
+  return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
 }
 
 function mergeBreakdownScenes(scenes: BreakdownSceneDraft[]) {

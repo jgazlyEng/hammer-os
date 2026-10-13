@@ -339,6 +339,14 @@ enum BreakdownJobState {
   FAILED
 }
 
+enum BreakdownBatchStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  SKIPPED
+}
+
 enum BreakdownTaxonomyCategory {
   CHARACTER
   EXTRAS
@@ -418,6 +426,7 @@ model Project {
   sequences               Sequence[]
   scenes                  Scene[]
   breakdownRuns           BreakdownRun[]
+  breakdownBatches        BreakdownBatch[]
   breakdownElements       BreakdownElement[]
   shots                   Shot[]
   previzShots             PrevizShot[]
@@ -723,6 +732,7 @@ model DocumentVersion {
   coverage           ScriptCoverage?
   scenes             Scene[]               @relation("DocumentVersionScenes")
   breakdownRuns      BreakdownRun[]
+  breakdownBatches   BreakdownBatch[]
   breakdownElements  BreakdownElement[]
   diffsFrom          DocumentDiff[]        @relation("DocumentDiffFrom")
   diffsTo            DocumentDiff[]        @relation("DocumentDiffTo")
@@ -789,6 +799,7 @@ model BreakdownRun {
   approvedBy        User?                   @relation("BreakdownRunApprover", fields: [approvedById], references: [id], onDelete: SetNull)
   elements          BreakdownElement[]
   sceneElements     BreakdownSceneElement[]
+  batches           BreakdownBatch[]
 
   @@index([projectId])
   @@index([documentId])
@@ -796,6 +807,39 @@ model BreakdownRun {
   @@index([status])
   @@index([jobState])
   @@index([createdAt])
+}
+
+model BreakdownBatch {
+  id                String               @id @default(cuid())
+  runId             String
+  projectId         String
+  documentVersionId String
+  batchNumber       Int
+  totalBatches      Int
+  status            BreakdownBatchStatus @default(QUEUED)
+  sceneStartIndex   Int
+  sceneEndIndex     Int
+  sceneCount        Int
+  sceneOutlineJson  Json?
+  rawResultJson     Json?
+  elementCount      Int                  @default(0)
+  sceneResultCount  Int                  @default(0)
+  error             String?              @db.Text
+  attempts          Int                  @default(0)
+  startedAt         DateTime?
+  completedAt       DateTime?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  run               BreakdownRun         @relation(fields: [runId], references: [id], onDelete: Cascade)
+  project           Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  documentVersion   DocumentVersion      @relation(fields: [documentVersionId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, batchNumber])
+  @@index([runId, status])
+  @@index([projectId])
+  @@index([documentVersionId])
+  @@index([status])
 }
 
 model BreakdownElement {

@@ -6,6 +6,7 @@ import {
   deleteBreakdownRun,
   getBreakdownRun,
   listBreakdownRuns,
+  resumeProductionBreakdownRun,
   startProductionBreakdown,
   updateBreakdownElementStatus,
   updateBreakdownRunStatus,
@@ -99,6 +100,18 @@ export async function PATCH(request: Request) {
 
     await deleteBreakdownRun({ runId });
     return NextResponse.json({ mode: "database", deletedRunId: runId });
+  }
+
+  if (action === "resumeRun") {
+    const runId = stringField(body.runId);
+    if (!runId) return NextResponse.json({ error: "Run id is required." }, { status: 400 });
+
+    const run = await getBreakdownRun(runId);
+    if (!run) return NextResponse.json({ error: "Breakdown run not found." }, { status: 404 });
+    if (!canRunBreakdown(auth.user, run.projectId)) return NextResponse.json(forbidden(), { status: 403 });
+
+    const updated = await resumeProductionBreakdownRun(runId);
+    return NextResponse.json({ mode: "database", run: updated ? toBreakdownRun(updated) : null });
   }
 
   return NextResponse.json({ error: "Unsupported breakdown action." }, { status: 400 });
@@ -198,6 +211,21 @@ function toBreakdownRun(run: ProductionBreakdownRunRecord) {
     approvedAt: run.approvedAt ? dateTimeString(run.approvedAt) : undefined,
     rawSavedAt: run.rawSavedAt ? dateTimeString(run.rawSavedAt) : undefined,
     indexedAt: run.indexedAt ? dateTimeString(run.indexedAt) : undefined,
+    batches: run.batches.map((batch) => ({
+      id: batch.id,
+      batchNumber: batch.batchNumber,
+      totalBatches: batch.totalBatches,
+      status: batch.status,
+      sceneStartIndex: batch.sceneStartIndex,
+      sceneEndIndex: batch.sceneEndIndex,
+      sceneCount: batch.sceneCount,
+      elementCount: batch.elementCount,
+      sceneResultCount: batch.sceneResultCount,
+      attempts: batch.attempts,
+      error: batch.error ?? undefined,
+      startedAt: batch.startedAt ? dateTimeString(batch.startedAt) : undefined,
+      completedAt: batch.completedAt ? dateTimeString(batch.completedAt) : undefined
+    })),
     elements: persistedElements.length ? persistedElements : rawBreakdownElements(run)
   };
 }
