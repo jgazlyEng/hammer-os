@@ -156,6 +156,8 @@ interface HammerBreakdownRun {
   createdAt: string;
   completedAt?: string;
   approvedAt?: string;
+  rawSavedAt?: string;
+  indexedAt?: string;
   batches?: Array<{
     id: string;
     batchNumber: number;
@@ -8695,7 +8697,7 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
         if (!cancelled) {
           const message = breakdownCompleteMessage(completedRun);
           setBreakdownStatus(message);
-          setBreakdownModal((current) => current ? { ...current, tone: "success", phase: "Breakdown saved", message, detail: "GreenLight has refreshed the saved breakdown rows for this script version.", run: completedRun } : current);
+          setBreakdownModal((current) => current ? { ...current, tone: "success", phase: "Breakdown complete", message, detail: breakdownSuccessDetail(completedRun), run: completedRun } : current);
         }
       })
       .catch((error) => {
@@ -8771,11 +8773,11 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
             const completedRun = await waitForBreakdownCompletion(version.id, data.run.id);
             const message = breakdownCompleteMessage(completedRun);
             setBreakdownStatus(message);
-            setBreakdownModal((current) => current ? { ...current, tone: "success", phase: "Breakdown saved", message, detail: "GreenLight has refreshed the saved breakdown rows for this script version.", run: completedRun } : current);
+            setBreakdownModal((current) => current ? { ...current, tone: "success", phase: "Breakdown complete", message, detail: breakdownSuccessDetail(completedRun), run: completedRun } : current);
           } else {
             const message = data.run.error ? data.run.error : breakdownCompleteMessage(data.run);
             setBreakdownStatus(message);
-            setBreakdownModal((current) => current ? { ...current, tone: data.run?.status === "FAILED" ? "error" : "success", phase: data.run?.status === "FAILED" ? "Breakdown failed" : "Breakdown saved", message, detail: data.run?.status === "FAILED" ? "Claude or GreenLight returned an error before a usable table could be saved." : "GreenLight loaded the saved breakdown table.", run: data.run } : current);
+            setBreakdownModal((current) => current ? { ...current, tone: data.run?.status === "FAILED" ? "error" : "success", phase: data.run?.status === "FAILED" ? "Breakdown failed" : "Breakdown complete", message, detail: data.run?.status === "FAILED" ? "Claude or GreenLight returned an error before a usable table could be saved." : breakdownSuccessDetail(data.run!), run: data.run } : current);
           }
         }
       } catch (error) {
@@ -8786,7 +8788,7 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
           if (completedRun) {
             const message = breakdownCompleteMessage(completedRun);
             setBreakdownStatus(message);
-            setBreakdownModal((current) => current ? { ...current, tone: "success", phase: "Breakdown saved", message, detail: "The request looked interrupted, but GreenLight found the completed saved breakdown.", run: completedRun } : current);
+            setBreakdownModal((current) => current ? { ...current, tone: "success", phase: "Breakdown complete", message, detail: `GreenLight found the completed saved breakdown. ${breakdownSuccessDetail(completedRun)}`, run: completedRun } : current);
           } else {
             const message = error instanceof Error ? error.message : "Breakdown failed.";
             setBreakdownStatus(message);
@@ -8900,7 +8902,7 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
         const completedRun = await waitForBreakdownCompletion(data.run.documentVersionId, data.run.id);
         const message = breakdownCompleteMessage(completedRun);
         setBreakdownStatus(message);
-        setBreakdownModal((current) => current ? { ...current, tone: "success", phase: "Breakdown saved", message, detail: "GreenLight resumed the saved batch job and refreshed the breakdown table.", run: completedRun } : current);
+        setBreakdownModal((current) => current ? { ...current, tone: "success", phase: "Breakdown complete", message, detail: breakdownSuccessDetail(completedRun), run: completedRun } : current);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Breakdown could not be resumed.";
@@ -8986,7 +8988,12 @@ function ScriptBreakdown({ documentId, documents = hammerDocuments, versions = h
         {textState.loading ? <p className="mt-2 rounded border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-xs text-studio-300">Loading script text for breakdown...</p> : null}
         {textState.message ? <p className="mt-2 rounded border border-ember/30 bg-ember/10 px-2.5 py-1.5 text-xs text-ember">{textState.message}</p> : null}
         {activeRun?.error ? <p className="mt-2 rounded border border-ember/30 bg-ember/10 px-2.5 py-1.5 text-xs text-ember">{activeRun.error}</p> : null}
-        {breakdownStatus ? <p className="mt-2 rounded border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-xs text-studio-300">{breakdownStatus}</p> : null}
+        {breakdownStatus ? <p className={cn(
+          "mt-2 rounded border px-2.5 py-1.5 text-xs",
+          activeRun && activeRun.status !== "RUNNING" && activeRun.status !== "FAILED"
+            ? "border-emerald-300/35 bg-emerald-400/12 font-semibold text-emerald-100"
+            : "border-white/10 bg-white/[0.03] text-studio-300"
+        )}>{breakdownStatus}</p> : null}
         {breakdownModal && !breakdownModal.open ? (
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded border border-sky-300/20 bg-sky-400/10 px-2.5 py-2 text-xs text-sky-100">
             <span>{breakdownModal.phase}: {breakdownModal.message}</span>
@@ -9105,7 +9112,7 @@ function BreakdownProgressModal({
       <div className="w-full max-w-3xl rounded-xl border border-amberline/25 bg-studio-950 p-4 shadow-2xl">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <p className="font-display text-[10px] uppercase tracking-[0.16em] text-amberline">Breakdown Status</p>
+            <p className={cn("font-display text-[10px] uppercase tracking-[0.16em]", state.tone === "success" ? "text-emerald-300" : "text-amberline")}>Breakdown Status</p>
             <h3 className="mt-1 truncate text-lg font-semibold text-studio-100">{documentTitle}</h3>
             <p className="mt-1 truncate text-xs text-studio-400">{version ? `v${version.versionNumber} / ${version.fileName}` : "No version selected"}</p>
           </div>
@@ -9113,6 +9120,21 @@ function BreakdownProgressModal({
             <X className="h-4 w-4" />
           </button>
         </div>
+
+        {state.tone === "success" ? (
+          <div className="mt-4 rounded-lg border border-emerald-300/35 bg-emerald-400/15 p-4 text-emerald-50">
+            <div className="flex items-start gap-3">
+              <div className="rounded-full border border-emerald-200/35 bg-emerald-300/20 p-2">
+                <CheckCircle2 className="h-5 w-5 text-emerald-200" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-base font-semibold">Breakdown complete</p>
+                <p className="mt-1 text-sm leading-5 text-emerald-100">{state.message}</p>
+                {state.detail ? <p className="mt-1 text-xs leading-5 text-emerald-100/80">{state.detail}</p> : null}
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         <div className="mt-4 rounded-lg border border-white/10 bg-white/[0.025] p-3">
           <div className="mb-2 flex items-center justify-between gap-3">
@@ -9392,7 +9414,13 @@ function breakdownModalTitle(tone: BreakdownProgressModalState["tone"]) {
 function breakdownCompleteMessage(run: HammerBreakdownRun) {
   const sceneCount = breakdownStatNumber(run.stats, "summarySceneCount") ?? breakdownStatNumber(run.stats, "outlineSceneCount");
   const items = `${run.elements.length} production item${run.elements.length === 1 ? "" : "s"}`;
-  return sceneCount ? `Breakdown saved. Detected ${items} across ${sceneCount} scene${sceneCount === 1 ? "" : "s"}.` : `Breakdown saved. Detected ${items}.`;
+  return sceneCount ? `Breakdown complete. Detected ${items} across ${sceneCount} scene${sceneCount === 1 ? "" : "s"}.` : `Breakdown complete. Detected ${items}.`;
+}
+
+function breakdownSuccessDetail(run: HammerBreakdownRun) {
+  const batchCount = run.batches?.length;
+  const indexedAt = run.indexedAt ? " Search indexing is complete." : " Search indexing may continue briefly in the background.";
+  return `${batchCount ? `${batchCount} Claude batch${batchCount === 1 ? "" : "es"} completed successfully. ` : ""}The production breakdown table is ready to review.${indexedAt}`;
 }
 
 function formatElapsed(seconds: number) {
