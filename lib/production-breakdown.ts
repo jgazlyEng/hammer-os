@@ -705,14 +705,19 @@ async function failRunIfBatchTimedOut(runId: string, now: number) {
 }
 
 async function promoteRunIfAllBatchesCompleted(runId: string, model?: string | null) {
+  const run = await prisma.breakdownRun.findUnique({
+    where: { id: runId },
+    select: { status: true, statsJson: true, rawSavedAt: true }
+  });
+  if (!run || run.status !== "RUNNING") return false;
+
   const batches = await prisma.breakdownBatch.findMany({ where: { runId }, orderBy: { batchNumber: "asc" } });
   if (!batches.length || batches.some((batch) => batch.status !== "COMPLETED")) return false;
   const source = await breakdownSourceFromCompletedBatches(runId, model || "claude", `Claude processed this feature-length script in ${batches.length} scene batches to avoid oversized breakdown responses.`);
   if (!source.elements.length) return false;
   const sceneCount = batches.reduce((total, batch) => total + batch.sceneCount, 0);
-  const existing = await prisma.breakdownRun.findUnique({ where: { id: runId }, select: { statsJson: true, rawSavedAt: true } });
-  const existingStats = existing?.statsJson && typeof existing.statsJson === "object" && !Array.isArray(existing.statsJson)
-    ? existing.statsJson as Prisma.JsonObject
+  const existingStats = run.statsJson && typeof run.statsJson === "object" && !Array.isArray(run.statsJson)
+    ? run.statsJson as Prisma.JsonObject
     : {};
   await prisma.breakdownRun.update({
     where: { id: runId },
@@ -723,7 +728,7 @@ async function promoteRunIfAllBatchesCompleted(runId: string, model?: string | n
       parserVersion: source.parserVersion,
       warning: source.warning,
       completedAt: new Date(),
-      rawSavedAt: existing?.rawSavedAt ?? new Date(),
+      rawSavedAt: run.rawSavedAt ?? new Date(),
       rawResultJson: toJson(source),
       summaryJson: {
         scenes: source.scenes,
@@ -982,6 +987,7 @@ export async function listBreakdownRuns(documentVersionId: string) {
 }
 
 export async function getBreakdownRun(runId: string) {
+  await promoteRunIfAllBatchesCompleted(runId);
   return prisma.breakdownRun.findUnique({ where: { id: runId }, include: breakdownRunInclude });
 }
 
