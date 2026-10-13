@@ -9057,6 +9057,8 @@ function BreakdownProgressModal({
   const sceneCount = breakdownStatNumber(state.run?.stats, "summarySceneCount") ?? totalSceneCount;
   const completedBatchCount = breakdownStatNumber(state.run?.stats, "completedBatchCount");
   const totalBatchCount = breakdownStatNumber(state.run?.stats, "totalBatchCount");
+  const completedBatchChipCount = state.run?.batches?.filter((batch) => batch.status === "COMPLETED").length;
+  const totalBatchChipCount = state.run?.batches?.length;
   const partialElementCount = breakdownStatNumber(state.run?.stats, "partialElementCount");
   const savedElementCount = breakdownStatNumber(state.run?.stats, "savedElementCount");
   const totalElementCount = breakdownStatNumber(state.run?.stats, "totalElementCount");
@@ -9073,7 +9075,9 @@ function BreakdownProgressModal({
   const sceneProgress = processedSceneCount !== undefined && totalSceneCount
     ? `${Math.min(processedSceneCount, totalSceneCount).toLocaleString()} / ${totalSceneCount.toLocaleString()}`
     : sceneCount !== undefined ? sceneCount.toLocaleString() : "Pending";
-  const batchProgress = completedBatchCount !== undefined && totalBatchCount
+  const batchProgress = completedBatchChipCount !== undefined && totalBatchChipCount
+    ? `${completedBatchChipCount.toLocaleString()} / ${totalBatchChipCount.toLocaleString()}`
+    : completedBatchCount !== undefined && totalBatchCount
     ? `${Math.min(completedBatchCount, totalBatchCount).toLocaleString()} / ${totalBatchCount.toLocaleString()}`
     : state.pollCount ? state.pollCount.toLocaleString() : isWorking ? "Starting" : "Done";
   const liveSceneProgress = processedSceneCount !== undefined && totalSceneCount
@@ -9249,6 +9253,15 @@ function breakdownRunningCopy(attempt: number, run?: HammerBreakdownRun) {
   const progressPhase = typeof run?.stats?.progressPhase === "string" ? run.stats.progressPhase : "";
   const currentBatchIndex = breakdownStatNumber(run?.stats, "currentBatchIndex");
   const currentBatchSceneCount = breakdownStatNumber(run?.stats, "currentBatchSceneCount");
+  const batches = run?.batches ?? [];
+  const allBatchesCompleted = batches.length > 0 && batches.every((batch) => batch.status === "COMPLETED");
+  if (allBatchesCompleted && run?.status === "RUNNING") {
+    return {
+      phase: "Review copy ready",
+      message: "All Claude batches are complete. GreenLight is promoting the saved batch checkpoints into a reviewable table.",
+      detail: "If this does not advance on its own, refresh the page; the completed batch records are already saved."
+    };
+  }
   if (progressPhase === "claude-batch-running") {
     const batchText = currentBatchIndex && totalBatchCount
       ? `batch ${currentBatchIndex.toLocaleString()} of ${totalBatchCount.toLocaleString()}`
@@ -9332,6 +9345,8 @@ function breakdownProgressSteps(state: BreakdownProgressModalState, elapsedSecon
   const processedSceneCount = breakdownStatNumber(state.run?.stats, "processedSceneCount");
   const totalSceneCount = breakdownStatNumber(state.run?.stats, "totalSceneCount") ?? breakdownStatNumber(state.run?.stats, "outlineSceneCount");
   const progressPhase = typeof state.run?.stats?.progressPhase === "string" ? state.run.stats.progressPhase : "";
+  const batches = state.run?.batches ?? [];
+  const allBatchesCompleted = batches.length > 0 && batches.every((batch) => batch.status === "COMPLETED");
   const activeIndex = state.tone === "success"
     ? 4
     : state.tone === "error"
@@ -9340,7 +9355,7 @@ function breakdownProgressSteps(state: BreakdownProgressModalState, elapsedSecon
         ? 4
       : savedElementCount !== undefined && totalElementCount
         ? 3
-      : progressPhase === "raw-saved" || progressPhase === "raw-snapshot-saved" || (processedSceneCount !== undefined && totalSceneCount && processedSceneCount >= totalSceneCount)
+      : allBatchesCompleted || progressPhase === "raw-saved" || progressPhase === "raw-snapshot-saved" || (processedSceneCount !== undefined && totalSceneCount && processedSceneCount >= totalSceneCount)
           ? 2
       : progressPhase === "scene-outline-ready" || progressPhase === "claude-batches-started" || progressPhase === "claude-batch-running" || progressPhase === "claude-batch-complete" || elapsedSeconds >= 8
         ? 1

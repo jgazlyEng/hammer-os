@@ -593,10 +593,11 @@ function isBackfilledLocationElement(element: BreakdownElementDraft) {
 async function markStaleBreakdownRuns(documentVersionId: string) {
   const runningRuns = await prisma.breakdownRun.findMany({
     where: { documentVersionId, status: "RUNNING" },
-    select: { id: true, createdAt: true, statsJson: true, rawResultJson: true, rawSavedAt: true }
+    select: { id: true, createdAt: true, parserVersion: true, statsJson: true, rawResultJson: true, rawSavedAt: true }
   });
   const now = Date.now();
   for (const run of runningRuns) {
+    if (await promoteRunIfAllBatchesCompleted(run.id, run.parserVersion)) continue;
     const stats = run.statsJson && typeof run.statsJson === "object" && !Array.isArray(run.statsJson)
       ? run.statsJson as Prisma.JsonObject
       : {};
@@ -660,6 +661,51 @@ async function markStaleBreakdownRuns(documentVersionId: string) {
       }
     });
   }
+}
+
+async function promoteRunIfAllBatchesCompleted(runId: string, model?: string | null) {
+  const batches = await prisma.breakdownBatch.findMany({ where: { runId }, orderBy: { batchNumber: "asc" } });
+  if (!batches.length || batches.some((batch) => batch.status !== "COMPLETED")) return false;
+  const source = await breakdownSourceFromCompletedBatches(runId, model || "claude", `Claude processed this feature-length script in ${batches.length} scene batches to avoid oversized breakdown responses.`);
+  if (!source.elements.length) return false;
+  const sceneCount = batches.reduce((total, batch) => total + batch.sceneCount, 0);
+  const existing = await prisma.breakdownRun.findUnique({ where: { id: runId }, select: { statsJson: true, rawSavedAt: true } });
+  const existingStats = existing?.statsJson && typeof existing.statsJson === "object" && !Array.isArray(existing.statsJson)
+    ? existing.statsJson as Prisma.JsonObject
+    : {};
+  await prisma.breakdownRun.update({
+    where: { id: runId },
+    data: {
+      status: "READY_FOR_REVIEW",
+      jobState: "READY_FOR_REVIEW",
+      parserName: source.parserName,
+      parserVersion: source.parserVersion,
+      warning: source.warning,
+      completedAt: new Date(),
+      rawSavedAt: existing?.rawSavedAt ?? new Date(),
+      rawResultJson: toJson(source),
+      summaryJson: {
+        scenes: source.scenes,
+        elementCount: source.elements.length,
+        categories: countBy(source.elements.map((element) => element.category)),
+        sceneCount: source.scenes.length,
+        aiModel: source.model
+      },
+      statsJson: {
+        ...existingStats,
+        progressPhase: "raw-saved",
+        processedSceneCount: sceneCount,
+        totalSceneCount: sceneCount,
+        completedBatchCount: batches.length,
+        totalBatchCount: batches.length,
+        partialElementCount: source.elements.length,
+        partialSceneCount: source.scenes.length,
+        summarySceneCount: source.scenes.length,
+        progressUpdatedAt: new Date().toISOString()
+      }
+    }
+  });
+  return true;
 }
 
 async function updateBreakdownRunProgress(runId: string, progress: BreakdownProgressUpdate, extraStats: Prisma.InputJsonObject = {}) {
